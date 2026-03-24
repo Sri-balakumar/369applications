@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Staff Tracking Form View -->
+    <record id="view_staff_tracking_form" model="ir.ui.view">
+        <field name="name">staff.tracking.form</field>
+        <field name="model">staff.tracking</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="employee_id"/>
+                            <field name="department_id"/>
+                            <field name="status"/>
+                        </group>
+                        <group>
+                            <field name="check_in_time"/>
+                            <field name="check_out_time"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group>
+                            <field name="location_name"/>
+                            <field name="latitude"/>
+                            <field name="longitude"/>
+                        </group>
+                        <group>
+                            <field name="remarks"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Staff Tracking List View -->
+    <record id="view_staff_tracking_list" model="ir.ui.view">
+        <field name="name">staff.tracking.list</field>
+        <field name="model">staff.tracking</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="employee_id"/>
+                <field name="department_id"/>
+                <field name="status"/>
+                <field name="check_in_time"/>
+                <field name="check_out_time"/>
+                <field name="location_name"/>
+                <field name="remarks"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Staff Tracking Search View -->
+    <record id="view_staff_tracking_search" model="ir.ui.view">
+        <field name="name">staff.tracking.search</field>
+        <field name="model">staff.tracking</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="employee_id"/>
+                <field name="department_id"/>
+                <field name="location_name"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_staff_tracking" model="ir.actions.act_window">
+        <field name="name">Staff Tracking</field>
+        <field name="res_model">staff.tracking</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- Top-level Menu -->
+    <menuitem
+        id="menu_staff_tracking_root"
+        name="Staff Tracking"
+        sequence="50"
+    />
+
+    <!-- Sub-menu: Tracking Records -->
+    <menuitem
+        id="menu_staff_tracking_records"
+        name="Tracking Records"
+        parent="menu_staff_tracking_root"
+        action="action_staff_tracking"
+        sequence="10"
+    />
+
+</odoo>

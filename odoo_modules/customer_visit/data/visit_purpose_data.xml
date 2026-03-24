@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <record id="purpose_sales" model="visit.purpose">
+            <field name="name">Sales Visit</field>
+        </record>
+
+        <record id="purpose_service" model="visit.purpose">
+            <field name="name">Service Visit</field>
+        </record>
+
+        <record id="purpose_complaint" model="visit.purpose">
+            <field name="name">Complaint Resolution</field>
+        </record>
+
+        <record id="purpose_follow_up" model="visit.purpose">
+            <field name="name">Follow Up</field>
+        </record>
+
+        <record id="purpose_demo" model="visit.purpose">
+            <field name="name">Product Demo</field>
+        </record>
+
+        <record id="purpose_collection" model="visit.purpose">
+            <field name="name">Payment Collection</field>
+        </record>
+
+        <record id="purpose_delivery" model="visit.purpose">
+            <field name="name">Delivery</field>
+        </record>
+
+        <record id="purpose_other" model="visit.purpose">
+            <field name="name">Other</field>
+        </record>
+
+    </data>
+</odoo>

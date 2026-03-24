@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Add Signature & Location to Payment Form -->
+    <record id="view_account_payment_form_signature" model="ir.ui.view">
+        <field name="name">account.payment.form.signature</field>
+        <field name="model">account.payment</field>
+        <field name="inherit_id" ref="account.view_account_payment_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="inside">
+                <separator string="Customer Signature"/>
+                <field name="customer_signature" widget="signature" string="Customer Signature"/>
+                <separator string="Employee Signature"/>
+                <field name="employee_signature" widget="signature" string="Employee Signature"/>
+                <group string="Payment Location">
+                    <group>
+                        <field name="latitude"/>
+                        <field name="longitude"/>
+                    </group>
+                    <group>
+                        <field name="location_name"/>
+                    </group>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Add Signature & Location columns to Payment List View -->
+    <record id="view_account_payment_tree_signature" model="ir.ui.view">
+        <field name="name">account.payment.tree.signature</field>
+        <field name="model">account.payment</field>
+        <field name="inherit_id" ref="account.view_account_payment_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//list" position="inside">
+                <field name="location_name" string="Location" optional="hide"/>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

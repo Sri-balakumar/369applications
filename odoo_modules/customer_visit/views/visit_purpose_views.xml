@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_visit_purpose_tree" model="ir.ui.view">
+        <field name="name">visit.purpose.tree</field>
+        <field name="model">visit.purpose</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="name"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_visit_purpose_form" model="ir.ui.view">
+        <field name="name">visit.purpose.form</field>
+        <field name="model">visit.purpose</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="active"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_visit_purpose" model="ir.actions.act_window">
+        <field name="name">Visit Purposes</field>
+        <field name="res_model">visit.purpose</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_customer_visit_root" name="Customer Visit" sequence="50"/>
+    <menuitem id="menu_visit_config" name="Configuration" parent="menu_customer_visit_root" sequence="30"/>
+    <menuitem id="menu_visit_purpose" name="Visit Purposes" parent="menu_visit_config" action="action_visit_purpose" sequence="10"/>
+
+</odoo>

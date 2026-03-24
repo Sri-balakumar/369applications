@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Sequence for VM-XXXX ref -->
+    <record id="seq_cash_collection" model="ir.sequence">
+        <field name="name">Vehicle Maintenance Sequence</field>
+        <field name="code">cash.collection</field>
+        <field name="prefix">VM-</field>
+        <field name="padding">4</field>
+        <field name="number_next">1</field>
+        <field name="number_increment">1</field>
+    </record>
+
+    <!-- List View -->
+    <record id="view_cash_collection_list" model="ir.ui.view">
+        <field name="name">cash.collection.list</field>
+        <field name="model">cash.collection</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="ref"/>
+                <field name="date"/>
+                <field name="driver_id"/>
+                <field name="number_plate"/>
+                <field name="maintenance_type_id"/>
+                <field name="current_km"/>
+                <field name="amount"/>
+                <field name="is_validated"/>
+                <field name="remarks"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_cash_collection_form" model="ir.ui.view">
+        <field name="name">cash.collection.form</field>
+        <field name="model">cash.collection</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_validate" string="VALIDATE" type="object" class="oe_highlight" invisible="is_validated == True"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="ref" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="date"/>
+                            <field name="vehicle_id"/>
+                            <field name="driver_id"/>
+                            <field name="number_plate"/>
+                        </group>
+                        <group>
+                            <field name="maintenance_type_id"/>
+                            <field name="handover_to_partner_id"/>
+                            <field name="company_id"/>
+                            <field name="is_validated"/>
+                            <field name="validated_by"/>
+                            <field name="validation_date"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group>
+                            <field name="current_km"/>
+                        </group>
+                        <group>
+                            <field name="amount"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group>
+                            <field name="handover_from" widget="signature"/>
+                        </group>
+                        <group>
+                            <field name="handover_to" widget="signature"/>
+                        </group>
+                    </group>
+                    <separator string="Attachment Details"/>
+                    <group>
+                        <field name="image_url"/>
+                    </group>
+                    <separator string="Remarks"/>
+                    <group>
+                        <field name="remarks" nolabel="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Search View -->
+    <record id="view_cash_collection_search" model="ir.ui.view">
+        <field name="name">cash.collection.search</field>
+        <field name="model">cash.collection</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="ref"/>
+                <field name="vehicle_id"/>
+                <field name="driver_id"/>
+                <field name="maintenance_type_id"/>
+                <field name="number_plate"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_cash_collection" model="ir.actions.act_window">
+        <field name="name">Vehicle Maintenance</field>
+        <field name="res_model">cash.collection</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- Top-level Menu -->
+    <menuitem
+        id="menu_vehicle_maintenance_root"
+        name="Vehicle Maintenance"
+        sequence="50"
+    />
+
+    <!-- Sub-menu: Maintenance Records -->
+    <menuitem
+        id="menu_vehicle_maintenance_records"
+        name="Maintenance Records"
+        parent="menu_vehicle_maintenance_root"
+        action="action_cash_collection"
+        sequence="10"
+    />
+
+    <!-- Sub-menu: Configuration -->
+    <menuitem
+        id="menu_vehicle_maintenance_config"
+        name="Configuration"
+        parent="menu_vehicle_maintenance_root"
+        sequence="90"
+    />
+
+    <!-- Sub-menu: Maintenance Types under Configuration -->
+    <menuitem
+        id="menu_maintenance_types"
+        name="Maintenance Types"
+        parent="menu_vehicle_maintenance_config"
+        action="action_maintenance_type"
+        sequence="10"
+    />
+
+</odoo>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Add Devices tab on Employee form -->
+    <record id="view_employee_form_inherit_device" model="ir.ui.view">
+        <field name="name">hr.employee.form.inherit.device</field>
+        <field name="model">hr.employee</field>
+        <field name="inherit_id" ref="hr.view_employee_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Devices" name="devices">
+                    <group>
+                        <group string="PIN Authentication">
+                            <field name="pin" string="PIN" password="True"/>
+                        </group>
+                    </group>
+                    <separator string="Registered Devices"/>
+                    <field name="device_ids">
+                        <list editable="bottom">
+                            <field name="device_id"/>
+                            <field name="device_name"/>
+                            <field name="device_type"/>
+                            <field name="active"/>
+                            <field name="last_used"/>
+                        </list>
+                    </field>
+                </page>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Main menu under Attendance -->
+    <menuitem id="menu_face_attendance_root"
+              name="Door Monitoring"
+              parent="hr_attendance.menu_hr_attendance_root"
+              sequence="30"/>
+
+    <!-- Door Detection Log -->
+    <menuitem id="menu_face_attendance_log"
+              name="Door Detection Log"
+              parent="menu_face_attendance_root"
+              action="action_face_attendance_log"
+              sequence="10"/>
+
+    <!-- Mismatch Report -->
+    <menuitem id="menu_door_mismatch_report"
+              name="Mismatch Report"
+              parent="menu_face_attendance_root"
+              action="action_door_mismatch_report"
+              sequence="20"/>
+
+    <!-- Face Registration -->
+    <menuitem id="menu_face_registration"
+              name="Face Registration"
+              parent="menu_face_attendance_root"
+              action="action_face_registration"
+              sequence="30"/>
+
+</odoo>

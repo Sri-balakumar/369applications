@@ -1,0 +1,9359 @@
+// Cancel a vehicle tracking trip in Odoo by updating trip_cancel to true
+export const cancelVehicleTrackingTripOdoo = async ({ tripId, username = DEFAULT_VEHICLE_TRACKING_USERNAME, password = DEFAULT_VEHICLE_TRACKING_PASSWORD, db = DEFAULT_VEHICLE_TRACKING_DB } = {}) => {
+  const baseUrl = (VEHICLE_TRACKING_BASE_URL || '').replace(/\/$/, '');
+  if (!tripId) {
+    throw new Error('Trip ID is required to cancel a trip');
+  }
+  const payload = { trip_cancel: true, start_trip: false };
+  console.log('[cancelVehicleTrackingTripOdoo] Payload sent to Odoo:', { id: tripId, ...payload });
+  try {
+    // Step 1: Authenticate to Odoo
+    const loginResp = await loginVehicleTrackingOdoo({ username, password, db });
+    // Step 2: Update trip record via JSON-RPC (write method)
+    const headers = await getOdooAuthHeaders();
+    if (loginResp && loginResp.cookies) headers.Cookie = loginResp.cookies;
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'vehicle.tracking',
+          method: 'write',
+          args: [[tripId], payload],
+          kwargs: {},
+        },
+      },
+      {
+        headers,
+        withCredentials: true,
+        timeout: 15000,
+      }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (cancel trip):', response.data.error);
+      throw new Error('Odoo JSON-RPC error');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('cancelVehicleTrackingTripOdoo error:', error?.message || error);
+    if (error && error.response) {
+      console.error('cancelVehicleTrackingTripOdoo response status:', error.response.status);
+      try { console.error('cancelVehicleTrackingTripOdoo response data:', error.response.data); } catch (e) {}
+    }
+    throw error;
+  }
+};
+// Fetch vehicle tracking trips from Odoo using JSON-RPC, filtered by date
+// Fetch vehicle tracking trips from Odoo using JSON-RPC, filtered by date and vehicle_id
+export const fetchVehicleTrackingTripsOdoo = async (params = {}) => {
+  // Accept either `vehicleId` or `vehicle_id` to be backward-compatible with callers
+  const { date, vehicleId: vIdFromCamel, offset = 0, limit = 50 } = params;
+  const vehicleIdRaw = params.vehicleId ?? params.vehicle_id ?? vIdFromCamel;
+  const vehicleId = vehicleIdRaw != null && vehicleIdRaw !== '' ? (Number.isNaN(Number(vehicleIdRaw)) ? undefined : Number(vehicleIdRaw)) : undefined;
+  try {
+    // Filter by date and vehicleId if provided (Odoo often stores `date` as datetime)
+    // Use a date range (start/end of day) so comparisons match datetime values
+    let domain = [];
+    if (date) {
+      const startOfDay = `${date} 00:00:00`;
+      const endOfDay = `${date} 23:59:59`;
+      domain.push(["date", ">=", startOfDay]);
+      domain.push(["date", "<=", endOfDay]);
+    }
+    if (typeof vehicleId !== 'undefined') {
+      domain.push(["vehicle_id", "=", vehicleId]);
+    }
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "vehicle.tracking",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: [
+              "id", "vehicle_id", "driver_id", "date", "number_plate", "start_km", "end_km", "start_trip", "end_trip", "source_id", "destination_id",
+              "coolant_water", "oil_checking", "tyre_checking", "battery_checking", "fuel_checking", "daily_checks", "purpose_of_visit_id", "estimated_time",
+              "start_latitude", "start_longitude", "trip_cancel", "start_time", "end_time"
+            ],
+            offset,
+            limit,
+            order: "date desc",
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.log("Odoo JSON-RPC error (vehicle.tracking):", response.data.error);
+      throw new Error("Odoo JSON-RPC error");
+    }
+    const trips = response.data.result || [];
+    
+    // Filter out cancelled trips and properly handle many2one fields
+    return trips
+      .filter(trip => !trip.trip_cancel)
+      .map(trip => ({
+        estimated_time: trip.estimated_time || '',
+        id: trip.id,
+        // ✅ Fix: Handle many2one fields properly (they return [id, name] or false)
+        vehicle_id: Array.isArray(trip.vehicle_id) ? trip.vehicle_id[0] : (trip.vehicle_id ? trip.vehicle_id : null),
+        vehicle_name: Array.isArray(trip.vehicle_id) ? trip.vehicle_id[1] : '',
+        driver_id: Array.isArray(trip.driver_id) ? trip.driver_id[0] : (trip.driver_id ? trip.driver_id : null),
+        driver_name: Array.isArray(trip.driver_id) ? trip.driver_id[1] : '',
+        date: trip.date,
+        number_plate: trip.number_plate,
+        start_km: trip.start_km,
+        end_km: trip.end_km,
+        start_trip: trip.start_trip,
+        end_trip: trip.end_trip,
+        source_id: Array.isArray(trip.source_id) ? trip.source_id[0] : (trip.source_id ? trip.source_id : null),
+        source_name: Array.isArray(trip.source_id) ? trip.source_id[1] : '',
+        destination_id: Array.isArray(trip.destination_id) ? trip.destination_id[0] : (trip.destination_id ? trip.destination_id : null),
+        destination_name: Array.isArray(trip.destination_id) ? trip.destination_id[1] : '',
+        vehicleChecklist: {
+          coolentWater: trip.coolant_water || false,
+          oilChecking: trip.oil_checking || false,
+          tyreChecking: trip.tyre_checking || false,
+          batteryChecking: trip.battery_checking || false,
+          fuelChecking: trip.fuel_checking || false,
+          dailyChecks: trip.daily_checks || false,
+        },
+        purpose_of_visit: Array.isArray(trip.purpose_of_visit_id) ? trip.purpose_of_visit_id[1] : '',
+        pre_trip_litres: typeof trip.pre_trip_litres !== 'undefined' ? trip.pre_trip_litres : '',
+        start_latitude: typeof trip.start_latitude !== 'undefined' ? trip.start_latitude : '',
+        start_longitude: typeof trip.start_longitude !== 'undefined' ? trip.start_longitude : '',
+        trip_cancel: trip.trip_cancel || false,
+        start_time: trip.start_time || null,
+        end_time: trip.end_time || null,
+      }));
+  } catch (error) {
+    console.error("Error fetching vehicle tracking trips from Odoo:", error);
+    throw error;
+  }
+};
+
+// Fetch sources (locations) from Odoo using JSON-RPC (vehicle.location model)
+export const fetchSourcesOdoo = async ({ offset = 0, limit = 50, searchText = "" } = {}) => {
+  try {
+    let domain = [];
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain = [["name", "ilike", term]]; // Filter by location name
+    }
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "vehicle.location",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: ["id", "name", "latitude", "longitude"],
+            offset,
+            limit,
+            order: "name asc",
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.log("Odoo JSON-RPC error (sources):", response.data.error);
+      throw new Error("Odoo JSON-RPC error");
+    }
+    const sources = response.data.result || [];
+    return sources.map(source => ({
+      _id: source.id,
+      name: source.name || "",
+      latitude: source.latitude || null,
+      longitude: source.longitude || null,
+    }));
+  } catch (error) {
+    console.error("Error fetching sources from Odoo:", error);
+    throw error;
+  }
+};
+// Create vehicle tracking trip in Odoo (test-vehicle DB) using JSON-RPC
+// Create vehicle tracking trip in Odoo (test-vehicle DB) using JSON-RPC
+export const createVehicleTrackingTripOdoo = async ({ payload, username = DEFAULT_VEHICLE_TRACKING_USERNAME, password = DEFAULT_VEHICLE_TRACKING_PASSWORD, db = DEFAULT_VEHICLE_TRACKING_DB } = {}) => {
+  const baseUrl = (VEHICLE_TRACKING_BASE_URL || '').replace(/\/$/, '');
+  // Defensive: ensure payload is a valid object
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    console.error('createVehicleTrackingTripOdoo: Invalid payload', payload);
+    throw new Error('Trip payload is invalid (must be a non-null object)');
+  }
+  // Ensure vehicle_id is present for updates
+  if (typeof payload.id !== 'undefined' && (typeof payload.vehicle_id === 'undefined' || payload.vehicle_id === null || payload.vehicle_id === '')) {
+    console.warn('createVehicleTrackingTripOdoo: vehicle_id is missing in update payload. This will result in missing vehicle info for the trip.');
+  }
+  // Log payload before sending
+  console.log('createVehicleTrackingTripOdoo: Sending payload to Odoo:', payload);
+  try {
+    // Step 1: Authenticate to Odoo
+    const loginResp = await loginVehicleTrackingOdoo({ username, password, db });
+    // Build trip payload by removing fields that belong to vehicle.fuel.log or are invalid for vehicle.tracking
+    const tripPayload = { ...payload };
+    
+    // ✅ FIX: Convert many2one field IDs to integers BEFORE removing fuel fields
+    if (tripPayload.vehicle_id) {
+      tripPayload.vehicle_id = typeof tripPayload.vehicle_id === 'string' 
+        ? parseInt(tripPayload.vehicle_id, 10) 
+        : tripPayload.vehicle_id;
+    }
+    
+    if (tripPayload.driver_id) {
+      tripPayload.driver_id = typeof tripPayload.driver_id === 'string'
+        ? parseInt(tripPayload.driver_id, 10)
+        : tripPayload.driver_id;
+    }
+    
+    if (tripPayload.source_id) {
+      tripPayload.source_id = typeof tripPayload.source_id === 'string'
+        ? parseInt(tripPayload.source_id, 10)
+        : tripPayload.source_id;
+    }
+    
+    if (tripPayload.destination_id) {
+      tripPayload.destination_id = typeof tripPayload.destination_id === 'string'
+        ? parseInt(tripPayload.destination_id, 10)
+        : tripPayload.destination_id;
+    }
+    
+    if (tripPayload.purpose_of_visit_id) {
+      tripPayload.purpose_of_visit_id = typeof tripPayload.purpose_of_visit_id === 'string'
+        ? parseInt(tripPayload.purpose_of_visit_id, 10)
+        : tripPayload.purpose_of_visit_id;
+    }
+    
+    const removeKeys = [
+      'fuel_amount', 'fuel_liters', 'fuel_litres', 'odometer_image',
+      'odometer_image_filename', 'odometer_image_uri', 'current_odometer',
+      'post_trip_amount', 'post_trip_litres', 'end_fuel_document', 'pre_trip_litres',
+      'upload_path'
+    ];
+    removeKeys.forEach(k => { if (k in tripPayload) delete tripPayload[k]; });
+
+    // Convert image_url from local file URI to base64 (same format as odometer_image)
+    if (tripPayload.image_url) {
+      try {
+        const uri = tripPayload.image_url;
+        if (uri && (uri.startsWith('file://') || uri.startsWith('/'))) {
+          const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+          if (b64 && b64.length > 0) {
+            tripPayload.image_url = b64;
+            console.log('Attached image_url base64 length:', b64.length);
+          }
+        }
+      } catch (readErr) {
+        console.warn('Could not read image_url file for base64 conversion:', readErr?.message || readErr);
+      }
+    }
+
+    // Debug: show sanitized trip payload that will be sent to Odoo
+    console.log('createVehicleTrackingTripOdoo: Sanitized tripPayload:', JSON.stringify(tripPayload));
+
+    // Step 2: Create or update trip record via JSON-RPC
+    const headers = await getOdooAuthHeaders();
+    if (loginResp && loginResp.cookies) headers.Cookie = loginResp.cookies;
+
+    let tripId;
+    
+    // If payload includes an `id`, perform an update (write) on that record
+    if (tripPayload && (typeof tripPayload.id !== 'undefined')) {
+      const recordId = tripPayload.id;
+      // Remove id from payload before sending write
+      const { id: _remove, ...updatePayload } = tripPayload;
+      
+      // CRITICAL: Validate vehicle_id is present in update
+      if (!updatePayload.vehicle_id) {
+        console.error('[createVehicleTrackingTripOdoo] CRITICAL WARNING: vehicle_id is missing from update payload!', {
+          payload_vehicle_id: payload.vehicle_id,
+          tripPayload_vehicle_id: tripPayload.vehicle_id,
+          updatePayload_vehicle_id: updatePayload.vehicle_id,
+        });
+      } else {
+        console.log('[createVehicleTrackingTripOdoo] Update payload includes vehicle_id:', updatePayload.vehicle_id, 'type:', typeof updatePayload.vehicle_id);
+      }
+      
+      try {
+        const resp = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: 'vehicle.tracking',
+              method: 'write',
+              args: [[recordId], updatePayload],
+              kwargs: {},
+            },
+          },
+          { headers, withCredentials: true, timeout: 15000 }
+        );
+        if (resp.data.error) {
+          console.error('Odoo JSON-RPC error (update trip):', resp.data.error);
+          throw new Error('Odoo JSON-RPC error');
+        }
+        // On success, return the id that was updated
+        console.log('Odoo updateVehicleTrackingTripOdoo wrote id:', recordId);
+        tripId = recordId;
+      } catch (err) {
+        console.error('Odoo updateVehicleTrackingTripOdoo error:', err);
+        throw err;
+      }
+    } else {
+      // Create new record
+      const response = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'vehicle.tracking',
+            method: 'create',
+            args: [[tripPayload]],
+            kwargs: {},
+          },
+        },
+        {
+          headers,
+          withCredentials: true,
+          timeout: 15000,
+        }
+      );
+      if (response.data.error) {
+        console.error('Odoo JSON-RPC error (create trip):', response.data.error);
+        throw new Error('Odoo JSON-RPC error');
+      }
+      const tripIdRaw = response.data.result;
+      tripId = Array.isArray(tripIdRaw) ? tripIdRaw[0] : (Number.isFinite(Number(tripIdRaw)) ? Number(Number(tripIdRaw)) : tripIdRaw);
+      console.log('Odoo createVehicleTrackingTripOdoo response tripIdRaw:', JSON.stringify(tripIdRaw), 'normalized tripId:', tripId);
+    }
+
+    // If payload included fuel details, map them to vehicle.fuel.log and create a record
+    try {
+      const hasFuel = payload && (payload.fuel_amount || payload.fuel_liters || payload.fuel_litres || payload.current_odometer);
+      if (hasFuel) {
+        const fuelPayload = {
+          vehicle_tracking_id: tripId,
+          vehicle_id: payload.vehicle_id ? (Number(payload.vehicle_id) || payload.vehicle_id) : undefined,
+          driver_id: payload.driver_id ? (Number(payload.driver_id) || payload.driver_id) : undefined,
+          name: payload.invoice_number || undefined,
+          amount: payload.fuel_amount ? Number(payload.fuel_amount) : (payload.amount ? Number(payload.amount) : undefined),
+          fuel_level: payload.fuel_liters ? Number(payload.fuel_liters) : (payload.fuel_litres ? Number(payload.fuel_litres) : undefined),
+          odometer: payload.current_odometer ? Number(payload.current_odometer) : undefined,
+          gps_lat: payload.start_latitude ?? payload.gps_lat ?? undefined,
+          gps_long: payload.start_longitude ?? payload.gps_long ?? undefined,
+          upload_path: payload.upload_path || undefined,
+        };
+        // Convert upload_path from local file URI to base64 (same format as odometer_image)
+        if (fuelPayload.upload_path) {
+          try {
+            const uri = fuelPayload.upload_path;
+            if (uri && (uri.startsWith('file://') || uri.startsWith('/'))) {
+              const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+              if (b64 && b64.length > 0) {
+                fuelPayload.upload_path = b64;
+                console.log('Attached upload_path base64 length:', b64.length);
+              }
+            }
+          } catch (readErr) {
+            console.warn('Could not read upload_path file for base64 conversion:', readErr?.message || readErr);
+          }
+        }
+        // If an odometer image URI exists, set filename and try to include binary (base64)
+        if (payload.odometer_image) {
+          try {
+            const parts = payload.odometer_image.split('/');
+            fuelPayload.odometer_image_filename = parts[parts.length - 1];
+            // Attempt to read the local file and include as base64 so Odoo saves the image
+            try {
+              const uri = payload.odometer_image;
+              if (uri && (uri.startsWith('file://') || uri.startsWith('/'))) {
+                const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+                if (b64 && b64.length > 0) {
+                  fuelPayload.odometer_image = b64; // Odoo expects raw base64
+                  console.log('Attached odometer image base64 length:', b64.length);
+                }
+              }
+            } catch (readErr) {
+              console.warn('Could not read odometer image file for upload:', readErr?.message || readErr);
+            }
+          } catch (e) {}
+        }
+
+        // Clean undefined keys
+        Object.keys(fuelPayload).forEach(k => fuelPayload[k] === undefined && delete fuelPayload[k]);
+
+        if (Object.keys(fuelPayload).length > 1) {
+          // log payload for debugging
+          console.log('Creating vehicle.fuel.log with payload:', JSON.stringify(fuelPayload));
+          // create vehicle.fuel.log
+          const fuelResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+              jsonrpc: '2.0',
+              method: 'call',
+              params: {
+                model: 'vehicle.fuel.log',
+                method: 'create',
+                args: [[fuelPayload]],
+                kwargs: {},
+              },
+            },
+            { headers, withCredentials: true, timeout: 15000 }
+          );
+          // Log full response for visibility
+          try {
+            console.log('vehicle.fuel.log create response:', JSON.stringify(fuelResp.data));
+          } catch (e) {
+            console.log('vehicle.fuel.log create response (non-json)');
+          }
+          if (fuelResp.data && fuelResp.data.result) {
+            console.log('vehicle.fuel.log created id:', fuelResp.data.result);
+          } else if (fuelResp.data && fuelResp.data.error) {
+            console.warn('vehicle.fuel.log creation error:', fuelResp.data.error);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to create vehicle.fuel.log:', e?.message || e);
+    }
+
+    // Read back the created trip record to verify fields like `image_url` and `vehicle_id` were saved
+    try {
+      const readResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'vehicle.tracking',
+            method: 'search_read',
+            args: [[['id', '=', tripId]]],
+            kwargs: { fields: ['id', 'image_url', 'number_plate', 'date', 'vehicle_id', 'driver_id'] },
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      if (readResp.data && Array.isArray(readResp.data.result) && readResp.data.result.length > 0) {
+        console.log('Readback vehicle.tracking record after create/update:', JSON.stringify(readResp.data.result[0]));
+      } else {
+        console.log('No readback result for created vehicle.tracking. Response:', JSON.stringify(readResp.data));
+      }
+    } catch (readErr) {
+      console.warn('Failed to read back created vehicle.tracking record:', readErr?.message || readErr);
+    }
+
+    return tripId;
+  } catch (error) {
+    console.error('createVehicleTrackingTripOdoo error:', error?.message || error);
+    if (error && error.response) {
+      console.error('createVehicleTrackingTripOdoo response status:', error.response.status);
+      try { console.error('createVehicleTrackingTripOdoo response data:', error.response.data); } catch (e) {}
+    }
+    throw error;
+  }
+  
+};
+// api/services/generalApi.js
+import axios from "axios";
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
+import ODOO_BASE_URL, { DEFAULT_ODOO_DB, DEFAULT_USERNAME, DEFAULT_PASSWORD } from '@api/config/odooConfig';
+import VEHICLE_TRACKING_BASE_URL, { DEFAULT_VEHICLE_TRACKING_DB, DEFAULT_VEHICLE_TRACKING_USERNAME, DEFAULT_VEHICLE_TRACKING_PASSWORD } from '@api/config/vehicleTrackingConfig';
+// Helper: Authenticate to vehicle tracking Odoo DB and return session cookie
+export const loginVehicleTrackingOdoo = async ({ username = DEFAULT_VEHICLE_TRACKING_USERNAME, password = DEFAULT_VEHICLE_TRACKING_PASSWORD, db = DEFAULT_VEHICLE_TRACKING_DB } = {}) => {
+  const baseUrl = (VEHICLE_TRACKING_BASE_URL || '').replace(/\/$/, '');
+  // Since vehicle tracking uses the same Odoo server, reuse the existing session cookie
+  try {
+    const stored = await AsyncStorage.getItem('odoo_cookie');
+    if (stored) {
+      return { session_id: null, cookies: stored };
+    }
+  } catch (e) {
+    // ignore and continue to authenticate
+  }
+  try {
+    const response = await axios.post(
+      `${baseUrl}/web/session/authenticate`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          db,
+          login: username,
+          password,
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, withCredentials: true }
+    );
+    if (response.data.error) {
+      console.error('VehicleTracking Odoo login error:', response.data.error);
+      throw new Error('VehicleTracking Odoo login error');
+    }
+    // Extract session cookie from response
+    const setCookie = response.headers['set-cookie'] || response.headers['Set-Cookie'];
+    // For React Native, axios may not expose cookies directly; use withCredentials and rely on cookie persistence
+    // Return axios instance with cookie if possible
+    try {
+      if (setCookie) {
+        const cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+        await AsyncStorage.setItem('odoo_cookie', cookieStr);
+        return { session_id: response.data.result && response.data.result.session_id, cookies: cookieStr };
+      }
+    } catch (e) {
+      console.warn('Unable to persist vehicle tracking login cookie:', e?.message || e);
+    }
+    return { session_id: response.data.result && response.data.result.session_id, cookies: setCookie };
+  } catch (error) {
+    console.error('loginVehicleTrackingOdoo error:', error);
+    throw error;
+  }
+};
+
+// Helper: read stored odoo_cookie and return headers object
+const getOdooAuthHeaders = async () => {
+  try {
+    const cookie = await AsyncStorage.getItem('odoo_cookie');
+    const headers = { 'Content-Type': 'application/json' };
+    if (cookie) headers.Cookie = cookie;
+    return headers;
+  } catch (e) {
+    return { 'Content-Type': 'application/json' };
+  }
+};
+
+
+import { get } from "./utils";
+import { API_ENDPOINTS } from "@api/endpoints";
+import { useAuthStore } from '@stores/auth';
+import handleApiError from "../utils/handleApiError";
+
+// Debugging output for useAuthStore
+export const fetchProducts = async ({ offset, limit, categoryId, searchText }) => {
+  try {
+    const queryParams = {
+      ...(searchText !== undefined && { product_name: searchText }),
+      offset,
+      limit,
+      ...(categoryId !== undefined && { category_id: categoryId }),
+    };
+    // Debugging output for queryParams
+    const response = await get(API_ENDPOINTS.VIEW_PRODUCTS, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+
+
+// 🔹 NEW: Fetch products directly from Odoo 19 via JSON-RPC
+export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId, posCategoryId } = {}) => {
+  try {
+    // Base domain: active salable products
+    let domain = [["sale_ok", "=", true]];
+
+    // Filter by POS category if provided
+    if (posCategoryId) {
+      domain = ["&", ["sale_ok", "=", true], ["pos_categ_ids", "in", [Number(posCategoryId)]]];
+    }
+    // Filter by product category if provided
+    else if (categoryId) {
+      domain = ["&", ["sale_ok", "=", true], ["categ_id", "=", Number(categoryId)]];
+    }
+
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      if (posCategoryId) {
+        domain = ["&", "&", ["sale_ok", "=", true], ["pos_categ_ids", "in", [Number(posCategoryId)]], ["name", "ilike", term]];
+      } else if (categoryId) {
+        domain = ["&", "&", ["sale_ok", "=", true], ["categ_id", "=", Number(categoryId)], ["name", "ilike", term]];
+      } else {
+        domain = ["&", ["sale_ok", "=", true], ["name", "ilike", term]];
+      }
+    }
+
+    const odooLimit = limit || 50;
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,  // same server as login
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "product.product",
+          method: "search_read",
+          args: [],
+          kwargs: {
+            domain,
+            fields: [
+              "id",
+              "name",
+              "list_price",      // selling price
+              "standard_price",  // cost price
+              "default_code",    // internal reference
+              "uom_id",          // many2one [id, name]
+              "image_128",       // product image
+              "taxes_id",        // customer taxes
+            ],
+            limit: odooLimit,
+            order: "name asc",
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log("Odoo JSON-RPC error (products):", response.data.error);
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const products = response.data.result || [];
+
+    // Fetch tax rates for all unique tax IDs
+    const allTaxIds = [...new Set(products.flatMap(p => p.taxes_id || []))];
+    let taxMap = {};
+    if (allTaxIds.length > 0) {
+      try {
+        const taxResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'account.tax',
+              method: 'read',
+              args: [allTaxIds],
+              kwargs: { fields: ['id', 'name', 'amount', 'amount_type', 'price_include'] },
+            },
+          },
+          { headers }
+        );
+        (taxResp.data?.result || []).forEach(t => {
+          taxMap[t.id] = { name: t.name, amount: t.amount, amount_type: t.amount_type, price_include: t.price_include };
+        });
+      } catch (e) { console.warn('[fetchProductsOdoo] Could not fetch tax details:', e?.message); }
+    }
+
+    // 🔹 Shape to match existing ProductsList expectations
+    return products.map((p) => {
+      // If Odoo returned the image as base64 (image_128), prefer using a data URI
+      const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
+      const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+      const imageUrl = hasBase64
+        ? `data:image/png;base64,${p.image_128}`
+        : `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`;
+
+      // Calculate total tax percentage for this product
+      const productTaxIds = p.taxes_id || [];
+      const productTaxes = productTaxIds.map(tid => taxMap[tid]).filter(Boolean);
+      const taxPercent = productTaxes.reduce((sum, t) => {
+        if (t.amount_type === 'percent') return sum + (t.amount || 0);
+        return sum;
+      }, 0);
+
+      return {
+        id: p.id,
+        product_name: p.name || "",
+        image_url: imageUrl,
+        price: p.list_price || 0,
+        standard_price: p.standard_price || 0,
+        code: p.default_code || "",
+        uom: p.uom_id
+          ? { uom_id: p.uom_id[0], uom_name: p.uom_id[1] }
+          : null,
+        tax_percent: taxPercent,
+        taxes: productTaxes,
+      };
+    });
+  } catch (error) {
+    console.error("fetchProductsOdoo error:", error);
+    throw error;
+  }
+};
+
+// Fetch product by barcode from Odoo
+export const fetchProductByBarcodeOdoo = async (barcode) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "product.product",
+          method: "search_read",
+          args: [],
+          kwargs: {
+            domain: [["barcode", "=", barcode]],
+            fields: [
+              "id",
+              "name",
+              "list_price",
+              "default_code",
+              "barcode",
+              "uom_id",
+              "image_128",
+              "categ_id",
+            ],
+            limit: 1,
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const products = response.data.result || [];
+    return products.map((p) => {
+      const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
+      const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+      const imageUrl = hasBase64
+        ? `data:image/png;base64,${p.image_128}`
+        : `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`;
+
+      return {
+        id: p.id,
+        product_name: p.name || "",
+        image_url: imageUrl,
+        price: p.list_price || 0,
+        code: p.default_code || "",
+        barcode: p.barcode || "",
+        category: p.categ_id ? p.categ_id[1] : "",
+        uom: p.uom_id ? { uom_id: p.uom_id[0], uom_name: p.uom_id[1] } : null,
+      };
+    });
+  } catch (error) {
+    console.error("fetchProductByBarcodeOdoo error:", error);
+    throw error;
+  }
+};
+
+// Fetch users from Odoo using JSON-RPC (res.users model)
+export const fetchUsersOdoo = async ({ offset = 0, limit = 50, searchText = "" } = {}) => {
+  try {
+    let domain = [["active", "=", true]];
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain = ["&", ["active", "=", true], ["name", "ilike", term]];
+    }
+
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "res.users",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: ["id", "name", "login", "email", "partner_id", "image_128"],
+            offset,
+            limit,
+            order: "name asc",
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log("Odoo JSON-RPC error (users):", response.data.error);
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const users = response.data.result || [];
+
+    return users.map((u) => ({
+      id: u.id,
+      _id: u.id,
+      name: u.name || "",
+      login: u.login || "",
+      email: u.email || "",
+      partner_id: u.partner_id ? { id: u.partner_id[0], name: u.partner_id[1] } : null,
+      image_url: u.image_128 && typeof u.image_128 === 'string' && u.image_128.length > 0
+        ? `data:image/png;base64,${u.image_128}`
+        : null,
+    }));
+  } catch (error) {
+    console.error("fetchUsersOdoo error:", error);
+    throw error;
+  }
+};
+
+// src/api/services/generalApi.js
+// Ensure this points to your Odoo URL
+
+// Fetch categories directly from Odoo using JSON-RPC
+export const fetchCategoriesOdoo = async ({ offset = 0, limit = 50, searchText = "" } = {}) => {
+  try {
+    let domain = [];
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain = [["name", "ilike", term]];
+    }
+
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "product.category",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: ["id", "name", "parent_id", "sequence_no", "image_128"],
+            offset,
+            limit,
+            order: "name asc",
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log("Odoo JSON-RPC error (categories):", response.data.error);
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const categories = response.data.result || [];
+
+    const mapped = categories.map((c) => {
+      const imageUrl = c.image_128 ? `data:image/png;base64,${c.image_128}` : null;
+      const seq = c.sequence_no && c.sequence_no !== false ? parseInt(c.sequence_no, 10) : null;
+      return {
+        _id: c.id,
+        name: c.name || "",
+        category_name: c.name || "",
+        image_url: imageUrl,
+        parent_id: c.parent_id ? { id: c.parent_id[0], name: c.parent_id[1] } : null,
+        sequence_no: isNaN(seq) ? null : seq,
+      };
+    });
+    // Sort: sequenced categories first (by sequence number), then unsequenced alphabetically
+    mapped.sort((a, b) => {
+      const aHas = a.sequence_no !== null;
+      const bHas = b.sequence_no !== null;
+      if (aHas && bHas) return a.sequence_no - b.sequence_no;
+      if (aHas) return -1;
+      if (bHas) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return mapped;
+  } catch (error) {
+    console.error("fetchCategoriesOdoo error:", error);
+    throw error;
+  }
+};
+
+// Fetch product categories (lightweight, for filter chips)
+export const fetchProductCategoriesOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.category',
+          method: 'search_read',
+          args: [[]],
+          kwargs: { fields: ['id', 'name'], limit: 200, order: 'name asc' },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[fetchProductCategories] error:', response.data.error?.data?.message);
+      return [];
+    }
+    return (response.data.result || []).map(c => ({ id: c.id, name: c.name || '' }));
+  } catch (error) {
+    console.error('[fetchProductCategories] error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch POS categories for home screen display
+export const fetchPosCategoriesOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'pos.category', method: 'search_read', args: [[]],
+        kwargs: { fields: ['id', 'name', 'image_128'], limit: 100, order: 'sequence asc, name asc' } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) {
+      console.error('[fetchPosCategoriesOdoo] error:', response.data.error?.data?.message);
+      return [];
+    }
+    return (response.data.result || []).map(c => ({
+      _id: c.id,
+      name: c.name || '',
+      category_name: c.name || '',
+      image_url: c.image_128 ? `data:image/png;base64,${c.image_128}` : null,
+    }));
+  } catch (error) {
+    console.error('[fetchPosCategoriesOdoo] error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch detailed product information for a single Odoo product id
+export const fetchProductDetailsOdoo = async (productId) => {
+  try {
+    if (!productId) return null;
+
+    // 1. Fetch product details
+    const headers = await getOdooAuthHeaders();
+    const productResponse = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.product',
+          method: 'search_read',
+          args: [[['id', '=', productId]]],
+          kwargs: {
+            fields: [
+              'id', 'name', 'list_price', 'default_code', 'uom_id', 'image_128',
+              'description_sale', 'categ_id', 'qty_available', 'virtual_available'
+            ],
+            limit: 1,
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (productResponse.data.error) throw new Error('Odoo JSON-RPC error');
+    const results = productResponse.data.result || [];
+    const p = results[0];
+    if (!p) return null;
+
+    // 2. Fetch warehouse/stock info
+    const quantHeaders = await getOdooAuthHeaders();
+    const quantResponse = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.quant',
+          method: 'search_read',
+          args: [[
+            ['product_id', '=', productId],
+            ['location_id.usage', '=', 'internal'],
+          ]],
+          kwargs: {
+            fields: ['location_id', 'quantity'],
+          },
+        },
+      },
+      { headers: quantHeaders }
+    );
+
+    let inventory_ledgers = [];
+    if (quantResponse.data && quantResponse.data.result) {
+      inventory_ledgers = quantResponse.data.result
+        .filter(q => q.quantity !== 0)
+        .map(q => ({
+          warehouse_id: Array.isArray(q.location_id) ? q.location_id[0] : null,
+          warehouse_name: Array.isArray(q.location_id) ? q.location_id[1] : '',
+          total_warehouse_quantity: q.quantity,
+        }));
+    }
+
+    // 3. Shape and return
+    const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
+    const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+    const imageUrl = hasBase64
+      ? `data:image/png;base64,${p.image_128}`
+      : `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`;
+
+    return {
+      id: p.id,
+      product_name: p.name || '',
+      image_url: imageUrl,
+      price: p.list_price || 0,
+      minimal_sales_price: p.list_price || null,
+      inventory_ledgers,
+      total_product_quantity: p.qty_available ?? p.virtual_available ?? 0,
+      inventory_box_products_details: [],
+      product_code: p.default_code || '',
+      uom: p.uom_id ? { uom_id: p.uom_id[0], uom_name: p.uom_id[1] } : null,
+      categ_id: p.categ_id || null,
+      product_description: p.description_sale || '',
+    };
+  } catch (error) {
+    console.error('fetchProductDetailsOdoo error:', error);
+    throw error;
+  }
+};
+
+
+export const fetchInventoryBoxRequest = async ({ offset, limit, searchText }) => {
+  const currentUser = useAuthStore.getState().user; // Correct usage of useAuthStore
+  const salesPersonId = currentUser.related_profile._id;
+
+  // Debugging output for salesPersonId
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { name: searchText }),
+      ...(salesPersonId !== undefined && { sales_person_id: salesPersonId })
+    };
+    const response = await get(API_ENDPOINTS.VIEW_INVENTORY_BOX_REQUEST, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchAuditing = async ({ offset, limit }) => {
+  // Try Odoo first, fall back to old backend
+  try {
+    const audits = await fetchAuditingOdoo({ offset, limit });
+    return audits;
+  } catch (e) {
+    console.warn('fetchAuditing: Odoo fetch failed, falling back to old API', e?.message);
+  }
+  try {
+    const queryParams = {
+      offset,
+      limit,
+    };
+    const response = await get(API_ENDPOINTS.VIEW_AUDITING, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+// Fetch auditing records from Odoo via JSON-RPC (audit.transaction model)
+export const fetchAuditingOdoo = async ({ offset = 0, limit = 50 } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'audit.transaction',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: [
+              'id', 'transaction_ref', 'transaction_date', 'partner_id',
+              'audit_account_type', 'amount_total', 'amount_untaxed',
+              'state', 'salesperson_id',
+            ],
+            offset,
+            limit,
+            order: 'transaction_date desc, id desc',
+          },
+        },
+      },
+      { headers, timeout: reqTimeout }
+    );
+
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    const records = response.data.result || [];
+    return records.map(r => ({
+      _id: r.id,
+      sequence_no: r.transaction_ref || '',
+      date: r.transaction_date || '',
+      customer_name: Array.isArray(r.partner_id) ? r.partner_id[1] : '',
+      supplier_name: '',
+      inv_sequence_no: r.transaction_ref || '',
+      amount: r.amount_total || 0,
+      collection_type_name: r.audit_account_type || '',
+      chart_of_accounts_name: '',
+      warehouse_name: '',
+      sales_person_name: Array.isArray(r.salesperson_id) ? r.salesperson_id[1] : '',
+      state: r.state || 'draft',
+    }));
+  } catch (error) {
+    console.error('fetchAuditingOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Create a Transaction Auditing record in Odoo via JSON-RPC (audit.transaction model)
+export const createAuditingOdoo = async (auditingData) => {
+  try {
+    // Build vals for audit.transaction model
+    const vals = {};
+    if (auditingData.move_id) vals.move_id = Number(auditingData.move_id);
+    if (auditingData.customer_signature) {
+      vals.customer_signature = auditingData.customer_signature.replace(/^data:image\/[^;]+;base64,/, '');
+    }
+    if (auditingData.customer_signed_by) vals.customer_signed_by = String(auditingData.customer_signed_by);
+    if (auditingData.customer_signed_date) vals.customer_signed_date = String(auditingData.customer_signed_date);
+    if (auditingData.cashier_signature) {
+      vals.cashier_signature = auditingData.cashier_signature.replace(/^data:image\/[^;]+;base64,/, '');
+    }
+    if (auditingData.cashier_signed_by) vals.cashier_signed_by = String(auditingData.cashier_signed_by);
+    if (auditingData.cashier_signed_date) vals.cashier_signed_date = String(auditingData.cashier_signed_date);
+    if (auditingData.is_courier != null) vals.is_courier = Boolean(auditingData.is_courier);
+    if (auditingData.courier_proof) {
+      vals.courier_proof = auditingData.courier_proof.replace(/^data:image\/[^;]+;base64,/, '');
+    }
+
+    console.log('[createAuditingOdoo] Creating with move_id:', vals.move_id, 'fields:', Object.keys(vals).join(', '));
+
+    // Helper to make the create call
+    const doCreate = async (hdrs) => {
+      return axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'audit.transaction',
+            method: 'create',
+            args: [vals],
+            kwargs: {},
+          },
+        },
+        { headers: hdrs }
+      );
+    };
+
+    // Step 1: Try with stored session cookie
+    let headers = await getOdooAuthHeaders();
+    let response = await doCreate(headers);
+
+    // Step 2: If session expired or invalid, re-authenticate and retry
+    if (!response.data?.jsonrpc || response.data?.error?.data?.name === 'odoo.http.SessionExpiredException') {
+      console.log('[createAuditingOdoo] Session expired, re-authenticating...');
+      const authResp = await axios.post(
+        `${ODOO_BASE_URL()}/web/session/authenticate`,
+        {
+          jsonrpc: '2.0', method: 'call',
+          params: { db: DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
+        },
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+      const setCookie = authResp.headers['set-cookie'] || authResp.headers['Set-Cookie'];
+      let cookieStr = '';
+      if (setCookie) {
+        cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+      }
+      const sid = authResp.data?.result?.session_id;
+      if (!cookieStr && sid) cookieStr = `session_id=${sid}`;
+      if (cookieStr) await AsyncStorage.setItem('odoo_cookie', cookieStr);
+      if (!cookieStr) throw new Error('Failed to authenticate with Odoo. Please log out and log back in.');
+
+      headers = { 'Content-Type': 'application/json', Cookie: cookieStr };
+      response = await doCreate(headers);
+    }
+
+    if (response.data?.error) {
+      const errMsg = response.data.error.data?.message || response.data.error.message || 'Odoo create failed';
+      console.error('[createAuditingOdoo] Odoo error:', errMsg);
+      throw new Error(errMsg);
+    }
+
+    const recordId = response.data?.result;
+    console.log('[createAuditingOdoo] Created record ID:', recordId);
+    if (!recordId && recordId !== 0) {
+      throw new Error('No record ID returned from Odoo.');
+    }
+    return recordId;
+  } catch (error) {
+    console.error('[createAuditingOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const fetchCustomers = async ({ offset, limit, searchText }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { name: searchText }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_CUSTOMERS, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};// 🔹 Fetch customers directly from Odoo 19 via JSON-RPC (no mobile field)
+export const fetchCustomersOdoo = async ({ offset = 0, limit = 50, searchText } = {}) => {
+  try {
+    // 🔍 Domain for search (optional)
+    let domain = [];
+
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain = [
+        "|",
+        ["name", "ilike", term],
+        ["phone", "ilike", term],
+      ];
+    }
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "res.partner",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: [
+              "id", "name", "email", "phone",
+              "street", "street2", "city", "zip", "country_id",
+              "partner_latitude", "partner_longitude", "image_1920"
+            ],
+            offset,
+            limit,
+            order: "name asc",
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log("Odoo JSON-RPC error:", response.data.error);
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const partners = response.data.result || [];
+
+    // 🔙 Shape result for your CustomerScreen
+    return partners.map((p) => ({
+      id: p.id,
+      name: p.name || "",
+      email: p.email || "",
+      phone: p.phone || "",
+      address: [
+        p.street,
+        p.street2,
+        p.city,
+        p.zip,
+        p.country_id && Array.isArray(p.country_id) ? p.country_id[1] : ""
+      ].filter(Boolean).join(", "),
+      latitude: p.partner_latitude || 0,
+      longitude: p.partner_longitude || 0,
+      image: p.image_1920 || null,
+    }));
+  } catch (error) {
+    console.error("fetchCustomersOdoo error:", error);
+    throw error;
+  }
+};
+
+// Fetch customer category counts for dashboard
+export const fetchCustomerCategoryCounts = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    // Fetch all customer categories with counts
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "res.partner",
+          method: "search_read",
+          args: [[]],
+          kwargs: {
+            fields: [
+              "id", "customer_category", "active", "is_qualified", "customer_rank", "create_date"
+            ],
+            limit: 10000,
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const partners = response.data.result || [];
+    const today = new Date().toISOString().split('T')[0];
+
+    // Count by categories
+    const counts = {
+      new: 0,
+      registered_leads: 0,
+      active_customers: 0,
+      open_leads: 0,
+      others: 0,
+      customer_location_update: 0,
+    };
+
+    partners.forEach((p) => {
+      // New customers - created today with customer_rank > 0
+      if (p.create_date && p.create_date.startsWith(today) && p.customer_rank > 0) {
+        counts.new++;
+      }
+
+      // Active Customers - active and customer_rank > 0
+      if (p.active && p.customer_rank > 0) {
+        counts.active_customers++;
+      }
+
+      // Others - customer_rank = 0 or not a customer
+      if (p.customer_rank === 0) {
+        counts.others++;
+      }
+
+      // Customer Location Update - all active customers
+      if (p.active) {
+        counts.customer_location_update++;
+      }
+    });
+
+    // Fetch leads count for registered_leads and open_leads
+    const leadsResponse = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "crm.lead",
+          method: "search_read",
+          args: [[]],
+          kwargs: {
+            fields: ["id", "probability", "stage_id"],
+            limit: 10000,
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (!leadsResponse.data.error) {
+      const leads = leadsResponse.data.result || [];
+      counts.registered_leads = leads.filter(l => l.probability === 0 || !l.stage_id).length;
+      counts.open_leads = leads.filter(l => l.probability > 0 || l.stage_id).length;
+    }
+
+    return counts;
+  } catch (error) {
+    console.error("fetchCustomerCategoryCounts error:", error);
+    throw error;
+  }
+};
+
+// Fetch registered leads (CRM Leads)
+export const fetchRegisteredLeads = async ({ offset = 0, limit = 50, searchText } = {}) => {
+  try {
+    let domain = [];
+
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain = [
+        "|",
+        ["name", "ilike", term],
+        ["contact_name", "ilike", term],
+        "|",
+        ["email_from", "ilike", term],
+        ["phone", "ilike", term],
+      ];
+    }
+
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "crm.lead",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: [
+              "id", "name", "contact_name", "email_from", "phone",
+              "probability", "stage_id", "expected_revenue", "user_id", "create_date"
+            ],
+            offset,
+            limit,
+            order: "create_date desc",
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    // Filter to get only leads in New stage (probability = 0)
+    const leads = (response.data.result || []).filter(l => !l.probability || l.probability === 0);
+
+    return leads.map((l) => ({
+      id: l.id,
+      name: l.name || "",
+      contactName: l.contact_name || "",
+      email: l.email_from || "",
+      phone: l.phone || "",
+      expectedRevenue: l.expected_revenue || 0,
+      salesperson: l.user_id && Array.isArray(l.user_id) ? l.user_id[1] : "",
+      stage: l.stage_id && Array.isArray(l.stage_id) ? l.stage_id[1] : "New",
+      probability: l.probability || 0,
+    }));
+  } catch (error) {
+    console.error("fetchRegisteredLeads error:", error);
+    throw error;
+  }
+};
+
+// Fetch open leads (CRM Leads with probability > 0)
+export const fetchOpenLeads = async ({ offset = 0, limit = 50, searchText } = {}) => {
+  try {
+    let domain = [["probability", ">", 0]];
+
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain.push(["|", ["name", "ilike", term], ["contact_name", "ilike", term]]);
+    }
+
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "crm.lead",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: [
+              "id", "name", "contact_name", "email_from", "phone",
+              "probability", "stage_id", "expected_revenue", "user_id", "create_date"
+            ],
+            offset,
+            limit,
+            order: "create_date desc",
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const leads = response.data.result || [];
+
+    return leads.map((l) => ({
+      id: l.id,
+      name: l.name || "",
+      contactName: l.contact_name || "",
+      email: l.email_from || "",
+      phone: l.phone || "",
+      expectedRevenue: l.expected_revenue || 0,
+      salesperson: l.user_id && Array.isArray(l.user_id) ? l.user_id[1] : "",
+      stage: l.stage_id && Array.isArray(l.stage_id) ? l.stage_id[1] : "New",
+      probability: l.probability || 0,
+    }));
+  } catch (error) {
+    console.error("fetchOpenLeads error:", error);
+    throw error;
+  }
+};
+
+// Fetch customers by category (Active Qualified, Inactive Qualified, etc.)
+export const fetchCustomersByCategory = async ({ category, offset = 0, limit = 50, searchText } = {}) => {
+  try {
+    // 🔍 Domain for category and search
+    let domain = [];
+
+    // Filter by customer_category
+    if (category) {
+      domain.push(["customer_category", "=", category]);
+    }
+
+    // Add search filter if provided
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain.push(["|", ["name", "ilike", term], ["phone", "ilike", term]]);
+    }
+
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "res.partner",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: [
+              "id", "name", "email", "phone",
+              "street", "street2", "city", "zip", "country_id",
+              "partner_latitude", "partner_longitude",
+              "is_qualified", "customer_category", "active", "image_1920"
+            ],
+            offset,
+            limit,
+            order: "name asc",
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log("Odoo JSON-RPC error (fetchCustomersByCategory):", response.data.error);
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const partners = response.data.result || [];
+
+    return partners.map((p) => ({
+      id: p.id,
+      name: p.name || "",
+      email: p.email || "",
+      phone: p.phone || "",
+      address: [
+        p.street,
+        p.street2,
+        p.city,
+        p.zip,
+        p.country_id && Array.isArray(p.country_id) ? p.country_id[1] : ""
+      ].filter(Boolean).join(", "),
+      latitude: p.partner_latitude || 0,
+      longitude: p.partner_longitude || 0,
+      isQualified: p.is_qualified || false,
+      customerCategory: p.customer_category || "",
+      active: p.active || true,
+      image: p.image_1920 || null,
+    }));
+  } catch (error) {
+    console.error("fetchCustomersByCategory error:", error);
+    throw error;
+  }
+};
+
+// Fetch new customers (registered today or recent)
+export const fetchNewCustomers = async ({ offset = 0, limit = 50, searchText } = {}) => {
+  try {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+    let domain = [["create_date", ">=", `${today} 00:00:00`]];
+
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain.push(["|", ["name", "ilike", term], ["phone", "ilike", term]]);
+    }
+
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "res.partner",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: [
+              "id", "name", "email", "phone",
+              "street", "street2", "city", "zip", "country_id",
+              "partner_latitude", "partner_longitude", "create_date", "image_1920"
+            ],
+            offset,
+            limit,
+            order: "create_date desc",
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const partners = response.data.result || [];
+
+    return partners.map((p) => ({
+      id: p.id,
+      name: p.name || "",
+      email: p.email || "",
+      phone: p.phone || "",
+      address: [
+        p.street,
+        p.street2,
+        p.city,
+        p.zip,
+        p.country_id && Array.isArray(p.country_id) ? p.country_id[1] : ""
+      ].filter(Boolean).join(", "),
+      latitude: p.partner_latitude || 0,
+      longitude: p.partner_longitude || 0,
+      image: p.image_1920 || null,
+    }));
+  } catch (error) {
+    console.error("fetchNewCustomers error:", error);
+    throw error;
+  }
+};
+
+// Update customer qualification status
+export const updateCustomerQualification = async ({ customerId, isQualified }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const payload = {
+      is_qualified: isQualified,
+    };
+    if (isQualified) {
+      const today = new Date().toISOString().split('T')[0];
+      payload.qualification_date = today;
+    }
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "res.partner",
+          method: "write",
+          args: [[customerId], payload],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    return response.data.result;
+  } catch (error) {
+    console.error("updateCustomerQualification error:", error);
+    throw error;
+  }
+};
+
+// Update customer location (GPS)
+export const updateCustomerLocation = async ({ customerId, latitude, longitude }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "res.partner",
+          method: "write",
+          args: [[customerId], {
+            geo_lat: latitude,
+            geo_lng: longitude,
+            location_last_updated: new Date().toISOString(),
+          }],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    return response.data.result;
+  } catch (error) {
+    console.error("updateCustomerLocation error:", error);
+    throw error;
+  }
+};
+
+
+export const fetchPickup = async ({ offset, limit, loginEmployeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(loginEmployeeId !== undefined && { login_employee_id: loginEmployeeId }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_PICKUP, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchService = async ({ offset, limit, loginEmployeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(loginEmployeeId !== undefined && { login_employee_id: loginEmployeeId }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_SERVICE, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchSpareParts = async ({ offset, limit, loginEmployeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(loginEmployeeId !== undefined && { login_employee_id: loginEmployeeId }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_SPARE_PARTS, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchMarketStudy = async ({ offset, limit }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+    };
+    const response = await get(API_ENDPOINTS.VIEW_MARKET_STUDY, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchCustomerVisitList = async ({ offset, limit, fromDate, toDate, customerId, customerName, employeeName, loginEmployeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(loginEmployeeId !== undefined && { login_employee_id: loginEmployeeId }),
+      ...(customerName !== undefined && { customer_name: customerName }),
+      ...(customerId !== undefined && { customer_id: customerId }),
+      ...(employeeName !== undefined && { employee_name: employeeName }),
+      ...(fromDate !== undefined && { from_date: fromDate }),
+      ...(toDate !== undefined && { to_date: toDate }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_CUSTOMER_VISIT_LIST, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchStaffTrackingList = async ({ offset, limit, fromDate, toDate, employeeIds, departmentIds, loginEmployeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(loginEmployeeId !== undefined && { login_employee_id: loginEmployeeId }),
+      ...(employeeIds !== undefined && employeeIds.length > 0 && { employee_ids: employeeIds.join(',') }),
+      ...(departmentIds !== undefined && departmentIds.length > 0 && { department_ids: departmentIds.join(',') }),
+      ...(fromDate !== undefined && { from_date: fromDate }),
+      ...(toDate !== undefined && { to_date: toDate }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_STAFF_TRACKING, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchEnquiryRegister = async ({ offset, limit, loginEmployeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(loginEmployeeId !== undefined && { login_employee_id: loginEmployeeId }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_ENQUIRY_REGISTER, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchPurchaseRequisition = async ({ offset, limit,searchText}) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { sequence_no: searchText }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_PURCHASE_REQUISITION,queryParams);
+    return response.data;
+
+  } catch(error){
+    handleApiError(error);
+    throw error;
+  }
+}
+
+export const fetchPriceEnquiry = async ({ offset, limit,searchText}) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { sequence_no: searchText }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_PRICE,queryParams);
+    return response.data;
+
+  } catch(error){
+    handleApiError(error);
+    throw error;
+  }
+}
+
+export const fetchPurchaseOrder = async ({ offset, limit,searchText}) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { sequence_no: searchText }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_PURCHASE_ORDER,queryParams);
+    return response.data;
+
+  } catch(error){
+    handleApiError(error);
+    throw error;
+  }
+}
+
+export const fetchDeliveryNote = async ({ offset, limit,searchText}) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { sequence_no: searchText }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_DELIVERY_NOTE,queryParams);
+    return response.data;
+
+  } catch(error){
+    handleApiError(error);
+    throw error;
+  }
+}
+
+export const fetchVendorBill = async ({ offset, limit,searchText}) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { sequence_no: searchText }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_VENDOR_BILL,queryParams);
+    return response.data;
+
+  } catch(error){
+    handleApiError(error);
+    throw error;
+  }
+}
+
+export const fetchPaymentMade = async ({ offset, limit,searchText}) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { sequence_no: searchText }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_PAYMENT_MADE,queryParams);
+    return response.data;
+
+  } catch(error){
+    handleApiError(error);
+    throw error;
+  }
+}
+
+// viewPaymentMade
+
+export const fetchLead = async ({ offset, limit, loginEmployeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(loginEmployeeId !== undefined && { login_employee_id: loginEmployeeId }),
+      // ...(sequenceNo !== undefined && { sequence_no: sequenceNo }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_LEAD, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchPipeline = async ({ offset, limit, date, source, opportunity, customer, loginEmployeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      ...(date !== undefined && { date: date }),
+      ...(source !== undefined && { source_name: source }),
+      ...(opportunity !== undefined && { opportunity_name: opportunity }),
+      ...(customer !== undefined && { customer_name: customer }),
+      ...(loginEmployeeId !== undefined && { login_employee_id: loginEmployeeId }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_PIPELINE, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchVisitPlan = async ({ offset, limit, date, employeeId }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+      date: date,
+      ...(employeeId !== undefined && { employee_id: employeeId }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_VISIT_PLAN, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchBoxInspectionReport = async ({ offset, limit }) => {
+  try {
+    const queryParams = {
+      offset,
+      limit,
+    };
+    const response = await get(API_ENDPOINTS.VIEW_BOX_INSPECTION_REPORT, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchAttendance = async ({ userId, date }) => {
+  try {
+    const queryParams = {
+      user_id: userId,
+      date,
+    };
+    const response = await get(API_ENDPOINTS.VIEW_ATTENDANCE, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+export const fetchKPIDashboard = async ({ userId }) => {
+  try {
+    const queryParams = { login_employee_id: userId };
+    const response = await get(API_ENDPOINTS.VIEW_KPI, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+}
+
+export const fetchVehicles = async ({ offset, limit, searchText }) => {
+  // Try Odoo JSON-RPC first (if configured), otherwise fall back to backend API
+  try {
+    if (ODOO_BASE_URL) {
+      try {
+        const vehicles = await fetchVehiclesOdoo({ offset, limit, searchText });
+        return vehicles;
+      } catch (e) {
+        // If Odoo fetch fails, log and fall back to the existing API
+        console.warn('fetchVehicles: Odoo JSON-RPC fetch failed, falling back to API', e);
+      }
+    }
+
+    const queryParams = {
+      offset,
+      limit,
+      ...(searchText !== undefined && { name: searchText }),
+    };
+    const response = await get(API_ENDPOINTS.VIEW_VEHICLES, queryParams);
+    return response.data;
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+// Fetch full customer/partner details (address fields) by id from Odoo
+export const fetchCustomerDetailsOdoo = async (partnerId) => {
+  try {
+    if (!partnerId) return null;
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.partner',
+          method: 'search_read',
+          args: [[['id', '=', partnerId]]],
+          kwargs: {
+            fields: ['id', 'name', 'street', 'street2', 'city', 'zip', 'country_id'],
+            limit: 1,
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log('Odoo JSON-RPC error (customer details):', response.data.error);
+      throw new Error('Odoo JSON-RPC error');
+    }
+
+    const results = response.data.result || [];
+    const p = results[0];
+    if (!p) return null;
+
+    const address = [p.street, p.street2, p.city, p.zip, p.country_id && Array.isArray(p.country_id) ? p.country_id[1] : '']
+      .filter(Boolean)
+      .join(', ');
+
+    return {
+      id: p.id,
+      name: p.name || '',
+      address: address || null,
+    };
+  } catch (error) {
+    console.error('fetchCustomerDetailsOdoo error:', error);
+    throw error;
+  }
+};
+
+// Create Account Payment in Odoo via JSON-RPC
+export const createAccountPaymentOdoo = async ({ partnerId, journalId, amount, paymentType = 'inbound', ref = '' }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = {
+      amount: amount || 0,
+      payment_type: paymentType,
+    };
+    if (partnerId) vals.partner_id = partnerId;
+    if (journalId) vals.journal_id = journalId;
+    if (ref) vals.ref = ref;
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.payment',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (create account payment):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to create account payment');
+    }
+    return { result: response.data.result };
+  } catch (error) {
+    console.error('createAccountPaymentOdoo error:', error?.message || error);
+    return { error: error?.message || error };
+  }
+};
+
+// Fetch Payment Journals from Odoo via JSON-RPC (includes company_id for multi-company support)
+export const fetchPaymentJournalsOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.journal',
+          method: 'search_read',
+          args: [[["type", "in", ["cash", "bank"]]]],
+          kwargs: {
+            fields: ["id", "name", "type", "code", "company_id"],
+            limit: 50,
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (payment journals):', response.data.error);
+      return [];
+    }
+    return (response.data.result || []).map(j => ({
+      id: j.id,
+      name: j.name || '',
+      type: j.type || '',
+      code: j.code || '',
+      company_id: j.company_id ? j.company_id[0] : null,
+      company_name: j.company_id ? j.company_id[1] : '',
+    }));
+  } catch (error) {
+    console.error('fetchPaymentJournalsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+
+// Fetch warehouses from Odoo
+export const fetchWarehousesOdoo = async () => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.warehouse',
+          method: 'search_read',
+          args: [[]],
+          kwargs: { fields: ['id', 'name', 'code', 'company_id'], limit: 50 },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('fetchWarehousesOdoo error:', response.data.error);
+      return [];
+    }
+    return (response.data.result || []).map(w => ({
+      id: w.id, name: w.name, code: w.code, label: w.name,
+      company_id: Array.isArray(w.company_id) ? w.company_id[0] : w.company_id,
+      company_name: Array.isArray(w.company_id) ? w.company_id[1] : '',
+    }));
+  } catch (error) {
+    console.error('fetchWarehousesOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch company currency from Odoo
+export const fetchCompanyCurrencyOdoo = async () => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Helper to fetch symbol from res.currency by ID
+    const fetchCurrencySymbol = async (currencyId, currencyCode) => {
+      try {
+        const res = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: 'res.currency',
+              method: 'search_read',
+              args: [[['id', '=', currencyId]]],
+              kwargs: { fields: [], limit: 1 },
+            },
+          },
+          { headers }
+        );
+        if (!res.data.error) {
+          const currencies = res.data.result || [];
+          if (currencies.length > 0) {
+            const rec = currencies[0];
+            const symbol = rec.symbol || rec.currency_unit_label || currencyCode || '$';
+            const code = rec.name || currencyCode;
+            console.log('[Currency] Resolved:', code, 'Symbol:', symbol);
+            return { code, symbol };
+          }
+        }
+      } catch (e) { /* fall through */ }
+      return currencyCode ? { code: currencyCode, symbol: currencyCode } : null;
+    };
+
+    // Step 1: Try reading currency from an existing easy.sales record
+    try {
+      const esRes = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'easy.sales',
+            method: 'search_read',
+            args: [[]],
+            kwargs: { fields: [], limit: 1 },
+          },
+        },
+        { headers }
+      );
+      if (!esRes.data.error) {
+        const records = esRes.data.result || [];
+        if (records.length > 0) {
+          const rec = records[0];
+          // Find a currency_id field (could be currency_id, x_currency_id, etc.)
+          const currencyField = Object.keys(rec).find(k => k.includes('currency') && Array.isArray(rec[k]) && rec[k].length === 2);
+          if (currencyField) {
+            const cId = rec[currencyField][0];
+            const cCode = rec[currencyField][1];
+            console.log('[Currency] Found currency from easy.sales:', cCode, 'field:', currencyField);
+            const result = await fetchCurrencySymbol(cId, cCode);
+            if (result) return result;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Currency] easy.sales currency read failed:', e?.message);
+    }
+
+    // Step 2: Try reading from the default pricelist
+    try {
+      const plRes = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'product.pricelist',
+            method: 'search_read',
+            args: [[]],
+            kwargs: { fields: [], limit: 1 },
+          },
+        },
+        { headers }
+      );
+      if (!plRes.data.error) {
+        const pricelists = plRes.data.result || [];
+        if (pricelists.length > 0 && pricelists[0].currency_id) {
+          const cId = Array.isArray(pricelists[0].currency_id) ? pricelists[0].currency_id[0] : pricelists[0].currency_id;
+          const cCode = Array.isArray(pricelists[0].currency_id) ? pricelists[0].currency_id[1] : null;
+          console.log('[Currency] Found currency from pricelist:', cCode);
+          const result = await fetchCurrencySymbol(cId, cCode);
+          if (result) return result;
+        }
+      }
+    } catch (e) {
+      console.warn('[Currency] pricelist currency read failed:', e?.message);
+    }
+
+    // Step 3: Fallback to company currency
+    const companyRes = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.company',
+          method: 'search_read',
+          args: [[]],
+          kwargs: { fields: ['id', 'name', 'currency_id'], limit: 1 },
+        },
+      },
+      { headers }
+    );
+    if (!companyRes.data.error) {
+      const companies = companyRes.data.result || [];
+      if (companies.length > 0 && companies[0].currency_id) {
+        const cId = Array.isArray(companies[0].currency_id) ? companies[0].currency_id[0] : companies[0].currency_id;
+        const cCode = Array.isArray(companies[0].currency_id) ? companies[0].currency_id[1] : null;
+        console.log('[Currency] Fallback to company currency:', cCode);
+        return await fetchCurrencySymbol(cId, cCode);
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('[Currency] fetchCompanyCurrency error:', error?.message || error);
+    return null;
+  }
+};
+
+// ============================================================
+// Easy Sales (custom easy.sales model)
+// ============================================================
+
+// Fetch list of easy.sales records
+export const fetchEasySalesOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    let domain = [];
+    if (searchText) {
+      domain = ['|', ['name', 'ilike', searchText], ['partner_id.name', 'ilike', searchText]];
+    }
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'easy.sales',
+          method: 'search_read',
+          args: [domain],
+          kwargs: { fields: [], offset, limit, order: 'id desc' },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[EasySales] list error:', response.data.error?.data?.message || response.data.error);
+      return [];
+    }
+    const records = response.data.result || [];
+    console.log('[EasySales] Fetched', records.length, 'records');
+    return records;
+  } catch (error) {
+    console.error('[EasySales] fetchEasySales error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch a single easy.sales record by ID
+export const fetchEasySaleDetailOdoo = async (saleId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'easy.sales',
+          method: 'read',
+          args: [[saleId]],
+          kwargs: { fields: [] },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[EasySales] detail error:', response.data.error?.data?.message || response.data.error);
+      return null;
+    }
+    const records = response.data.result || [];
+    console.log('[EasySales] Detail record:', records.length > 0 ? records[0].name : 'not found');
+    return records.length > 0 ? records[0] : null;
+  } catch (error) {
+    console.error('[EasySales] fetchEasySaleDetail error:', error?.message || error);
+    return null;
+  }
+};
+
+// Fetch easy.sales payment methods
+export const fetchEasySalesPaymentMethodsOdoo = async () => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'easy.sales.payment.method',
+          method: 'search_read',
+          args: [[]],
+          kwargs: { fields: ['id', 'name', 'sequence', 'journal_id', 'is_default', 'is_customer_account'], limit: 50, order: 'sequence asc' },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[EasySales] Payment methods error:', response.data.error?.data?.message || response.data.error);
+      return [];
+    }
+    const records = response.data.result || [];
+    console.log('[EasySales] Payment methods:', records.length);
+    return records.map(r => ({
+      id: r.id,
+      name: r.name,
+      label: r.name,
+      journal_id: r.journal_id ? r.journal_id[0] : null,
+      journal_name: r.journal_id ? r.journal_id[1] : '',
+      is_default: r.is_default || false,
+      is_customer_account: r.is_customer_account || false,
+    }));
+  } catch (error) {
+    console.error('[EasySales] fetchPaymentMethods error:', error?.message || error);
+    return [];
+  }
+};
+
+// Discover easy.sales model fields
+export const discoverEasySalesFieldsOdoo = async () => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'easy.sales',
+          method: 'fields_get',
+          args: [],
+          kwargs: { attributes: ['string', 'type', 'relation'] },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[EasySales] fields_get error:', response.data.error?.data?.message);
+      return null;
+    }
+    const fields = response.data.result || {};
+    console.log('[EasySales] Model fields:', Object.keys(fields).join(', '));
+    return fields;
+  } catch (error) {
+    console.error('[EasySales] discoverFields error:', error?.message || error);
+    return null;
+  }
+};
+
+// Create an easy.sales record
+export const createEasySaleOdoo = async ({ partnerId, warehouseId, warehouseCompanyId, paymentMethodId, customerRef, orderLines, customerSignature }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Discover field names first
+    const fields = await discoverEasySalesFieldsOdoo();
+    if (!fields) throw new Error('Could not discover easy.sales fields');
+
+    const fieldNames = Object.keys(fields);
+    console.log('[EasySales] Available fields:', fieldNames.filter(f => !f.startsWith('__')).join(', '));
+
+    // Find the line relation field (one2many to easy.sales.line or similar)
+    const lineField = fieldNames.find(f => fields[f].type === 'one2many' && (f.includes('line') || f.includes('order_line')));
+    // Find payment method field
+    const paymentField = fieldNames.find(f => f.includes('payment_method') && fields[f].type === 'many2one');
+    // Find customer ref field
+    const refField = fieldNames.find(f => f.includes('client_order_ref') || f.includes('customer_ref') || f.includes('reference'));
+
+    console.log('[EasySales] Detected: lineField=', lineField, 'paymentField=', paymentField, 'refField=', refField);
+
+    // Build vals
+    const vals = { partner_id: partnerId };
+    if (warehouseId && fieldNames.includes('warehouse_id')) vals.warehouse_id = warehouseId;
+    if (paymentMethodId && paymentField) vals[paymentField] = paymentMethodId;
+    if (customerRef && refField) vals[refField] = customerRef;
+    if (customerSignature && fieldNames.includes('customer_signature')) vals.customer_signature = customerSignature;
+
+    // Build order lines
+    if (lineField && orderLines && orderLines.length > 0) {
+      // Discover line model fields
+      const lineModel = fields[lineField].relation;
+      let lineFieldDefs = null;
+      if (lineModel) {
+        try {
+          const lfResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+              jsonrpc: '2.0', method: 'call',
+              params: { model: lineModel, method: 'fields_get', args: [], kwargs: { attributes: ['string', 'type'] } },
+            },
+            { headers }
+          );
+          lineFieldDefs = lfResp.data?.result || {};
+          console.log('[EasySales] Line model:', lineModel, 'fields:', Object.keys(lineFieldDefs).join(', '));
+        } catch (e) { console.warn('[EasySales] Could not get line fields:', e?.message); }
+      }
+
+      const lf = lineFieldDefs ? Object.keys(lineFieldDefs) : [];
+      const qtyField = lf.find(f => f === 'product_uom_qty' || f === 'quantity' || f === 'qty') || 'product_uom_qty';
+      const priceField = lf.find(f => f === 'price_unit' || f === 'unit_price') || 'price_unit';
+
+      vals[lineField] = orderLines.map(line => [0, 0, {
+        product_id: line.product_id,
+        [qtyField]: line.qty || line.quantity || 1,
+        [priceField]: line.price_unit || line.price || 0,
+      }]);
+    }
+
+    console.log('[EasySales] Creating with vals:', JSON.stringify(vals).substring(0, 500));
+
+    // Pass allowed_company_ids — warehouse company first (sets env.company), then all others for journal/record access
+    const createKwargs = {};
+    if (warehouseCompanyId) {
+      try {
+        const compResp = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } },
+          },
+          { headers }
+        );
+        const allIds = (compResp.data?.result || []).map(c => c.id);
+        createKwargs.context = { allowed_company_ids: [warehouseCompanyId, ...allIds.filter(id => id !== warehouseCompanyId)] };
+      } catch (e) {
+        createKwargs.context = { allowed_company_ids: [warehouseCompanyId] };
+      }
+    }
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'easy.sales',
+          method: 'create',
+          args: [vals],
+          kwargs: createKwargs,
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      console.error('[EasySales] Create error:', response.data.error?.data?.message || response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to create easy sale');
+    }
+
+    const saleId = response.data.result;
+    console.log('[EasySales] Created ID:', saleId);
+    return saleId;
+  } catch (error) {
+    console.error('[EasySales] createEasySale error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Confirm an easy.sales record
+export const confirmEasySaleOdoo = async (saleId, companyId = null) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // If no companyId passed, read company_id from the record first
+    let targetCompanyId = companyId;
+    if (!targetCompanyId) {
+      try {
+        const readResp = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'easy.sales', method: 'read', args: [[saleId]], kwargs: { fields: ['company_id'] } },
+          },
+          { headers }
+        );
+        const rec = readResp.data?.result?.[0];
+        if (rec?.company_id) {
+          targetCompanyId = Array.isArray(rec.company_id) ? rec.company_id[0] : rec.company_id;
+        }
+      } catch (e) { console.warn('[EasySales] Could not read company_id:', e?.message); }
+    }
+
+    // Fetch all companies the user has access to
+    let allCompanyIds = [1]; // fallback to "My Company"
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } },
+        },
+        { headers }
+      );
+      const companies = compResp.data?.result || [];
+      if (companies.length > 0) {
+        allCompanyIds = companies.map(c => c.id);
+      }
+    } catch (e) { console.warn('[EasySales] Could not fetch companies:', e?.message); }
+
+    // Put the target company first (sets env.company), include all others for journal access
+    const companyIds = targetCompanyId
+      ? [targetCompanyId, ...allCompanyIds.filter(id => id !== targetCompanyId)]
+      : allCompanyIds;
+
+    const kwargs = {
+      context: { allowed_company_ids: companyIds },
+    };
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'easy.sales',
+          method: 'action_confirm',
+          args: [[saleId]],
+          kwargs,
+        },
+      },
+      { headers, withCredentials: true, timeout: 30000 }
+    );
+    if (response.data.error) {
+      console.error('[EasySales] Confirm error:', response.data.error?.data?.message || response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to confirm easy sale');
+    }
+    console.log('[EasySales] Confirmed ID:', saleId);
+    return response.data.result;
+  } catch (error) {
+    console.error('[EasySales] confirmEasySale error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch account.payment records from Odoo (customer or vendor)
+// Uses allowed_company_ids context to fetch across all companies
+export const fetchAccountPaymentsOdoo = async ({ paymentType = 'inbound', offset = 0, limit = 20, searchText = '' } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    console.log('[fetchAccountPayments] auth OK, paymentType:', paymentType);
+
+    // Filter by payment_type and partner_type to match Odoo's Customer/Vendor Payments view
+    const partnerType = paymentType === 'inbound' ? 'customer' : 'supplier';
+    let domain = [['payment_type', '=', paymentType], ['partner_type', '=', partnerType]];
+    if (searchText) {
+      domain = ['&', '&', ['payment_type', '=', paymentType], ['partner_type', '=', partnerType], '|', ['partner_id.name', 'ilike', searchText], ['name', 'ilike', searchText]];
+    }
+
+    // Include all companies so payments from any company are visible
+    const allCompanyIds = [1, 2, 3, 4, 5, 6];
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.payment',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'display_name', 'partner_id', 'amount', 'date', 'state', 'payment_type', 'journal_id', 'memo', 'company_id'],
+            offset,
+            limit,
+            order: 'date desc, id desc',
+            context: { allowed_company_ids: allCompanyIds },
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.error('[fetchAccountPayments] Odoo error:', JSON.stringify(response.data.error).substring(0, 500));
+      return [];
+    }
+
+    const records = response.data.result || [];
+    console.log('[fetchAccountPayments] Got', records.length, 'records for paymentType:', paymentType);
+
+    return records.map(p => ({
+      id: p.id,
+      name: p.name || p.display_name || '',
+      partner_name: p.partner_id ? p.partner_id[1] : '',
+      partner_id: p.partner_id ? p.partner_id[0] : null,
+      amount: p.amount || 0,
+      date: p.date || '',
+      state: p.state || '',
+      payment_type: p.payment_type || '',
+      journal_name: p.journal_id ? p.journal_id[1] : '',
+      ref: p.memo || '',
+      company_name: p.company_id ? p.company_id[1] : '',
+    }));
+  } catch (error) {
+    console.error('[fetchAccountPayments] FATAL error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch vehicles directly from Odoo using JSON-RPC
+export const fetchVehiclesOdoo = async ({ offset = 0, limit = 50, searchText = "" } = {}) => {
+  try {
+    let domain = [];
+    if (searchText && searchText.trim() !== "") {
+      const term = searchText.trim();
+      domain = [["name", "ilike", term]]; // Filter by vehicle name
+    }
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "fleet.vehicle",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+            fields: [
+              "id",
+              "name",
+              "license_plate",
+              "model_id",
+              "driver_id",
+              "image_128"
+            ],
+            offset,
+            limit,
+            order: "name asc",
+          },
+        },
+      },
+      {
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    if (response.data.error) {
+      console.log("Odoo JSON-RPC error (vehicles):", response.data.error);
+      throw new Error("Odoo JSON-RPC error");
+    }
+
+    const vehicles = response.data.result || [];
+    return vehicles.map(v => ({
+      id: v.id,
+      name: v.name || "",
+      license_plate: v.license_plate || "",
+      model: v.model_id ? { id: v.model_id[0], name: v.model_id[1] } : null,
+      driver: v.driver_id ? { id: v.driver_id[0], name: v.driver_id[1] } : null,
+      image_url: v.image_128 && typeof v.image_128 === 'string' && v.image_128.length > 0
+        ? `data:image/png;base64,${v.image_128}`
+        : null,
+    }));
+  } catch (error) {
+    console.error("fetchVehiclesOdoo error:", error);
+    throw error;
+  }
+};
+
+// Fetch vehicles from the vehicle-tracking Odoo endpoint (uses vehicleTrackingConfig)
+export const fetchVehiclesVehicleTracking = async ({ offset = 0, limit = 50, searchText = "", username = "admin", password = "admin" } = {}) => {
+  let domain = [];
+  if (searchText && searchText.trim() !== "") {
+    const term = searchText.trim();
+    domain = [["name", "ilike", term]];
+  }
+  const baseUrl = (VEHICLE_TRACKING_BASE_URL || '').replace(/\/$/, '');
+  try {
+    // Step 1: Authenticate and get session cookie
+    const loginResp = await loginVehicleTrackingOdoo({ username, password });
+    // Step 2: Fetch vehicles with session
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: "2.0",
+        method: "call",
+        params: {
+          model: "fleet.vehicle",
+          method: "search_read",
+          args: [domain],
+          kwargs: {
+              fields: ["id", "name", "license_plate", "model_id", "driver_id", "image_128", "tank_capacity"],
+            offset,
+            limit,
+            order: "name asc",
+          },
+        },
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          ...(loginResp.cookies ? { Cookie: loginResp.cookies } : {}),
+        },
+        withCredentials: true,
+        timeout: 15000,
+      }
+    );
+    if (response.data.error) {
+      console.log("VehicleTracking JSON-RPC error (vehicles):", response.data.error);
+      throw new Error("VehicleTracking JSON-RPC error");
+    }
+    const vehicles = response.data.result || [];
+      return vehicles.map(v => ({
+        id: v.id,
+        name: v.name || "",
+        license_plate: v.license_plate || "",
+        model: v.model_id ? { id: v.model_id[0], name: v.model_id[1] } : null,
+        driver: v.driver_id ? { id: v.driver_id[0], name: v.driver_id[1] } : null,
+        image_url: v.image_128 && typeof v.image_128 === 'string' && v.image_128.length > 0 ? `data:image/png;base64,${v.image_128}` : null,
+        tank_capacity: v.tank_capacity ?? '',
+      }));
+  } catch (error) {
+    console.error('fetchVehiclesVehicleTracking error:', error?.message || error);
+    if (error && error.response) {
+      console.error('fetchVehiclesVehicleTracking response status:', error.response.status);
+      try { console.error('fetchVehiclesVehicleTracking response data:', error.response.data); } catch (e) {}
+    }
+    throw error;
+  }
+};
+
+// Fetch invoice (account.move) by ID from Odoo via JSON-RPC
+export const fetchInvoiceByIdOdoo = async (invoiceId) => {
+  try {
+    if (!invoiceId) return null;
+
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.move',
+          method: 'search_read',
+          args: [[['id', '=', Number(invoiceId)]]],
+          kwargs: {
+            fields: [
+              'id', 'name', 'partner_id', 'invoice_date', 'invoice_date_due',
+              'amount_total', 'amount_residual', 'amount_untaxed', 'amount_tax',
+              'state', 'payment_state', 'move_type', 'currency_id',
+              'invoice_line_ids', 'ref', 'narration',
+            ],
+            limit: 1,
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log('Odoo JSON-RPC error (invoice):', response.data.error);
+      throw new Error('Odoo JSON-RPC error');
+    }
+
+    const results = response.data.result || [];
+    const inv = results[0];
+    if (!inv) return null;
+
+    // Fetch invoice lines
+    let invoiceLines = [];
+    if (inv.invoice_line_ids && inv.invoice_line_ids.length > 0) {
+      const linesResponse = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'account.move.line',
+            method: 'search_read',
+            args: [[['id', 'in', inv.invoice_line_ids]]],
+            kwargs: {
+              fields: ['id', 'name', 'product_id', 'quantity', 'price_unit', 'price_subtotal'],
+            },
+          },
+        },
+        { headers }
+      );
+
+      if (!linesResponse.data.error && linesResponse.data.result) {
+        invoiceLines = linesResponse.data.result.map(line => ({
+          id: line.id,
+          description: line.name || '',
+          product_name: Array.isArray(line.product_id) ? line.product_id[1] : '',
+          quantity: line.quantity || 0,
+          price_unit: line.price_unit || 0,
+          price_subtotal: line.price_subtotal || 0,
+        }));
+      }
+    }
+
+    return {
+      id: inv.id,
+      name: inv.name || '',
+      partner_name: Array.isArray(inv.partner_id) ? inv.partner_id[1] : '',
+      invoice_date: inv.invoice_date || '',
+      invoice_date_due: inv.invoice_date_due || '',
+      amount_total: inv.amount_total || 0,
+      amount_residual: inv.amount_residual || 0,
+      amount_untaxed: inv.amount_untaxed || 0,
+      amount_tax: inv.amount_tax || 0,
+      state: inv.state || '',
+      payment_state: inv.payment_state || '',
+      move_type: inv.move_type || '',
+      currency_name: Array.isArray(inv.currency_id) ? inv.currency_id[1] : '',
+      ref: inv.ref || '',
+      narration: inv.narration || '',
+      invoice_lines: invoiceLines,
+    };
+  } catch (error) {
+    console.error('fetchInvoiceByIdOdoo error:', error);
+    throw error;
+  }
+};
+
+// Create a Product Enquiry record in Odoo via JSON-RPC
+export const createProductEnquiryOdoo = async ({
+  date,
+  type,
+  customer_name,
+  customer_no,
+  sale_price,
+  product_name,
+  image_url,
+  attachments = [],
+}) => {
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+  try {
+    // Step 1: Authenticate to Odoo
+    const loginResponse = await axios.post(
+      `${baseUrl}/web/session/authenticate`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          db: DEFAULT_ODOO_DB,
+          login: DEFAULT_USERNAME,
+          password: DEFAULT_PASSWORD,
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, withCredentials: true }
+    );
+
+    if (loginResponse.data.error) {
+      throw new Error('Odoo authentication failed');
+    }
+
+    // Extract session cookie
+    const setCookie = loginResponse.headers['set-cookie'] || loginResponse.headers['Set-Cookie'];
+    const headers = { 'Content-Type': 'application/json' };
+    if (setCookie) {
+      headers.Cookie = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+    }
+
+    // Step 2: Create product.enquiry record
+    const vals = {
+      date: date || false,
+      type: type || 'product_enquiry',
+      customer_name: customer_name || false,
+      customer_no: customer_no || false,
+      sale_price: sale_price || 0,
+      product_name: product_name || false,
+      image_url: image_url || false,
+    };
+
+    // Handle image attachments — extract base64 from data URI for Odoo Binary field
+    if (attachments.length > 0) {
+      vals.attachment_ids = attachments.map((imgUri, idx) => {
+        const b64Match = imgUri.match(/^data:image\/([^;]+);base64,(.+)$/);
+        if (b64Match) {
+          const ext = b64Match[1] === 'jpeg' ? 'jpg' : b64Match[1];
+          return [0, 0, { attachment: b64Match[2], filename: `enquiry_image_${idx + 1}.${ext}` }];
+        }
+        return [0, 0, { image_url: imgUri }];
+      });
+    }
+
+    console.log('[createProductEnquiryOdoo] Sending vals:', JSON.stringify({
+      ...vals,
+      image_url: vals.image_url ? '(base64 data...)' : false,
+      attachment_ids: vals.attachment_ids ? `${vals.attachment_ids.length} attachments` : 'none',
+    }));
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.enquiry',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 30000 }
+    );
+
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (create product enquiry):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    console.log('[createProductEnquiryOdoo] Created record ID:', response.data.result);
+    return response.data.result;
+  } catch (error) {
+    console.error('createProductEnquiryOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch all product enquiries from Odoo
+export const fetchProductEnquiriesOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    let domain = [];
+    if (searchText && searchText.trim() !== '') {
+      const term = searchText.trim();
+      domain = ['|', '|',
+        ['product_name', 'ilike', term],
+        ['customer_name', 'ilike', term],
+        ['customer_no', 'ilike', term],
+      ];
+    }
+
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.enquiry',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'date', 'type', 'customer_name', 'customer_no', 'sale_price', 'product_name', 'create_date'],
+            offset,
+            limit,
+            order: 'create_date desc',
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log('Odoo JSON-RPC error (product enquiries):', response.data.error);
+      throw new Error('Odoo JSON-RPC error');
+    }
+
+    const records = response.data.result || [];
+    return records.map((r) => ({
+      _id: r.id,
+      date: r.date || r.create_date,
+      type: r.type || '',
+      customer_name: r.customer_name || '',
+      customer_no: r.customer_no || '',
+      sale_price: r.sale_price || 0,
+      product_name: r.product_name || '',
+    }));
+  } catch (error) {
+    console.error('fetchProductEnquiriesOdoo error:', error);
+    throw error;
+  }
+};
+
+// Create account.payment with customer signature and GPS location in Odoo
+// Handles multi-company: reads partner's company, finds matching journal, sets correct company context
+export const createPaymentWithSignatureOdoo = async ({
+  partnerId,
+  amount,
+  paymentType = 'inbound',
+  journalId,
+  ref = '',
+  customerSignature = null,
+  employeeSignature = null,
+  latitude = null,
+  longitude = null,
+  locationName = '',
+}) => {
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+  try {
+    // Step 1: Authenticate
+    const loginResponse = await axios.post(
+      `${baseUrl}/web/session/authenticate`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          db: DEFAULT_ODOO_DB,
+          login: DEFAULT_USERNAME,
+          password: DEFAULT_PASSWORD,
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, withCredentials: true }
+    );
+    if (loginResponse.data.error) throw new Error('Odoo authentication failed');
+    const setCookie = loginResponse.headers['set-cookie'] || loginResponse.headers['Set-Cookie'];
+    const headers = { 'Content-Type': 'application/json' };
+    if (setCookie) {
+      headers.Cookie = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+    }
+
+    // Helper to call Odoo JSON-RPC
+    const rpc = async (model, method, args, kwargs = {}) => {
+      const resp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model, method, args, kwargs } },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      if (resp.data.error) throw new Error(resp.data.error.data?.message || 'Odoo RPC error');
+      return resp.data.result;
+    };
+
+    // Step 2: Resolve company — read partner's and journal's company_id
+    let targetCompanyId = null;
+    let resolvedJournalId = journalId;
+
+    if (partnerId) {
+      const partners = await rpc('res.partner', 'search_read', [[['id', '=', partnerId]]], {
+        fields: ['id', 'company_id'],
+        limit: 1,
+      });
+      const partnerCompanyId = partners?.[0]?.company_id ? partners[0].company_id[0] : null;
+      console.log('[createPayment] Partner company_id:', partnerCompanyId);
+
+      if (journalId) {
+        const journals = await rpc('account.journal', 'search_read', [[['id', '=', journalId]]], {
+          fields: ['id', 'company_id', 'type'],
+          limit: 1,
+        });
+        const journalCompanyId = journals?.[0]?.company_id ? journals[0].company_id[0] : null;
+        const journalType = journals?.[0]?.type || 'bank';
+        console.log('[createPayment] Journal company_id:', journalCompanyId);
+
+        if (partnerCompanyId && journalCompanyId && partnerCompanyId !== journalCompanyId) {
+          // Company mismatch! Find a journal of same type in the partner's company
+          console.log('[createPayment] Company mismatch — partner:', partnerCompanyId, 'journal:', journalCompanyId);
+          const matchingJournals = await rpc('account.journal', 'search_read', [
+            [['type', '=', journalType], ['company_id', '=', partnerCompanyId]]
+          ], {
+            fields: ['id', 'name', 'type', 'company_id'],
+            limit: 5,
+          });
+          if (matchingJournals && matchingJournals.length > 0) {
+            resolvedJournalId = matchingJournals[0].id;
+            targetCompanyId = partnerCompanyId;
+            console.log('[createPayment] Resolved journal to', matchingJournals[0].name, '(ID:', resolvedJournalId, ') from company', partnerCompanyId);
+          } else {
+            // No matching journal type — try any cash/bank journal in partner's company
+            const fallbackJournals = await rpc('account.journal', 'search_read', [
+              [['type', 'in', ['cash', 'bank']], ['company_id', '=', partnerCompanyId]]
+            ], {
+              fields: ['id', 'name', 'type', 'company_id'],
+              limit: 5,
+            });
+            if (fallbackJournals && fallbackJournals.length > 0) {
+              resolvedJournalId = fallbackJournals[0].id;
+              targetCompanyId = partnerCompanyId;
+              console.log('[createPayment] Fallback journal:', fallbackJournals[0].name, '(ID:', resolvedJournalId, ')');
+            } else {
+              // Last resort: clear partner's company restriction so payment can go through
+              console.log('[createPayment] No journal found in partner company. Using original journal, clearing partner company restriction.');
+              targetCompanyId = journalCompanyId;
+              try {
+                await rpc('res.partner', 'write', [[partnerId], { company_id: false }]);
+                console.log('[createPayment] Cleared partner company restriction');
+              } catch (writeErr) {
+                console.warn('[createPayment] Could not clear partner company:', writeErr?.message);
+                targetCompanyId = journalCompanyId;
+              }
+            }
+          }
+        } else {
+          // No mismatch — use the journal's company (or partner's if partner has one)
+          targetCompanyId = partnerCompanyId || journalCompanyId;
+        }
+      } else {
+        targetCompanyId = partnerCompanyId;
+      }
+    }
+
+    // Step 3: Build vals
+    const vals = {
+      amount: Math.abs(amount) || 0,
+      payment_type: paymentType,
+      partner_type: paymentType === 'inbound' ? 'customer' : 'supplier',
+    };
+    if (partnerId) vals.partner_id = partnerId;
+    if (resolvedJournalId) vals.journal_id = resolvedJournalId;
+    if (targetCompanyId) vals.company_id = targetCompanyId;
+    if (ref) vals.memo = ref;
+
+    // Handle customer/vendor signature (base64 data URI → raw base64)
+    if (customerSignature) {
+      const sigMatch = customerSignature.match(/^data:image\/[^;]+;base64,(.+)$/);
+      vals.customer_signature = sigMatch ? sigMatch[1] : customerSignature;
+    }
+
+    // Handle employee signature
+    if (employeeSignature) {
+      const empSigMatch = employeeSignature.match(/^data:image\/[^;]+;base64,(.+)$/);
+      vals.employee_signature = empSigMatch ? empSigMatch[1] : employeeSignature;
+    }
+
+    // Handle location
+    if (latitude !== null) vals.latitude = latitude;
+    if (longitude !== null) vals.longitude = longitude;
+    if (locationName) vals.location_name = locationName;
+
+    console.log('[createPayment] Creating payment with vals:', JSON.stringify({
+      amount: vals.amount, payment_type: vals.payment_type, partner_id: vals.partner_id,
+      journal_id: vals.journal_id, company_id: vals.company_id,
+    }));
+
+    // Step 4: Create record with allowed_company_ids context for multi-company
+    const createKwargs = {};
+    if (targetCompanyId) {
+      createKwargs.context = { allowed_company_ids: [targetCompanyId] };
+    }
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.payment',
+          method: 'create',
+          args: [vals],
+          kwargs: createKwargs,
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (create payment):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    const paymentId = response.data.result;
+    console.log('[createPayment] Created record ID:', paymentId);
+
+    // Step 5: Confirm/post the payment so it shows as "Posted" in Odoo
+    try {
+      const postKwargs = {};
+      if (targetCompanyId) {
+        postKwargs.context = { allowed_company_ids: [targetCompanyId] };
+      }
+      await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'account.payment',
+            method: 'action_post',
+            args: [[paymentId]],
+            kwargs: postKwargs,
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      console.log('[createPayment] Payment posted successfully');
+    } catch (postErr) {
+      console.warn('[createPayment] Could not auto-post payment:', postErr?.message);
+    }
+
+    return paymentId;
+  } catch (error) {
+    console.error('createPaymentWithSignatureOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// ============================================================
+// POS API Functions
+// ============================================================
+
+// Helper: Full Odoo authentication (returns headers with session cookie)
+const authenticateOdoo = async () => {
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+  const loginResponse = await axios.post(
+    `${baseUrl}/web/session/authenticate`,
+    {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        db: DEFAULT_ODOO_DB,
+        login: DEFAULT_USERNAME,
+        password: DEFAULT_PASSWORD,
+      },
+    },
+    { headers: { 'Content-Type': 'application/json' }, withCredentials: true }
+  );
+  if (loginResponse.data.error) throw new Error('Odoo authentication failed');
+  const setCookie = loginResponse.headers['set-cookie'] || loginResponse.headers['Set-Cookie'];
+  const headers = { 'Content-Type': 'application/json' };
+  if (setCookie) {
+    headers.Cookie = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+  }
+  return { headers, baseUrl };
+};
+
+// Fetch POS configurations from Odoo
+export const fetchPosConfigsOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.config',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: ['id', 'name', 'current_session_id', 'current_session_state'],
+            limit: 50,
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (pos.config):', response.data.error);
+      return [];
+    }
+    return (response.data.result || []).map(c => ({
+      id: c.id,
+      name: c.name || '',
+      current_session_id: c.current_session_id ? c.current_session_id[0] : null,
+      current_session_state: c.current_session_state || null,
+    }));
+  } catch (error) {
+    console.error('fetchPosConfigsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Open a POS session in Odoo
+export const openPosSessionOdoo = async ({ posConfigId, openingBalance = 0 }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    // Use open_ui on pos.config which opens/creates a session
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.config',
+          method: 'open_ui',
+          args: [[posConfigId]],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (open POS session):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to open POS session');
+    }
+    // After open_ui, fetch the newly opened session
+    const sessionResp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.session',
+          method: 'search_read',
+          args: [[['config_id', '=', posConfigId], ['state', '=', 'opened']]],
+          kwargs: {
+            fields: ['id', 'name', 'config_id', 'state', 'start_at'],
+            limit: 1,
+          },
+        },
+      },
+      { headers, withCredentials: true }
+    );
+    const sessions = sessionResp.data.result || [];
+    if (sessions.length > 0) {
+      return {
+        id: sessions[0].id,
+        name: sessions[0].name,
+        config_id: sessions[0].config_id ? sessions[0].config_id[0] : posConfigId,
+        state: sessions[0].state,
+      };
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('openPosSessionOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Close a POS session in Odoo
+export const closePosSessionOdoo = async ({ sessionId }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.session',
+          method: 'action_pos_session_closing_control',
+          args: [[sessionId]],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (close POS session):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to close POS session');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('closePosSessionOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch open POS sessions from Odoo
+export const fetchOpenPosSessionOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.session',
+          method: 'search_read',
+          args: [[['state', '=', 'opened']]],
+          kwargs: {
+            fields: ['id', 'name', 'config_id', 'state', 'start_at', 'cash_register_balance_start'],
+            limit: 10,
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (open POS sessions):', response.data.error);
+      return [];
+    }
+    return (response.data.result || []).map(s => ({
+      id: s.id,
+      name: s.name || '',
+      config_id: s.config_id ? s.config_id[0] : null,
+      config_name: s.config_id ? s.config_id[1] : '',
+      state: s.state,
+      start_at: s.start_at || '',
+      opening_balance: s.cash_register_balance_start || 0,
+    }));
+  } catch (error) {
+    console.error('fetchOpenPosSessionOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Create a POS order in Odoo
+export const createPosOrderOdoo = async ({ sessionId, partnerId, lines }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Calculate totals from lines
+    let amountTotal = 0;
+    let amountTax = 0;
+    const orderLines = lines.map(line => {
+      const qty = line.qty || line.quantity || 1;
+      const priceUnit = line.price || line.price_unit || 0;
+      const subtotal = qty * priceUnit;
+      amountTotal += subtotal;
+      return [0, 0, {
+        product_id: line.product_id || line.id,
+        qty: qty,
+        price_unit: priceUnit,
+        price_subtotal: subtotal,
+        price_subtotal_incl: subtotal,
+      }];
+    });
+
+    const vals = {
+      session_id: sessionId,
+      amount_total: amountTotal,
+      amount_tax: amountTax,
+      amount_paid: 0,
+      amount_return: 0,
+      lines: orderLines,
+    };
+    if (partnerId) vals.partner_id = partnerId;
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.order',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (create POS order):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to create POS order');
+    }
+
+    console.log('[createPosOrderOdoo] Created order ID:', response.data.result);
+    return { result: response.data.result };
+  } catch (error) {
+    console.error('createPosOrderOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Create a POS payment in Odoo
+export const createPosPaymentOdoo = async ({ orderId, amount, paymentMethodId }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    const vals = {
+      pos_order_id: orderId,
+      amount: amount,
+      payment_method_id: paymentMethodId,
+    };
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.payment',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (create POS payment):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to create POS payment');
+    }
+
+    // Mark the order as paid
+    try {
+      await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'pos.order',
+            method: 'action_pos_order_paid',
+            args: [[orderId]],
+            kwargs: {},
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+    } catch (paidErr) {
+      console.warn('action_pos_order_paid failed (non-critical):', paidErr?.message);
+    }
+
+    console.log('[createPosPaymentOdoo] Created payment ID:', response.data.result);
+    return { result: response.data.result };
+  } catch (error) {
+    console.error('createPosPaymentOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch POS payment methods from Odoo
+export const fetchPosPaymentMethodsOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.payment.method',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: ['id', 'name', 'type'],
+            limit: 50,
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (pos.payment.method):', response.data.error);
+      return [];
+    }
+    return (response.data.result || []).map(m => ({
+      id: m.id,
+      name: m.name || '',
+      type: m.type || '',
+    }));
+  } catch (error) {
+    console.error('fetchPosPaymentMethodsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch taxes from Odoo (sale taxes)
+export const fetchTaxesOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.tax',
+          method: 'search_read',
+          args: [[['type_tax_use', '=', 'sale']]],
+          kwargs: {
+            fields: ['id', 'name', 'amount', 'type_tax_use', 'price_include'],
+            limit: 50,
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (account.tax):', response.data.error);
+      return [];
+    }
+    return (response.data.result || []).map(t => ({
+      id: t.id,
+      name: t.name || '',
+      amount: t.amount || 0,
+      type_tax_use: t.type_tax_use || '',
+      price_include: t.price_include || false,
+    }));
+  } catch (error) {
+    console.error('fetchTaxesOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// ============================================================
+// Sales Order API Functions
+// ============================================================
+
+// Fetch all sale.order records from Odoo
+export const fetchSaleOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const domain = searchText
+      ? ['|', ['name', 'ilike', searchText], ['partner_id', 'ilike', searchText]]
+      : [];
+
+    // Fetch all companies for allowed_company_ids
+    let allCompanyIds = [1];
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
+        { headers }
+      );
+      allCompanyIds = (compResp.data?.result || []).map(c => c.id);
+    } catch (e) { /* fallback */ }
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'sale.order',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'partner_id', 'state', 'amount_total', 'amount_untaxed', 'amount_tax', 'date_order', 'invoice_status', 'company_id'],
+            limit, offset, order: 'id desc',
+            context: { allowed_company_ids: allCompanyIds },
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[SaleOrders] list error:', response.data.error?.data?.message || response.data.error);
+      return [];
+    }
+    const records = response.data.result || [];
+    console.log('[SaleOrders] Fetched', records.length, 'records');
+    return records;
+  } catch (error) {
+    console.error('[SaleOrders] fetchSaleOrders error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch a single sale.order record by ID
+export const fetchSaleOrderDetailOdoo = async (orderId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Fetch all companies for allowed_company_ids
+    let allCompanyIds = [1];
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
+        { headers }
+      );
+      allCompanyIds = (compResp.data?.result || []).map(c => c.id);
+    } catch (e) { /* fallback */ }
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'sale.order',
+          method: 'read',
+          args: [[orderId]],
+          kwargs: {
+            fields: ['id', 'name', 'partner_id', 'state', 'amount_total', 'amount_untaxed', 'amount_tax', 'date_order', 'warehouse_id', 'invoice_status', 'invoice_ids', 'order_line', 'company_id', 'currency_id', 'client_order_ref'],
+            context: { allowed_company_ids: allCompanyIds },
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[SaleOrders] detail error:', response.data.error?.data?.message || response.data.error);
+      return null;
+    }
+    const records = response.data.result || [];
+    if (records.length === 0) return null;
+
+    const record = records[0];
+
+    // Fetch order line details
+    if (record.order_line && record.order_line.length > 0) {
+      try {
+        const linesResp = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'sale.order.line',
+              method: 'read',
+              args: [record.order_line],
+              kwargs: {
+                fields: ['id', 'product_id', 'name', 'product_uom_qty', 'price_unit', 'price_subtotal', 'discount'],
+                context: { allowed_company_ids: allCompanyIds },
+              },
+            },
+          },
+          { headers }
+        );
+        record.order_lines_detail = linesResp.data?.result || [];
+      } catch (e) { record.order_lines_detail = []; }
+    } else {
+      record.order_lines_detail = [];
+    }
+
+    return record;
+  } catch (error) {
+    console.error('[SaleOrders] fetchSaleOrderDetail error:', error?.message || error);
+    return null;
+  }
+};
+
+// Create a Sale Order (Quotation) in Odoo
+export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    const lines = orderLines.map(line => [0, 0, {
+      product_id: line.product_id || line.id,
+      product_uom_qty: line.qty || line.quantity || line.product_uom_qty || 1,
+      price_unit: line.price_unit || line.price || line.unit_price || 0,
+      discount: line.discount || line.discount_percentage || 0,
+    }]);
+
+    const vals = {
+      partner_id: partnerId,
+      order_line: lines,
+    };
+    if (warehouseId) vals.warehouse_id = warehouseId;
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'sale.order',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (create sale order):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to create sale order');
+    }
+
+    console.log('[createSaleOrderOdoo] Created sale order ID:', response.data.result);
+    return response.data.result;
+  } catch (error) {
+    console.error('createSaleOrderOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Confirm a Sale Order (Quotation → Sale Order) in Odoo
+export const confirmSaleOrderOdoo = async (orderId, companyId = null) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Fetch all companies for allowed_company_ids
+    let allCompanyIds = [1];
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
+        { headers }
+      );
+      allCompanyIds = (compResp.data?.result || []).map(c => c.id);
+    } catch (e) { /* fallback */ }
+
+    const companyIds = companyId
+      ? [companyId, ...allCompanyIds.filter(id => id !== companyId)]
+      : allCompanyIds;
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'sale.order',
+          method: 'action_confirm',
+          args: [[orderId]],
+          kwargs: { context: { allowed_company_ids: companyIds } },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (confirm sale order):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to confirm sale order');
+    }
+    console.log('[confirmSaleOrderOdoo] Confirmed order ID:', orderId);
+    return response.data.result;
+  } catch (error) {
+    console.error('confirmSaleOrderOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Update order lines on a draft sale.order in Odoo
+// Changes: array of { lineId, qty, price_unit } to update, or { lineId, delete: true } to remove
+// Additions: array of { product_id, qty, price_unit } to add
+export const updateSaleOrderLinesOdoo = async (orderId, { changes = [], additions = [], deletions = [] } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Fetch all companies
+    let allCompanyIds = [1];
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
+        { headers }
+      );
+      allCompanyIds = (compResp.data?.result || []).map(c => c.id);
+    } catch (e) { /* fallback */ }
+
+    // Build order_line commands using Odoo's (0/1/2) command format
+    const lineCommands = [];
+
+    // Update existing lines: [1, lineId, { field: value }]
+    changes.forEach(ch => {
+      const vals = {};
+      if (ch.qty !== undefined) vals.product_uom_qty = ch.qty;
+      if (ch.price_unit !== undefined) vals.price_unit = ch.price_unit;
+      if (Object.keys(vals).length > 0) {
+        lineCommands.push([1, ch.lineId, vals]);
+      }
+    });
+
+    // Delete lines: [2, lineId, 0]
+    deletions.forEach(lineId => {
+      lineCommands.push([2, lineId, 0]);
+    });
+
+    // Add new lines: [0, 0, { product_id, product_uom_qty, price_unit }]
+    additions.forEach(add => {
+      lineCommands.push([0, 0, {
+        product_id: add.product_id,
+        product_uom_qty: add.qty || 1,
+        price_unit: add.price_unit || 0,
+      }]);
+    });
+
+    if (lineCommands.length === 0) return true;
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'sale.order',
+          method: 'write',
+          args: [[orderId], { order_line: lineCommands }],
+          kwargs: { context: { allowed_company_ids: allCompanyIds } },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      console.error('[updateSaleOrderLines] error:', response.data.error?.data?.message || response.data.error);
+      throw new Error(response.data.error.data?.message || 'Failed to update order lines');
+    }
+
+    console.log('[updateSaleOrderLines] Updated order:', orderId);
+    return true;
+  } catch (error) {
+    console.error('[updateSaleOrderLines] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Create Invoice from a confirmed Sale Order in Odoo
+export const createInvoiceFromQuotationOdoo = async (orderId, companyId = null) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Fetch all companies for allowed_company_ids
+    let allCompanyIds = [1];
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
+        { headers }
+      );
+      allCompanyIds = (compResp.data?.result || []).map(c => c.id);
+    } catch (e) { /* fallback */ }
+
+    const companyIds = companyId
+      ? [companyId, ...allCompanyIds.filter(id => id !== companyId)]
+      : allCompanyIds;
+
+    const baseContext = { allowed_company_ids: companyIds };
+
+    // First confirm the order if not already confirmed
+    try {
+      await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'sale.order',
+            method: 'action_confirm',
+            args: [[orderId]],
+            kwargs: { context: baseContext },
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      console.log('[createInvoice] Order confirmed:', orderId);
+    } catch (confirmErr) {
+      console.warn('[createInvoice] Order confirm skipped (may already be confirmed):', confirmErr?.message);
+    }
+
+    // Create invoice via sale.advance.payment.inv wizard (works in Odoo 17/18/19)
+    // Step 1: Create the wizard
+    const wizardResp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'sale.advance.payment.inv',
+          method: 'create',
+          args: [{ advance_payment_method: 'delivered' }],
+          kwargs: { context: { ...baseContext, active_ids: [orderId], active_model: 'sale.order', active_id: orderId } },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (wizardResp.data.error) {
+      console.error('[createInvoice] Wizard create error:', wizardResp.data.error?.data?.message || wizardResp.data.error);
+      throw new Error(wizardResp.data.error.data?.message || 'Failed to create invoice wizard');
+    }
+
+    const wizardId = wizardResp.data.result;
+    console.log('[createInvoice] Wizard created:', wizardId);
+
+    // Step 2: Execute the wizard to create the invoice
+    const invoiceResp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'sale.advance.payment.inv',
+          method: 'create_invoices',
+          args: [[wizardId]],
+          kwargs: { context: { ...baseContext, active_ids: [orderId], active_model: 'sale.order', active_id: orderId } },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (invoiceResp.data.error) {
+      console.error('[createInvoice] Invoice create error:', invoiceResp.data.error?.data?.message || invoiceResp.data.error);
+      throw new Error(invoiceResp.data.error.data?.message || 'Failed to create invoice');
+    }
+
+    console.log('[createInvoice] Invoice result:', JSON.stringify(invoiceResp.data.result).substring(0, 300));
+
+    // The wizard returns an action; try to extract invoice ID from the sale order
+    let invoiceId = null;
+    try {
+      const soResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'sale.order',
+            method: 'read',
+            args: [[orderId], ['invoice_ids']],
+            kwargs: {},
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      const invoiceIds = soResp.data?.result?.[0]?.invoice_ids || [];
+      invoiceId = invoiceIds.length > 0 ? invoiceIds[invoiceIds.length - 1] : null;
+      console.log('[createInvoice] Invoice IDs on SO:', invoiceIds, 'using:', invoiceId);
+    } catch (readErr) {
+      console.warn('[createInvoice] Could not read invoice_ids:', readErr?.message);
+    }
+
+    return { result: invoiceId || true };
+  } catch (error) {
+    console.error('[createInvoice] Error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch Customer Invoices from Odoo
+export const fetchCustomerInvoicesOdoo = async ({ partnerId, offset = 0, limit = 50 } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    let domain = [['move_type', '=', 'out_invoice']];
+    if (partnerId) {
+      domain = [['move_type', '=', 'out_invoice'], ['partner_id', '=', partnerId]];
+    }
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.move',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'partner_id', 'invoice_date', 'amount_total', 'amount_residual', 'state', 'payment_state', 'currency_id'],
+            offset,
+            limit,
+            order: 'invoice_date desc',
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (customer invoices):', response.data.error);
+      return [];
+    }
+    return (response.data.result || []).map(inv => ({
+      id: inv.id,
+      name: inv.name || '',
+      partner_id: inv.partner_id ? inv.partner_id[0] : null,
+      partner_name: inv.partner_id ? inv.partner_id[1] : '',
+      invoice_date: inv.invoice_date || '',
+      amount_total: inv.amount_total || 0,
+      amount_residual: inv.amount_residual || 0,
+      state: inv.state || '',
+      payment_state: inv.payment_state || '',
+      currency_name: inv.currency_id ? inv.currency_id[1] : '',
+    }));
+  } catch (error) {
+    console.error('fetchCustomerInvoicesOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// ============================================================
+// Spare Management API Functions (mobile.repair module in Odoo)
+// ============================================================
+
+// Fetch spare part requests from Odoo
+export const fetchSparePartRequestsOdoo = async ({ offset = 0, limit = 20, searchText = '' } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    let domain = [];
+    if (searchText) {
+      domain = [['name', 'ilike', searchText]];
+    }
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'spare.part.request',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: [],
+            offset,
+            limit,
+            order: 'create_date desc',
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (spare.part.request):', response.data.error);
+      return [];
+    }
+    const records = response.data.result || [];
+    if (records.length > 0) {
+      console.log('spare.part.request fields:', Object.keys(records[0]));
+    }
+    return records.map(r => ({
+      id: r.id,
+      name: r.name || r.display_name || '',
+      job_card_id: r.job_card_id ? r.job_card_id[0] : null,
+      job_card_name: r.job_card_id ? r.job_card_id[1] : '',
+      partner_id: r.partner_id ? r.partner_id[0] : (r.customer_id ? r.customer_id[0] : null),
+      partner_name: r.partner_id ? r.partner_id[1] : (r.customer_id ? r.customer_id[1] : ''),
+      state: r.state || r.stage || '',
+      requested_by: r.requested_by ? r.requested_by[1] : (r.request_by ? r.request_by[1] : ''),
+      requested_to: r.requested_to ? r.requested_to[1] : (r.request_to ? r.request_to[1] : ''),
+      request_date: r.request_date || r.date || r.create_date || '',
+      notes: r.notes || r.note || '',
+      line_count: Array.isArray(r.spare_parts_line) ? r.spare_parts_line.length : (Array.isArray(r.line_ids) ? r.line_ids.length : (Array.isArray(r.spare_line_ids) ? r.spare_line_ids.length : 0)),
+    }));
+  } catch (error) {
+    console.error('fetchSparePartRequestsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch spare part request details from Odoo
+export const fetchSparePartRequestDetailsOdoo = async (requestId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    // Read all fields (empty array = all) to handle varying field names
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'spare.part.request',
+          method: 'read',
+          args: [[requestId]],
+          kwargs: { fields: [] },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (spare part request detail):', response.data.error);
+      return null;
+    }
+    const r = (response.data.result || [])[0];
+    if (!r) return null;
+
+    console.log('SpareRequestDetails all fields:', Object.keys(r));
+
+    // Helper to extract Many2one display name
+    const m2oName = (val) => {
+      if (!val || val === false) return '';
+      if (Array.isArray(val)) return val[1] || '';
+      return String(val);
+    };
+    const m2oId = (val) => {
+      if (!val || val === false) return null;
+      if (Array.isArray(val)) return val[0];
+      return val;
+    };
+
+    // Helper to find first truthy value from multiple field candidates
+    const findVal = (candidates) => {
+      for (const f of candidates) {
+        if (r[f] !== undefined && r[f] !== false) return r[f];
+      }
+      return null;
+    };
+
+    // Find line IDs from multiple possible field names
+    const lineIds = findVal(['spare_parts_line', 'line_ids', 'spare_line_ids', 'order_line']) || [];
+
+    // Fetch spare parts line details if line IDs exist
+    let spareLines = [];
+    if (lineIds.length > 0) {
+      try {
+        const lineResponse = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: 'spare.part.request.line',
+              method: 'read',
+              args: [lineIds],
+              kwargs: { fields: [] },
+            },
+          },
+          { headers }
+        );
+        if (!lineResponse.data.error) {
+          const lineResults = lineResponse.data.result || [];
+
+          // Helper for line qty fields
+          const getLineField = (l, candidates, def = 0) => {
+            for (const f of candidates) {
+              if (l[f] !== undefined && l[f] !== false) return l[f];
+            }
+            return def;
+          };
+
+          spareLines = lineResults.map(l => ({
+            id: l.id,
+            product_id: l.product_id ? l.product_id[0] : null,
+            product_name: l.product_id ? l.product_id[1] : '',
+            description: l.description || l.name || '',
+            requested_qty: getLineField(l, ['requested_qty', 'qty_requested', 'qty', 'product_qty', 'quantity', 'product_uom_qty'], 0),
+            uom: m2oName(l.uom_id || l.product_uom) || l.uom || 'Units',
+            issued_qty: getLineField(l, ['issued_qty', 'qty_issued', 'issue_qty'], 0),
+            returned_qty: getLineField(l, ['returned_qty', 'qty_returned', 'return_qty'], 0),
+          }));
+        }
+      } catch (lineErr) {
+        console.warn('Failed to fetch spare part lines:', lineErr?.message);
+      }
+    }
+
+    const requestedBy = findVal(['requested_by', 'requested_by_id', 'request_by', 'request_user_id', 'user_id']);
+    const requestedTo = findVal(['requested_to', 'requested_to_id', 'request_to', 'assigned_to']);
+    const approvedBy = findVal(['approved_by', 'approved_by_id', 'approve_by']);
+    const approvedDate = findVal(['approved_date', 'approve_date', 'date_approved']);
+
+    return {
+      id: r.id,
+      name: r.name || r.display_name || '',
+      job_card_id: m2oId(r.job_card_id),
+      job_card_name: m2oName(r.job_card_id),
+      partner_id: m2oId(r.partner_id || r.customer_id),
+      partner_name: m2oName(r.partner_id || r.customer_id),
+      state: r.state || r.stage || '',
+      requested_by: m2oName(requestedBy),
+      requested_by_id: m2oId(requestedBy),
+      requested_to: m2oName(requestedTo),
+      requested_to_id: m2oId(requestedTo),
+      request_date: r.request_date || r.date_request || r.create_date || '',
+      notes: r.notes || r.note || r.description || '',
+      approved_by: m2oName(approvedBy),
+      approved_date: approvedDate || '',
+      spare_lines: spareLines,
+    };
+  } catch (error) {
+    console.error('fetchSparePartRequestDetailsOdoo error:', error?.message || error);
+    return null;
+  }
+};
+
+// Create a spare part request in Odoo
+export const createSparePartRequestOdoo = async ({
+  jobCardId,
+  customerId,
+  requestedById,
+  requestedToId,
+  requestDate,
+  notes,
+  lines = [],
+}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Step 1: Discover actual field names via fields_get
+    const fieldsResponse = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'spare.part.request',
+          method: 'fields_get',
+          args: [],
+          kwargs: { attributes: ['string', 'type', 'relation'] },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    const fieldDefs = fieldsResponse.data?.result || {};
+    const fieldNames = Object.keys(fieldDefs);
+    console.log('spare.part.request all fields:', fieldNames);
+
+    // Find the One2many line field
+    const one2manyFields = fieldNames.filter(f => fieldDefs[f].type === 'one2many');
+    console.log('spare.part.request One2many fields:', one2manyFields);
+
+    // Find the line relation model name
+    const lineFieldName = one2manyFields.find(f =>
+      f.includes('line') || f.includes('spare') || f.includes('part')
+    ) || one2manyFields[0] || null;
+    const lineModel = lineFieldName ? fieldDefs[lineFieldName].relation : null;
+    console.log('Line field:', lineFieldName, '-> model:', lineModel);
+
+    // Step 2: Build vals with discovered field names
+    const vals = {};
+
+    // Map header fields - try known field names
+    const trySet = (possible, value) => {
+      for (const f of possible) {
+        if (fieldNames.includes(f)) { vals[f] = value; return; }
+      }
+    };
+
+    if (jobCardId) trySet(['job_card_id', 'jobcard_id', 'job_card'], jobCardId);
+    if (customerId) trySet(['partner_id', 'customer_id', 'client_id'], customerId);
+    if (requestedById) trySet(['requested_by', 'request_by', 'requester_id', 'user_id'], requestedById);
+    if (requestedToId) trySet(['requested_to', 'request_to', 'assigned_to', 'responsible_id'], requestedToId);
+    if (requestDate) trySet(['request_date', 'date', 'date_request', 'date_requested'], requestDate);
+    if (notes) trySet(['notes', 'note', 'description', 'internal_notes'], notes);
+
+    // Step 3: Build One2many lines if we found the field
+    if (lines.length > 0 && lineFieldName && lineModel) {
+      // Discover line model fields too
+      const lineFieldsResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: lineModel,
+            method: 'fields_get',
+            args: [],
+            kwargs: { attributes: ['string', 'type'] },
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      const lineFields = Object.keys(lineFieldsResp.data?.result || {});
+      console.log(`${lineModel} fields:`, lineFields);
+
+      const findLineField = (possible) => possible.find(f => lineFields.includes(f)) || null;
+      const prodField = findLineField(['product_id', 'spare_part_id', 'part_id']);
+      const descField = findLineField(['description', 'name', 'desc', 'note']);
+      const qtyField = findLineField(['requested_qty', 'quantity', 'qty', 'product_qty', 'req_qty']);
+
+      vals[lineFieldName] = lines.map(l => {
+        const lineVals = {};
+        if (prodField && l.product_id) lineVals[prodField] = l.product_id;
+        if (descField && l.description) lineVals[descField] = l.description;
+        if (qtyField) lineVals[qtyField] = l.requested_qty || 1;
+        return [0, 0, lineVals];
+      });
+    }
+
+    console.log('Creating spare.part.request with vals:', JSON.stringify(vals));
+
+    // Step 4: Create the record
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'spare.part.request',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to create spare part request');
+    }
+    const newId = response.data.result;
+
+    // Step 5: Transition from draft to requested
+    if (newId) {
+      const submitMethods = ['action_request', 'action_submit', 'action_confirm', 'button_request', 'button_submit'];
+      for (const method of submitMethods) {
+        try {
+          const submitResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+              jsonrpc: '2.0',
+              method: 'call',
+              params: {
+                model: 'spare.part.request',
+                method: method,
+                args: [[newId]],
+                kwargs: {},
+              },
+            },
+            { headers, withCredentials: true, timeout: 10000 }
+          );
+          if (!submitResp.data.error) {
+            console.log(`State transition success using method: ${method}`);
+            break;
+          }
+        } catch (e) {
+          console.warn(`Method ${method} failed:`, e?.message);
+        }
+      }
+    }
+
+    return newId;
+  } catch (error) {
+    console.error('createSparePartRequestOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch spare part products from Odoo
+export const fetchSparePartProductsOdoo = async ({ offset = 0, limit = 20, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    let domain = [];
+    if (searchText) {
+      domain.push(['name', 'ilike', searchText]);
+    }
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.product',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'default_code', 'list_price', 'qty_available'],
+            offset,
+            limit,
+            order: 'name asc',
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (spare part products):', response.data.error);
+      return [];
+    }
+    return (response.data.result || []).map(p => ({
+      id: p.id,
+      name: p.name || p.display_name || '',
+      default_code: p.default_code || '',
+      list_price: p.list_price || 0,
+      qty_available: p.qty_available || 0,
+    }));
+  } catch (error) {
+    console.error('fetchSparePartProductsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch products by type (service or spare parts) for repair module
+export const fetchRepairProductsOdoo = async ({ type = 'service', offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = [['sale_ok', '=', true]];
+    if (type === 'service') {
+      domain.push(['type', '=', 'service']);
+    } else {
+      domain.push(['type', 'in', ['product', 'consu']]);
+    }
+    if (searchText) {
+      domain.push('|', ['name', 'ilike', searchText], ['default_code', 'ilike', searchText]);
+    }
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'product.product', method: 'search_read', args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'default_code', 'list_price', 'standard_price', 'qty_available', 'virtual_available', 'product_template_variant_value_ids'],
+            offset, limit, order: 'default_code asc, name asc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) return [];
+    return (response.data.result || []).map(p => ({
+      id: p.id,
+      name: p.name || '',
+      default_code: p.default_code || '',
+      list_price: p.list_price || 0,
+      cost: p.standard_price || 0,
+      qty_on_hand: p.qty_available || 0,
+      forecasted: p.virtual_available || 0,
+    }));
+  } catch (error) {
+    console.error('fetchRepairProductsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch job cards from Odoo
+export const fetchJobCardsOdoo = async ({ offset = 0, limit = 20, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    let domain = [];
+    if (searchText) {
+      domain = [['name', 'ilike', searchText]];
+    }
+
+    // Try multiple possible model names
+    const modelNames = ['mobile.repair.job.card', 'job.card', 'repair.order'];
+    let lastError = null;
+
+    for (const modelName of modelNames) {
+      try {
+        const response = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: modelName,
+              method: 'search_read',
+              args: [domain],
+              kwargs: {
+                fields: [],
+                offset,
+                limit,
+                order: 'create_date desc',
+              },
+            },
+          },
+          { headers }
+        );
+        if (response.data.error) {
+          console.warn(`Job card model "${modelName}" failed:`, response.data.error?.data?.message || response.data.error);
+          lastError = response.data.error;
+          continue;
+        }
+        const records = response.data.result || [];
+        console.log(`Job card model "${modelName}" found ${records.length} records. Fields:`, records.length > 0 ? Object.keys(records[0]) : 'none');
+        return records.map(jc => ({
+          id: jc.id,
+          name: jc.name || jc.display_name || '',
+          partner_id: jc.partner_id ? jc.partner_id[0] : (jc.customer_id ? jc.customer_id[0] : null),
+          partner_name: jc.partner_id ? jc.partner_id[1] : (jc.customer_id ? jc.customer_id[1] : ''),
+          stage: jc.stage_id ? jc.stage_id[1] : (jc.state || ''),
+          create_date: jc.create_date || '',
+        }));
+      } catch (innerErr) {
+        console.warn(`Job card model "${modelName}" threw:`, innerErr?.message);
+        lastError = innerErr;
+        continue;
+      }
+    }
+    console.error('fetchJobCardsOdoo: No valid model found. Last error:', lastError);
+    return [];
+  } catch (error) {
+    console.error('fetchJobCardsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Approve a spare part request in Odoo
+export const approveSparePartRequestOdoo = async (requestId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Try multiple action method names
+    const methodsToTry = ['action_approve', 'action_approved', 'button_approve', 'action_confirm', 'button_confirm'];
+    for (const method of methodsToTry) {
+      try {
+        const r = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'spare.part.request', method, args: [[requestId]], kwargs: {} },
+        }, { headers, withCredentials: true, timeout: 15000 });
+        if (!r.data.error) {
+          console.log(`Approve success via method: ${method}`);
+          return r.data.result;
+        }
+      } catch (e) {
+        console.warn(`Approve method ${method} failed`);
+      }
+    }
+
+    // Fallback: direct state write to 'approved'
+    console.log('Trying direct state write to approved');
+    const r = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'spare.part.request', method: 'write', args: [[requestId], { state: 'approved' }], kwargs: {} },
+    }, { headers, withCredentials: true, timeout: 15000 });
+    if (!r.data.error) {
+      console.log('Direct state write to approved success');
+      return r.data.result;
+    }
+
+    throw new Error('Failed to approve request - all methods failed');
+  } catch (error) {
+    console.error('approveSparePartRequestOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch approved spare part requests for issue linking
+export const fetchApprovedSpareRequestsOdoo = async ({ limit = 50 } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    // Fetch all requests (not filtered by state) since state values vary across Odoo setups
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'spare.part.request',
+          method: 'search_read',
+          args: [[]],
+          kwargs: { fields: [], offset: 0, limit, order: 'create_date desc' },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('fetchApprovedSpareRequestsOdoo error:', response.data.error);
+      return [];
+    }
+    const records = response.data.result || [];
+    if (records.length > 0) {
+      console.log('Spare request states found:', [...new Set(records.map(r => r.state))]);
+      console.log('Spare request all field keys:', Object.keys(records[0]));
+    }
+
+    // Helper to extract Many2one user field { id, name } from multiple possible field names
+    const extractUser = (r, candidates) => {
+      for (const f of candidates) {
+        if (r[f] && r[f] !== false) {
+          if (Array.isArray(r[f])) return { id: r[f][0], name: r[f][1] };
+          if (typeof r[f] === 'number') return { id: r[f], name: '' };
+        }
+      }
+      return null;
+    };
+
+    return records.map(r => {
+      const state = r.state || r.stage || 'draft';
+      const name = r.name || r.display_name || '';
+
+      const requestedBy = extractUser(r, ['requested_by', 'requested_by_id', 'request_by', 'request_user_id', 'user_id']);
+      const requestedTo = extractUser(r, ['requested_to', 'requested_to_id', 'request_to', 'request_to_id', 'assigned_to']);
+
+      return {
+        id: r.id,
+        name,
+        label: `${name} [${state.toUpperCase()}]${r.partner_id ? ' - ' + r.partner_id[1] : (r.customer_id ? ' - ' + r.customer_id[1] : '')}`,
+        state,
+        job_card_id: r.job_card_id ? r.job_card_id[0] : null,
+        job_card_name: r.job_card_id ? r.job_card_id[1] : '',
+        partner_name: r.partner_id ? r.partner_id[1] : (r.customer_id ? r.customer_id[1] : ''),
+        line_ids: r.spare_parts_line || r.line_ids || r.spare_line_ids || [],
+        requested_by: requestedBy,
+        requested_to: requestedTo,
+      };
+    });
+  } catch (error) {
+    console.error('fetchApprovedSpareRequestsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Fetch spare part request lines by IDs (with all fields for issue/return tracking)
+export const fetchSpareRequestLinesOdoo = async (lineIds) => {
+  try {
+    if (!lineIds || lineIds.length === 0) return [];
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Step 1: Discover actual field names via fields_get
+    const fieldsResp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'spare.part.request.line', method: 'fields_get', args: [], kwargs: { attributes: ['string', 'type'] } },
+      },
+      { headers }
+    );
+    const allFieldDefs = fieldsResp.data?.result || {};
+    const allFieldNames = Object.keys(allFieldDefs);
+
+    // Find the actual field names by checking candidates
+    const findField = (candidates) => candidates.find(f => allFieldNames.includes(f));
+
+    const reqQtyField = findField(['requested_qty', 'qty_requested', 'qty', 'product_qty', 'request_qty', 'quantity', 'product_uom_qty']);
+    const issQtyField = findField(['issued_qty', 'qty_issued', 'issue_qty', 'issued_quantity', 'quantity_issued']);
+    const retQtyField = findField(['returned_qty', 'qty_returned', 'return_qty', 'returned_quantity', 'quantity_returned']);
+
+    // Also try to find by field label/string if candidates don't match
+    const findByLabel = (labels) => {
+      for (const [fname, fdef] of Object.entries(allFieldDefs)) {
+        const str = (fdef.string || '').toLowerCase();
+        for (const lbl of labels) {
+          if (str === lbl.toLowerCase()) return fname;
+        }
+      }
+      return null;
+    };
+
+    const actualReqField = reqQtyField || findByLabel(['Requested Qty', 'Requested Quantity', 'Quantity Requested', 'Qty']);
+    const actualIssField = issQtyField || findByLabel(['Issued Qty', 'Issued Quantity', 'Quantity Issued']);
+    const actualRetField = retQtyField || findByLabel(['Returned Qty', 'Returned Quantity', 'Quantity Returned']);
+
+    console.log('spare.part.request.line field discovery:', {
+      requestedQty: actualReqField || 'NOT FOUND',
+      issuedQty: actualIssField || 'NOT FOUND',
+      returnedQty: actualRetField || 'NOT FOUND',
+      allQtyRelatedFields: allFieldNames.filter(f =>
+        f.includes('qty') || f.includes('quantity') || f.includes('issue') || f.includes('return') || f.includes('request')
+      ),
+    });
+
+    // Step 2: Read the line records
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'spare.part.request.line',
+          method: 'read',
+          args: [lineIds],
+          kwargs: { fields: [] },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) return [];
+    const results = response.data.result || [];
+
+    return results.map(l => {
+      const reqQty = actualReqField ? (l[actualReqField] || 0) : 1;
+      const issQty = actualIssField ? (l[actualIssField] || 0) : 0;
+      const retQty = actualRetField ? (l[actualRetField] || 0) : 0;
+      console.log(`Line ${l.id} [${l.product_id ? l.product_id[1] : ''}]: requested=${reqQty} (${actualReqField}=${l[actualReqField]}), issued=${issQty} (${actualIssField}=${l[actualIssField]}), returned=${retQty} (${actualRetField}=${l[actualRetField]})`);
+      return {
+        id: l.id,
+        product_id: l.product_id ? l.product_id[0] : null,
+        product_name: l.product_id ? l.product_id[1] : '',
+        description: l.description || '',
+        requested_qty: reqQty,
+        issued_qty: issQty,
+        returned_qty: retQty,
+      };
+    });
+  } catch (error) {
+    console.error('fetchSpareRequestLinesOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Update issued_qty on a spare part request line
+export const updateSpareLineIssuedQtyOdoo = async (lineId, issuedQty) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Discover actual field names on the line model
+    const fieldsResp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'spare.part.request.line', method: 'fields_get', args: [], kwargs: { attributes: ['string', 'type'] } },
+      },
+      { headers, withCredentials: true, timeout: 10000 }
+    );
+    const fieldNames = Object.keys(fieldsResp.data?.result || {});
+    console.log('spare.part.request.line all fields:', fieldNames);
+
+    // Find the issued_qty field name
+    const qtyField = ['issued_qty', 'qty_issued', 'issue_qty'].find(f => fieldNames.includes(f));
+    if (!qtyField) {
+      throw new Error('Cannot find issued quantity field on spare.part.request.line. Available fields: ' + fieldNames.filter(f => f.includes('qty') || f.includes('issue')).join(', '));
+    }
+
+    // Read current value before writing
+    const readResp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'spare.part.request.line', method: 'read', args: [[lineId]], kwargs: { fields: [qtyField] } },
+      },
+      { headers, withCredentials: true, timeout: 10000 }
+    );
+    const currentVal = readResp.data?.result?.[0]?.[qtyField];
+    console.log(`updateSpareLineIssuedQty: lineId=${lineId}, field=${qtyField}, currentValue=${currentVal}, writingValue=${issuedQty}`);
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'spare.part.request.line',
+          method: 'write',
+          args: [[lineId], { [qtyField]: issuedQty }],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 10000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to update issued qty');
+    }
+
+    // Verify the value was written correctly
+    const verifyResp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'spare.part.request.line', method: 'read', args: [[lineId]], kwargs: { fields: [qtyField] } },
+      },
+      { headers, withCredentials: true, timeout: 10000 }
+    );
+    const afterVal = verifyResp.data?.result?.[0]?.[qtyField];
+    console.log(`updateSpareLineIssuedQty VERIFY: lineId=${lineId}, expected=${issuedQty}, actual=${afterVal}`);
+
+    return response.data.result;
+  } catch (error) {
+    console.error('updateSpareLineIssuedQtyOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Update returned_qty on a spare part request line
+export const updateSpareLineReturnedQtyOdoo = async (lineId, returnedQty) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    const fieldsResp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'spare.part.request.line', method: 'fields_get', args: [], kwargs: { attributes: ['string', 'type'] } },
+      },
+      { headers, withCredentials: true, timeout: 10000 }
+    );
+    const fieldNames = Object.keys(fieldsResp.data?.result || {});
+
+    const qtyField = ['returned_qty', 'qty_returned', 'return_qty'].find(f => fieldNames.includes(f));
+    if (!qtyField) {
+      throw new Error('Cannot find returned quantity field on spare.part.request.line. Available fields: ' + fieldNames.filter(f => f.includes('qty') || f.includes('return')).join(', '));
+    }
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'spare.part.request.line',
+          method: 'write',
+          args: [[lineId], { [qtyField]: returnedQty }],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 10000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to update returned qty');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('updateSpareLineReturnedQtyOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Transition spare.part.request state (e.g., to 'issued' or 'returned')
+// extraFields: { userId, toUserId, date, reason } - optional metadata to write alongside state
+export const transitionSpareRequestStateOdoo = async (requestId, targetState, extraFields = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // First, discover actual field names on spare.part.request
+    let fieldNames = [];
+    try {
+      const fieldsResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'spare.part.request', method: 'fields_get', args: [], kwargs: { attributes: ['string', 'type'] } },
+      }, { headers, withCredentials: true, timeout: 10000 });
+      fieldNames = Object.keys(fieldsResp.data?.result || {});
+      console.log('spare.part.request fields for state transition:', fieldNames.filter(f =>
+        f.includes('issue') || f.includes('return') || f.includes('date') || f.includes('by') || f.includes('to_') || f.includes('user')
+      ));
+    } catch (e) {
+      console.warn('Failed to fetch spare.part.request fields:', e?.message);
+    }
+
+    // Build metadata values to write alongside state
+    const metaVals = {};
+    const findField = (candidates) => candidates.find(f => fieldNames.includes(f));
+
+    if (targetState === 'issued') {
+      // Issued By field
+      if (extraFields.userId) {
+        const byField = findField(['issued_by', 'issued_by_id', 'issue_by', 'issue_user_id']);
+        if (byField) metaVals[byField] = extraFields.userId;
+      }
+      // Issued To field
+      if (extraFields.toUserId) {
+        const toField = findField(['issued_to', 'issued_to_id', 'issue_to', 'issue_to_id']);
+        if (toField) metaVals[toField] = extraFields.toUserId;
+      }
+      // Issue Date field
+      const dateField = findField(['issue_date', 'issued_date', 'date_issue', 'date_issued']);
+      if (dateField) {
+        metaVals[dateField] = extraFields.date || new Date().toISOString().split('T')[0];
+      }
+    } else if (targetState === 'returned') {
+      // Returned By field
+      if (extraFields.userId) {
+        const byField = findField(['returned_by', 'returned_by_id', 'return_by', 'return_user_id']);
+        if (byField) metaVals[byField] = extraFields.userId;
+      }
+      // Returned To field
+      if (extraFields.toUserId) {
+        const toField = findField(['returned_to', 'returned_to_id', 'return_to', 'return_to_id']);
+        if (toField) metaVals[toField] = extraFields.toUserId;
+      }
+      // Return Date field
+      const dateField = findField(['return_date', 'returned_date', 'date_return', 'date_returned']);
+      if (dateField) {
+        metaVals[dateField] = extraFields.date || new Date().toISOString().split('T')[0];
+      }
+      // Return Reason field
+      if (extraFields.reason) {
+        const reasonField = findField(['return_reason', 'reason', 'returned_reason', 'note', 'notes', 'return_notes', 'description', 'return_description']);
+        if (reasonField) metaVals[reasonField] = extraFields.reason;
+      }
+    }
+
+    console.log('Metadata fields to write:', metaVals);
+
+    // Try common action methods for the target state
+    const methodsToTry = targetState === 'issued'
+      ? ['action_issue', 'action_issued', 'button_issue', 'action_done', 'action_confirm']
+      : ['action_return', 'action_returned', 'button_return', 'action_done'];
+
+    for (const method of methodsToTry) {
+      try {
+        const r = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'spare.part.request', method, args: [[requestId]], kwargs: {} },
+        }, { headers, withCredentials: true, timeout: 10000 });
+        if (!r.data.error) {
+          console.log(`Request state transition success: ${method}`);
+          // Write metadata fields after successful action
+          if (Object.keys(metaVals).length > 0) {
+            await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+              jsonrpc: '2.0', method: 'call',
+              params: { model: 'spare.part.request', method: 'write', args: [[requestId], metaVals], kwargs: {} },
+            }, { headers, withCredentials: true, timeout: 10000 });
+            console.log('Metadata fields written successfully');
+          }
+          return true;
+        }
+      } catch (e) {
+        console.warn(`Request method ${method} failed`);
+      }
+    }
+
+    // If action methods fail, try direct write on state field + metadata
+    try {
+      const writeVals = { state: targetState, ...metaVals };
+      console.log(`Trying direct state write with metadata:`, writeVals);
+      const r = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'spare.part.request',
+          method: 'write',
+          args: [[requestId], writeVals],
+          kwargs: {},
+        },
+      }, { headers, withCredentials: true, timeout: 10000 });
+      if (!r.data.error) {
+        console.log(`Direct state write with metadata success: ${targetState}`);
+        return true;
+      }
+    } catch (e) {
+      console.warn('Direct state write failed:', e?.message);
+    }
+
+    console.warn('All state transition methods failed for request', requestId);
+    return false;
+  } catch (error) {
+    console.error('transitionSpareRequestStateOdoo error:', error?.message || error);
+    return false;
+  }
+};
+
+// Fetch issued spare parts (for return linking)
+export const fetchIssuedSparePartsOdoo = async ({ limit = 50 } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const possibleModels = ['spare.part.issue', 'spare.issue', 'spare.part.issued'];
+
+    for (const model of possibleModels) {
+      try {
+        const response = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model,
+              method: 'search_read',
+              args: [[]],
+              kwargs: { fields: [], offset: 0, limit, order: 'create_date desc' },
+            },
+          },
+          { headers }
+        );
+        if (!response.data.error) {
+          const records = response.data.result || [];
+          console.log(`fetchIssuedSparePartsOdoo: found ${records.length} records using model ${model}`);
+          if (records.length > 0) {
+            console.log('Issue record fields:', Object.keys(records[0]));
+          }
+          return records.map(r => ({
+            id: r.id,
+            name: r.name || r.display_name || '',
+            job_card_id: r.job_card_id ? r.job_card_id[0] : null,
+            job_card_name: r.job_card_id ? r.job_card_id[1] : '',
+            product_id: r.product_id ? r.product_id[0] : (r.spare_part_id ? r.spare_part_id[0] : null),
+            product_name: r.product_id ? r.product_id[1] : (r.spare_part_id ? r.spare_part_id[1] : ''),
+            quantity: r.quantity || r.qty || r.issued_qty || 0,
+          }));
+        }
+      } catch (e) {
+        console.warn(`fetchIssuedSparePartsOdoo: model ${model} failed`);
+      }
+    }
+    console.warn('fetchIssuedSparePartsOdoo: no issue model found');
+    return [];
+  } catch (error) {
+    console.error('fetchIssuedSparePartsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Create a spare part issue in Odoo
+export const createSparePartIssueOdoo = async ({ jobCardId, productId, quantity, issuedById, issueDate, notes, requestId }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Try multiple possible model names
+    const possibleModels = ['spare.part.issue', 'spare.issue', 'spare.part.issued', 'stock.picking'];
+    let modelName = null;
+    let fieldNames = [];
+
+    for (const model of possibleModels) {
+      try {
+        console.log(`Trying model: ${model}`);
+        const fieldsResp = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: { model, method: 'fields_get', args: [], kwargs: { attributes: ['string', 'type'] } },
+          },
+          { headers, withCredentials: true, timeout: 10000 }
+        );
+        if (!fieldsResp.data?.error && fieldsResp.data?.result) {
+          fieldNames = Object.keys(fieldsResp.data.result);
+          if (fieldNames.length > 0) {
+            modelName = model;
+            console.log(`Found model: ${model}, fields:`, fieldNames);
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn(`Model ${model} not found, trying next...`);
+      }
+    }
+
+    if (!modelName) {
+      throw new Error('Spare part issue model not found in Odoo. Tried: ' + possibleModels.join(', '));
+    }
+
+    const tryField = (possible) => possible.find(f => fieldNames.includes(f)) || null;
+    const vals = {};
+
+    const jcField = tryField(['job_card_id', 'jobcard_id', 'job_card']);
+    const prodField = tryField(['product_id', 'spare_part_id', 'part_id']);
+    const qtyField = tryField(['quantity', 'qty', 'issued_qty', 'product_qty']);
+    const issuedByField = tryField(['issued_by', 'issue_by', 'user_id', 'responsible_id']);
+    const dateField = tryField(['issue_date', 'date', 'date_issue']);
+    const notesField = tryField(['notes', 'note', 'reason', 'description']);
+    const reqField = tryField(['request_id', 'spare_request_id', 'spare_part_request_id']);
+
+    if (jcField && jobCardId) vals[jcField] = jobCardId;
+    if (prodField && productId) vals[prodField] = productId;
+    if (qtyField && quantity) vals[qtyField] = quantity;
+    if (issuedByField && issuedById) vals[issuedByField] = issuedById;
+    if (dateField && issueDate) vals[dateField] = issueDate;
+    if (notesField && notes) vals[notesField] = notes;
+    if (reqField && requestId) vals[reqField] = requestId;
+
+    console.log(`Creating ${modelName} with vals:`, JSON.stringify(vals));
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: modelName, method: 'create', args: [vals], kwargs: {} },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to create spare part issue');
+    }
+    const newId = response.data.result;
+
+    // Try to confirm/done the issue
+    if (newId) {
+      for (const method of ['action_done', 'action_issue', 'action_confirm', 'button_done']) {
+        try {
+          const r = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: modelName, method, args: [[newId]], kwargs: {} },
+          }, { headers, withCredentials: true, timeout: 10000 });
+          if (!r.data.error) { console.log(`Issue state transition success: ${method}`); break; }
+        } catch (e) { console.warn(`Issue method ${method} failed`); }
+      }
+    }
+    return newId;
+  } catch (error) {
+    console.error('createSparePartIssueOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Create a spare part return in Odoo
+export const createSparePartReturnOdoo = async ({ jobCardId, productId, quantity, returnedById, returnDate, reason, issueId }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Try multiple possible model names
+    const possibleModels = ['spare.part.return', 'spare.return', 'spare.part.returned'];
+    let modelName = null;
+    let fieldNames = [];
+
+    for (const model of possibleModels) {
+      try {
+        console.log(`Trying return model: ${model}`);
+        const fieldsResp = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: { model, method: 'fields_get', args: [], kwargs: { attributes: ['string', 'type'] } },
+          },
+          { headers, withCredentials: true, timeout: 10000 }
+        );
+        if (!fieldsResp.data?.error && fieldsResp.data?.result) {
+          fieldNames = Object.keys(fieldsResp.data.result);
+          if (fieldNames.length > 0) {
+            modelName = model;
+            console.log(`Found return model: ${model}, fields:`, fieldNames);
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn(`Model ${model} not found, trying next...`);
+      }
+    }
+
+    if (!modelName) {
+      throw new Error('Spare part return model not found in Odoo. Tried: ' + possibleModels.join(', '));
+    }
+
+    const tryField = (possible) => possible.find(f => fieldNames.includes(f)) || null;
+    const vals = {};
+
+    const jcField = tryField(['job_card_id', 'jobcard_id', 'job_card']);
+    const prodField = tryField(['product_id', 'spare_part_id', 'part_id']);
+    const qtyField = tryField(['quantity', 'qty', 'returned_qty', 'product_qty']);
+    const retByField = tryField(['returned_by', 'return_by', 'user_id', 'responsible_id']);
+    const dateField = tryField(['return_date', 'date', 'date_return']);
+    const reasonField = tryField(['reason', 'notes', 'note', 'description']);
+    const issField = tryField(['issue_id', 'spare_issue_id', 'spare_part_issue_id']);
+
+    if (jcField && jobCardId) vals[jcField] = jobCardId;
+    if (prodField && productId) vals[prodField] = productId;
+    if (qtyField && quantity) vals[qtyField] = quantity;
+    if (retByField && returnedById) vals[retByField] = returnedById;
+    if (dateField && returnDate) vals[dateField] = returnDate;
+    if (reasonField && reason) vals[reasonField] = reason;
+    if (issField && issueId) vals[issField] = issueId;
+
+    console.log(`Creating ${modelName} with vals:`, JSON.stringify(vals));
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: modelName, method: 'create', args: [vals], kwargs: {} },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to create spare part return');
+    }
+    const newId = response.data.result;
+
+    // Try to confirm the return
+    if (newId) {
+      for (const method of ['action_done', 'action_return', 'action_confirm', 'button_done']) {
+        try {
+          const r = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: modelName, method, args: [[newId]], kwargs: {} },
+          }, { headers, withCredentials: true, timeout: 10000 });
+          if (!r.data.error) { console.log(`Return state transition success: ${method}`); break; }
+        } catch (e) { console.warn(`Return method ${method} failed`); }
+      }
+    }
+    return newId;
+  } catch (error) {
+    console.error('createSparePartReturnOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// ===================== AUDIT DETAIL FUNCTIONS =====================
+
+// Fetch full audit record details with transaction lines
+export const fetchAuditingDetailsOdoo = async (recordId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'audit.transaction',
+          method: 'search_read',
+          args: [[['id', '=', Number(recordId)]]],
+          kwargs: {
+            fields: [
+              'id', 'transaction_ref', 'transaction_date', 'audit_account_type',
+              'partner_id', 'amount_untaxed', 'amount_tax', 'has_tax', 'amount_total',
+              'salesperson_id', 'created_by', 'journal_id', 'company_id', 'currency_id',
+              'customer_signature', 'customer_signed_by', 'customer_signed_date',
+              'cashier_signature', 'cashier_signed_by', 'cashier_signed_date',
+              'state', 'audit_line_ids', 'payment_method',
+              'is_courier', 'courier_proof', 'courier_proof_filename',
+            ],
+            limit: 1,
+          },
+        },
+      },
+      { headers, timeout: reqTimeout }
+    );
+
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    const rec = (response.data.result || [])[0];
+    if (!rec) return null;
+
+    // Fetch audit line details if any
+    let lines = [];
+    if (rec.audit_line_ids && rec.audit_line_ids.length > 0) {
+      const linesResp = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'audit.transaction.line',
+            method: 'search_read',
+            args: [[['id', 'in', rec.audit_line_ids]]],
+            kwargs: {
+              fields: ['id', 'product_id', 'name', 'quantity', 'price_unit', 'tax_amount', 'subtotal', 'account_id'],
+            },
+          },
+        },
+        { headers, timeout: reqTimeout }
+      );
+      if (!linesResp.data.error && linesResp.data.result) {
+        lines = linesResp.data.result.map(l => ({
+          id: l.id,
+          product_name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+          description: l.name || '',
+          quantity: l.quantity || 0,
+          price_unit: l.price_unit || 0,
+          tax_amount: l.tax_amount || 0,
+          subtotal: l.subtotal || 0,
+          account_name: Array.isArray(l.account_id) ? l.account_id[1] : '',
+        }));
+      }
+    }
+
+    return {
+      id: rec.id,
+      transaction_ref: rec.transaction_ref || '',
+      transaction_date: rec.transaction_date || '',
+      audit_account_type: rec.audit_account_type || '',
+      partner_name: Array.isArray(rec.partner_id) ? rec.partner_id[1] : '',
+      amount_untaxed: rec.amount_untaxed || 0,
+      amount_tax: rec.amount_tax || 0,
+      has_tax: rec.has_tax || false,
+      amount_total: rec.amount_total || 0,
+      salesperson_name: Array.isArray(rec.salesperson_id) ? rec.salesperson_id[1] : '',
+      created_by_name: Array.isArray(rec.created_by) ? rec.created_by[1] : '',
+      journal_name: Array.isArray(rec.journal_id) ? rec.journal_id[1] : '',
+      company_name: Array.isArray(rec.company_id) ? rec.company_id[1] : '',
+      currency_name: Array.isArray(rec.currency_id) ? rec.currency_id[1] : '',
+      customer_signature: rec.customer_signature ? `data:image/png;base64,${rec.customer_signature}` : null,
+      customer_signed_by: rec.customer_signed_by || '',
+      customer_signed_date: rec.customer_signed_date || '',
+      cashier_signature: rec.cashier_signature ? `data:image/png;base64,${rec.cashier_signature}` : null,
+      cashier_signed_by: rec.cashier_signed_by || '',
+      cashier_signed_date: rec.cashier_signed_date || '',
+      state: rec.state || 'draft',
+      payment_method: rec.payment_method || '',
+      is_courier: rec.is_courier || false,
+      courier_proof: rec.courier_proof || null,
+      courier_proof_filename: rec.courier_proof_filename || '',
+      lines,
+    };
+  } catch (error) {
+    console.error('fetchAuditingDetailsOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Update audit transaction state (audited/rejected)
+export const updateAuditStateOdoo = async (recordId, newState) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'audit.transaction',
+          method: 'write',
+          args: [[Number(recordId)], { state: newState }],
+          kwargs: {},
+        },
+      },
+      { headers, timeout: reqTimeout }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('updateAuditStateOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Upload audit attachments as ir.attachment records
+export const uploadAuditAttachmentsOdoo = async (auditRecordId, imageDataUris) => {
+  console.log(`[uploadAuditAttachments] START - auditId=${auditRecordId}, count=${imageDataUris?.length}`);
+  if (!imageDataUris || imageDataUris.length === 0) return [];
+
+  let headers = await getOdooAuthHeaders();
+
+  const doCreate = async (hdrs, vals) => {
+    return axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'ir.attachment',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers: hdrs, timeout: 120000 }
+    );
+  };
+
+  const results = [];
+  const errors = [];
+
+  for (let i = 0; i < imageDataUris.length; i++) {
+    try {
+      const uri = imageDataUris[i];
+      console.log(`[uploadAuditAttachments] Processing item ${i + 1}, uri=${typeof uri === 'string' ? uri.substring(0, 80) : 'N/A'}`);
+
+      let base64Data = '';
+      let mimeType = 'image/jpeg';
+      let ext = 'jpg';
+
+      if (typeof uri === 'string' && uri.startsWith('data:')) {
+        const commaIdx = uri.indexOf(',');
+        if (commaIdx < 0) {
+          errors.push(`Item ${i + 1}: Invalid data URI format`);
+          continue;
+        }
+        base64Data = uri.substring(commaIdx + 1);
+        const headerPart = uri.substring(0, commaIdx);
+        const mimeMatch = headerPart.match(/data:([^;]+)/);
+        if (mimeMatch) {
+          mimeType = mimeMatch[1];
+          if (mimeType.includes('png')) ext = 'png';
+          else if (mimeType.includes('pdf')) ext = 'pdf';
+          else if (mimeType.includes('jpeg') || mimeType.includes('jpg')) ext = 'jpg';
+        }
+      } else if (typeof uri === 'string' && uri.length > 0) {
+        console.log(`[uploadAuditAttachments] Item ${i + 1}: Reading file URI...`);
+
+        let readUri = uri;
+        if (uri.startsWith('content://')) {
+          try {
+            const fileName = uri.split('/').pop() || `attachment_${i}`;
+            const cacheUri = `${FileSystem.cacheDirectory}audit_upload_${Date.now()}_${fileName}`;
+            await FileSystem.copyAsync({ from: uri, to: cacheUri });
+            readUri = cacheUri;
+            console.log(`[uploadAuditAttachments] Item ${i + 1}: Copied to cache: ${cacheUri}`);
+          } catch (copyErr) {
+            console.warn(`[uploadAuditAttachments] Item ${i + 1}: Copy failed, trying direct read:`, copyErr?.message);
+          }
+        }
+
+        try {
+          base64Data = await FileSystem.readAsStringAsync(readUri, { encoding: FileSystem.EncodingType.Base64 });
+          console.log(`[uploadAuditAttachments] Item ${i + 1}: Read ${base64Data.length} base64 chars`);
+        } catch (readErr) {
+          errors.push(`Item ${i + 1}: Cannot read file - ${readErr?.message}`);
+          continue;
+        }
+
+        const lower = uri.toLowerCase();
+        if (lower.endsWith('.png')) { mimeType = 'image/png'; ext = 'png'; }
+        else if (lower.endsWith('.pdf')) { mimeType = 'application/pdf'; ext = 'pdf'; }
+        else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) { mimeType = 'image/jpeg'; ext = 'jpg'; }
+        else { mimeType = 'application/octet-stream'; ext = 'bin'; }
+      } else {
+        errors.push(`Item ${i + 1}: Empty or invalid URI`);
+        continue;
+      }
+
+      if (!base64Data || base64Data.length < 50) {
+        errors.push(`Item ${i + 1}: File too small or empty`);
+        continue;
+      }
+
+      const fileName = `audit_voucher_${auditRecordId}_${i + 1}.${ext}`;
+      const vals = {
+        name: fileName,
+        type: 'binary',
+        datas: base64Data,
+        res_model: 'audit.transaction',
+        res_id: Number(auditRecordId),
+        mimetype: mimeType,
+      };
+
+      console.log(`[uploadAuditAttachments] Item ${i + 1}: Uploading ${fileName} (${(base64Data.length / 1024).toFixed(0)}KB base64, mime=${mimeType})...`);
+
+      let response = await doCreate(headers, vals);
+
+      if (!response.data?.jsonrpc || response.data?.error?.data?.name === 'odoo.http.SessionExpiredException') {
+        console.log(`[uploadAuditAttachments] Session expired, re-authenticating...`);
+        const authResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/session/authenticate`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: { db: DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
+          },
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+        const setCookie = authResp.headers['set-cookie'] || authResp.headers['Set-Cookie'];
+        let cookieStr = '';
+        if (setCookie) {
+          cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+        }
+        const sid = authResp.data?.result?.session_id;
+        if (!cookieStr && sid) cookieStr = `session_id=${sid}`;
+        if (cookieStr) await AsyncStorage.setItem('odoo_cookie', cookieStr);
+        headers = { 'Content-Type': 'application/json', Cookie: cookieStr };
+        response = await doCreate(headers, vals);
+      }
+
+      if (response.data?.error) {
+        const errMsg = response.data.error.data?.message || response.data.error.message || 'Odoo error';
+        errors.push(`Item ${i + 1}: ${errMsg}`);
+        console.error(`[uploadAuditAttachments] Item ${i + 1}: Odoo error: ${errMsg}`);
+        continue;
+      }
+
+      const attId = response.data?.result;
+      console.log(`[uploadAuditAttachments] Item ${i + 1}: SUCCESS - attachment ID=${attId}`);
+      results.push(attId);
+    } catch (imgErr) {
+      const errMsg = imgErr?.message || String(imgErr);
+      errors.push(`Item ${i + 1}: ${errMsg}`);
+      console.error(`[uploadAuditAttachments] Item ${i + 1} EXCEPTION:`, errMsg);
+    }
+  }
+
+  console.log(`[uploadAuditAttachments] DONE - ${results.length}/${imageDataUris.length} uploaded, ${errors.length} errors`);
+
+  if (results.length === 0 && errors.length > 0) {
+    throw new Error(`All attachments failed: ${errors[0]}`);
+  }
+
+  return results;
+};
+
+// Fetch audit attachments with base64 data (includes session retry)
+export const fetchAuditAttachmentsOdoo = async (auditRecordId) => {
+  try {
+    let headers = await getOdooAuthHeaders();
+
+    const doSearch = async (hdrs) => {
+      return axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'ir.attachment',
+            method: 'search_read',
+            args: [[['res_model', '=', 'audit.transaction'], ['res_id', '=', Number(auditRecordId)]]],
+            kwargs: {
+              fields: ['id', 'name', 'mimetype', 'file_size', 'create_date'],
+            },
+          },
+        },
+        { headers: hdrs, timeout: 15000 }
+      );
+    };
+
+    let response = await doSearch(headers);
+
+    // Session retry
+    if (!response.data?.jsonrpc || response.data?.error?.data?.name === 'odoo.http.SessionExpiredException') {
+      console.log('[fetchAuditAttachments] Session expired, re-authenticating...');
+      const authResp = await axios.post(
+        `${ODOO_BASE_URL()}/web/session/authenticate`,
+        {
+          jsonrpc: '2.0', method: 'call',
+          params: { db: DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
+        },
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+      const setCookie = authResp.headers['set-cookie'] || authResp.headers['Set-Cookie'];
+      let cookieStr = '';
+      if (setCookie) {
+        cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+      }
+      const sid = authResp.data?.result?.session_id;
+      if (!cookieStr && sid) cookieStr = `session_id=${sid}`;
+      if (cookieStr) await AsyncStorage.setItem('odoo_cookie', cookieStr);
+      headers = { 'Content-Type': 'application/json', Cookie: cookieStr };
+      response = await doSearch(headers);
+    }
+
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    const attachments = response.data.result || [];
+    console.log(`[fetchAuditAttachments] Found ${attachments.length} attachments for audit ${auditRecordId}`);
+
+    const results = [];
+    for (const att of attachments) {
+      let uri = null;
+      try {
+        const readResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: 'ir.attachment',
+              method: 'read',
+              args: [[att.id], ['datas']],
+              kwargs: {},
+            },
+          },
+          { headers, timeout: 30000 }
+        );
+        if (!readResp.data.error && readResp.data.result?.[0]?.datas) {
+          const mime = att.mimetype || 'image/png';
+          uri = `data:${mime};base64,${readResp.data.result[0].datas}`;
+        }
+      } catch (readErr) {
+        console.error(`[fetchAuditAttachments] Failed to read datas for attachment ${att.id}:`, readErr?.message);
+      }
+      results.push({
+        id: att.id,
+        name: att.name,
+        mimetype: att.mimetype || 'image/png',
+        uri,
+        file_size: att.file_size,
+        create_date: att.create_date,
+      });
+    }
+    return results;
+  } catch (error) {
+    console.error('fetchAuditAttachmentsOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch posted account.move records for transaction reference dropdown
+export const fetchPostedMovesOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.move',
+          method: 'search_read',
+          args: [[['state', '=', 'posted']]],
+          kwargs: {
+            fields: ['id', 'name', 'partner_id', 'move_type', 'amount_total', 'invoice_date'],
+            order: 'create_date desc',
+            limit: 200,
+          },
+        },
+      },
+      { headers }
+    );
+
+    if (response.data.error) {
+      console.log('Odoo JSON-RPC error (posted moves):', response.data.error);
+      throw new Error('Odoo JSON-RPC error');
+    }
+
+    const results = response.data.result || [];
+    return results.map((rec) => ({
+      id: rec.id,
+      name: rec.name || '',
+      partner_name: rec.partner_id ? rec.partner_id[1] : '',
+      move_type: rec.move_type || '',
+      amount_total: rec.amount_total || 0,
+      invoice_date: rec.invoice_date || '',
+    }));
+  } catch (error) {
+    console.error('fetchPostedMovesOdoo error:', error);
+    throw error;
+  }
+};
+
+// ===================== STOCK TRANSFER FUNCTIONS =====================
+
+// Fetch intercompany stock transfer requests
+export const fetchStockTransfersOdoo = async ({ offset = 0, limit = 50, companyId = null } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = [];
+    if (companyId) {
+      domain.push('|');
+      domain.push(['requesting_company_id', '=', Number(companyId)]);
+      domain.push(['source_company_id', '=', Number(companyId)]);
+    }
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'intercompany.stock.request',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: [
+              'id', 'name', 'date', 'state', 'total_value', 'note', 'urgency',
+              'requesting_company_id', 'requesting_location_id',
+              'source_company_id', 'source_location_id',
+              'currency_id', 'transfer_id', 'transfer_state',
+            ],
+            offset,
+            limit,
+            order: 'date desc, id desc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      console.error('Odoo JSON-RPC error (fetchStockRequests):', response.data.error);
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    const records = response.data.result || [];
+    return records.map(r => ({
+      _id: r.id,
+      id: r.id,
+      name: r.name || '',
+      date: r.date || '',
+      state: r.state || 'draft',
+      total_value: r.total_value || 0,
+      note: r.note || '',
+      urgency: r.urgency || 'normal',
+      requesting_company_id: Array.isArray(r.requesting_company_id) ? r.requesting_company_id[0] : r.requesting_company_id,
+      requesting_company_name: Array.isArray(r.requesting_company_id) ? r.requesting_company_id[1] : '',
+      requesting_location_name: Array.isArray(r.requesting_location_id) ? r.requesting_location_id[1] : '',
+      source_company_id: Array.isArray(r.source_company_id) ? r.source_company_id[0] : r.source_company_id,
+      source_company_name: Array.isArray(r.source_company_id) ? r.source_company_id[1] : '',
+      source_location_name: Array.isArray(r.source_location_id) ? r.source_location_id[1] : '',
+      currency_name: Array.isArray(r.currency_id) ? r.currency_id[1] : '',
+      transfer_id: Array.isArray(r.transfer_id) ? r.transfer_id[0] : r.transfer_id,
+      transfer_state: r.transfer_state || '',
+    }));
+  } catch (error) {
+    console.error('fetchStockTransfersOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch full stock transfer request details with lines
+export const fetchStockTransferDetailsOdoo = async (requestId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'intercompany.stock.request',
+          method: 'read',
+          args: [[requestId]],
+          kwargs: {
+            fields: [
+              'id', 'name', 'date', 'state', 'total_value', 'note', 'urgency',
+              'requesting_company_id', 'requesting_location_id',
+              'source_company_id', 'source_location_id',
+              'currency_id', 'line_ids',
+              'sent_by_id', 'sent_date',
+              'approved_by_id', 'approval_date', 'approval_note',
+              'requester_signature', 'source_signature',
+              'rejection_reason',
+              'transfer_id', 'transfer_state',
+            ],
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    const records = response.data.result || [];
+    if (records.length === 0) return null;
+    const r = records[0];
+
+    // Fetch request lines
+    let lines = [];
+    if (r.line_ids && r.line_ids.length > 0) {
+      const linesResponse = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'intercompany.stock.request.line',
+            method: 'read',
+            args: [r.line_ids],
+            kwargs: {
+              fields: ['id', 'product_id', 'quantity', 'uom_id', 'unit_price', 'subtotal',
+                'available_qty', 'stock_status'],
+            },
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+
+      if (!linesResponse.data.error) {
+        lines = (linesResponse.data.result || []).map(l => ({
+          id: l.id,
+          product_id: Array.isArray(l.product_id) ? l.product_id[0] : l.product_id,
+          product_name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+          quantity: l.quantity || 0,
+          uom_id: Array.isArray(l.uom_id) ? l.uom_id[0] : l.uom_id,
+          uom_name: Array.isArray(l.uom_id) ? l.uom_id[1] : '',
+          unit_price: l.unit_price || 0,
+          subtotal: l.subtotal || 0,
+          available_qty: l.available_qty || 0,
+          stock_status: l.stock_status || 'unavailable',
+        }));
+      }
+    }
+
+    return {
+      id: r.id,
+      name: r.name || '',
+      date: r.date || '',
+      state: r.state || 'draft',
+      total_value: r.total_value || 0,
+      note: r.note || '',
+      urgency: r.urgency || 'normal',
+      requesting_company_id: Array.isArray(r.requesting_company_id) ? r.requesting_company_id[0] : r.requesting_company_id,
+      requesting_company_name: Array.isArray(r.requesting_company_id) ? r.requesting_company_id[1] : '',
+      requesting_location_id: Array.isArray(r.requesting_location_id) ? r.requesting_location_id[0] : r.requesting_location_id,
+      requesting_location_name: Array.isArray(r.requesting_location_id) ? r.requesting_location_id[1] : '',
+      source_company_id: Array.isArray(r.source_company_id) ? r.source_company_id[0] : r.source_company_id,
+      source_company_name: Array.isArray(r.source_company_id) ? r.source_company_id[1] : '',
+      source_location_id: Array.isArray(r.source_location_id) ? r.source_location_id[0] : r.source_location_id,
+      source_location_name: Array.isArray(r.source_location_id) ? r.source_location_id[1] : '',
+      currency_name: Array.isArray(r.currency_id) ? r.currency_id[1] : '',
+      lines,
+      sent_by_name: Array.isArray(r.sent_by_id) ? r.sent_by_id[1] : '',
+      sent_date: r.sent_date || '',
+      approved_by_name: Array.isArray(r.approved_by_id) ? r.approved_by_id[1] : '',
+      approval_date: r.approval_date || '',
+      approval_note: r.approval_note || '',
+      requester_signature: r.requester_signature ? `data:image/png;base64,${r.requester_signature}` : null,
+      source_signature: r.source_signature ? `data:image/png;base64,${r.source_signature}` : null,
+      rejection_reason: r.rejection_reason || '',
+      transfer_id: Array.isArray(r.transfer_id) ? r.transfer_id[0] : r.transfer_id,
+      transfer_name: Array.isArray(r.transfer_id) ? r.transfer_id[1] : '',
+      transfer_state: r.transfer_state || '',
+    };
+  } catch (error) {
+    console.error('fetchStockTransferDetailsOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Create intercompany stock transfer request with lines
+export const createStockTransferOdoo = async (data) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    // For lines missing uom_id, fetch product's default UoM from Odoo
+    const linesToCreate = data.lines || [];
+    const missingUomProductIds = linesToCreate
+      .filter(l => !l.uom_id || Number(l.uom_id) <= 0)
+      .map(l => Number(l.product_id));
+
+    let productUomMap = {};
+    if (missingUomProductIds.length > 0) {
+      const prodResponse = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'product.product',
+            method: 'read',
+            args: [missingUomProductIds],
+            kwargs: { fields: ['id', 'uom_id'] },
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      const prods = prodResponse.data?.result || [];
+      prods.forEach(p => {
+        if (p.uom_id) {
+          productUomMap[p.id] = Array.isArray(p.uom_id) ? p.uom_id[0] : p.uom_id;
+        }
+      });
+    }
+
+    // Build create vals — set state='sent' directly
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const vals = {
+      requesting_company_id: Number(data.requesting_company_id),
+      source_company_id: Number(data.source_company_id),
+      state: 'sent',
+      sent_date: now,
+    };
+    if (data.note) vals.note = data.note;
+    if (data.urgency) vals.urgency = data.urgency;
+    if (data.requester_signature) {
+      vals.requester_signature = data.requester_signature.replace(/^data:image\/[^;]+;base64,/, '');
+    }
+
+    if (linesToCreate.length > 0) {
+      vals.line_ids = linesToCreate.map(line => {
+        const pid = Number(line.product_id);
+        const uomId = (line.uom_id && Number(line.uom_id) > 0)
+          ? Number(line.uom_id)
+          : (productUomMap[pid] || false);
+
+        if (!uomId) {
+          console.warn(`[createStockRequest] No UoM found for product ${pid}`);
+        }
+
+        return [0, 0, {
+          product_id: pid,
+          quantity: Number(line.quantity),
+          uom_id: uomId,
+          unit_price: Number(line.unit_price || 0),
+        }];
+      });
+    }
+
+    console.log('[createStockTransferOdoo] Sending vals:', JSON.stringify(vals, null, 2));
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'intercompany.stock.request',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 30000 }
+    );
+
+    if (response.data.error) {
+      const errData = response.data.error.data;
+      const errMsg = errData?.message || errData?.name || 'Odoo JSON-RPC error';
+      console.error('[createStockTransferOdoo] Odoo error:', JSON.stringify(response.data.error));
+      throw new Error(errMsg);
+    }
+
+    const rawId = response.data.result;
+    const recordId = Number(Array.isArray(rawId) ? rawId[0] : rawId);
+    console.log('[createStockTransferOdoo] Created record ID:', recordId, 'state: sent');
+
+    return { id: recordId };
+  } catch (error) {
+    console.error('createStockTransferOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Update stock transfer request fields
+export const updateStockTransferOdoo = async (requestId, data) => {
+  try {
+    const vals = {};
+    if (data.note !== undefined) vals.note = data.note;
+    if (data.urgency !== undefined) vals.urgency = data.urgency;
+    if (data.rejection_reason !== undefined) vals.rejection_reason = data.rejection_reason;
+    if (data.approval_note !== undefined) vals.approval_note = data.approval_note;
+    if (data.requester_signature !== undefined) {
+      vals.requester_signature = data.requester_signature
+        ? data.requester_signature.replace(/^data:image\/[^;]+;base64,/, '')
+        : false;
+    }
+    if (data.source_signature !== undefined) {
+      vals.source_signature = data.source_signature
+        ? data.source_signature.replace(/^data:image\/[^;]+;base64,/, '')
+        : false;
+    }
+
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'intercompany.stock.request',
+          method: 'write',
+          args: [[requestId], vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    return response.data.result;
+  } catch (error) {
+    console.error('updateStockTransferOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch all companies from Odoo
+export const fetchCompaniesOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.company',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: ['id', 'name'],
+            order: 'name asc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    return (response.data.result || []).map(c => ({
+      id: c.id,
+      name: c.name,
+      label: c.name,
+    }));
+  } catch (error) {
+    console.error('fetchCompaniesOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch product stock availability by company
+export const fetchProductStockOdoo = async (productIds, companyId) => {
+  if (!productIds || !productIds.length || !companyId) return {};
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.quant',
+          method: 'search_read',
+          args: [[
+            ['product_id', 'in', productIds.map(Number)],
+            ['company_id', '=', Number(companyId)],
+            ['location_id.usage', '=', 'internal'],
+          ]],
+          kwargs: { fields: ['product_id', 'quantity'] },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) return {};
+    const quants = response.data.result || [];
+    const stockMap = {};
+    quants.forEach(q => {
+      const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
+      stockMap[pid] = (stockMap[pid] || 0) + (q.quantity || 0);
+    });
+    return stockMap;
+  } catch (error) {
+    console.error('fetchProductStockOdoo error:', error?.message || error);
+    return {};
+  }
+};
+
+// Execute action on stock transfer request (approve, reject, draft, etc.)
+export const stockTransferActionOdoo = async (requestId, action, companyId = null) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const kwargs = {};
+    // Pass allowed_company_ids so Odoo sets self.env.company correctly
+    // Required for approve/reject which check self.source_company_id == self.env.company
+    if (companyId) {
+      kwargs.context = { allowed_company_ids: [Number(companyId)] };
+    }
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'intercompany.stock.request',
+          method: action,
+          args: [[requestId]],
+          kwargs,
+        },
+      },
+      { headers, withCredentials: true, timeout: 30000 }
+    );
+
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+
+    return response.data.result;
+  } catch (error) {
+    console.error(`stockTransferActionOdoo (${action}) error:`, error?.message || error);
+    throw error;
+  }
+};
+
+// ============================================================
+// Vehicle Maintenance (cash.collection) API
+// ============================================================
+
+// Fetch maintenance types for dropdown
+export const fetchMaintenanceTypesOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'maintenance.type',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: ['id', 'name'],
+            limit: 100,
+            order: 'name asc',
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+    return (response.data.result || []).map(t => ({ id: t.id, name: t.name || '' }));
+  } catch (error) {
+    console.error('fetchMaintenanceTypesOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch vehicles from Odoo (with auth) for Vehicle Maintenance form
+export const fetchVehiclesForMaintenanceOdoo = async ({ limit = 200 } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'fleet.vehicle',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: ['id', 'name', 'license_plate', 'driver_id'],
+            limit,
+            order: 'name asc',
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+    return (response.data.result || []).map(v => ({
+      id: v.id,
+      name: v.name || '',
+      license_plate: v.license_plate || '',
+      driver: v.driver_id ? { id: v.driver_id[0], name: v.driver_id[1] } : null,
+    }));
+  } catch (error) {
+    console.error('fetchVehiclesForMaintenanceOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch partners (res.partner) from Odoo for Handover To dropdown
+export const fetchPartnersOdoo = async ({ limit = 200 } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.partner',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: ['id', 'name'],
+            limit,
+            order: 'name asc',
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+    return (response.data.result || []).map(p => ({ id: p.id, name: p.name || '' }));
+  } catch (error) {
+    console.error('fetchPartnersOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch vehicle maintenance records (cash.collection) by date
+export const fetchVehicleMaintenanceOdoo = async (params = {}) => {
+  const { date, offset = 0, limit = 50 } = params;
+  try {
+    let domain = [];
+    if (date) {
+      domain.push(['date', '>=', `${date} 00:00:00`]);
+      domain.push(['date', '<=', `${date} 23:59:59`]);
+    }
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'cash.collection',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: [
+              'id', 'ref', 'date', 'vehicle_id', 'driver_id', 'number_plate',
+              'maintenance_type_id', 'company_id', 'current_km', 'amount',
+              'handover_from', 'handover_to', 'image_url', 'remarks',
+            ],
+            offset,
+            limit,
+            order: 'date desc',
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Odoo JSON-RPC error');
+    }
+    const records = response.data.result || [];
+    return records.map(r => ({
+      id: r.id,
+      ref: r.ref || '',
+      date: r.date || '',
+      vehicle_id: Array.isArray(r.vehicle_id) ? r.vehicle_id[0] : null,
+      vehicle_name: Array.isArray(r.vehicle_id) ? r.vehicle_id[1] : '',
+      driver_id: Array.isArray(r.driver_id) ? r.driver_id[0] : null,
+      driver_name: Array.isArray(r.driver_id) ? r.driver_id[1] : '',
+      number_plate: r.number_plate || '',
+      maintenance_type_id: Array.isArray(r.maintenance_type_id) ? r.maintenance_type_id[0] : null,
+      maintenance_type_name: Array.isArray(r.maintenance_type_id) ? r.maintenance_type_id[1] : '',
+      company_id: Array.isArray(r.company_id) ? r.company_id[0] : null,
+      current_km: r.current_km || 0,
+      amount: r.amount || 0,
+      handover_from: r.handover_from || null,
+      handover_to: r.handover_to || null,
+      image_url: r.image_url || '',
+      remarks: r.remarks || '',
+    }));
+  } catch (error) {
+    console.error('fetchVehicleMaintenanceOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Create or update a vehicle maintenance record (cash.collection)
+export const createVehicleMaintenanceOdoo = async ({ payload, username, password, db } = {}) => {
+  try {
+    const loginResp = await loginVehicleTrackingOdoo({ username, password, db });
+    const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+    const headers = await getOdooAuthHeaders();
+    if (loginResp && loginResp.cookies) headers.Cookie = loginResp.cookies;
+
+    const maintenancePayload = { ...payload };
+
+    // Convert many2one string IDs to integers
+    ['vehicle_id', 'driver_id', 'maintenance_type_id', 'company_id', 'handover_to_partner_id'].forEach(field => {
+      if (maintenancePayload[field] && typeof maintenancePayload[field] === 'string') {
+        maintenancePayload[field] = parseInt(maintenancePayload[field], 10);
+      }
+    });
+
+    // Convert image file URIs to base64 (same format as odometer_image)
+    for (const field of ['handover_from', 'handover_to', 'image_url']) {
+      if (maintenancePayload[field]) {
+        try {
+          const uri = maintenancePayload[field];
+          if (uri && (uri.startsWith('file://') || uri.startsWith('/'))) {
+            const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+            if (b64 && b64.length > 0) {
+              maintenancePayload[field] = b64;
+              console.log(`Attached ${field} base64 length:`, b64.length);
+            }
+          }
+        } catch (readErr) {
+          console.warn(`Could not read ${field} file for base64:`, readErr?.message || readErr);
+        }
+      }
+    }
+
+    // Clean undefined/empty keys
+    Object.keys(maintenancePayload).forEach(k => {
+      if (maintenancePayload[k] === undefined || maintenancePayload[k] === '') {
+        delete maintenancePayload[k];
+      }
+    });
+
+    let recordId;
+
+    if (maintenancePayload.id) {
+      // Update existing record
+      recordId = maintenancePayload.id;
+      const { id: _remove, ...updatePayload } = maintenancePayload;
+      const resp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'cash.collection',
+            method: 'write',
+            args: [[recordId], updatePayload],
+            kwargs: {},
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      if (resp.data.error) {
+        throw new Error(resp.data.error.data?.message || 'Odoo write error');
+      }
+    } else {
+      // Create new record
+      const resp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'cash.collection',
+            method: 'create',
+            args: [[maintenancePayload]],
+            kwargs: {},
+          },
+        },
+        { headers, withCredentials: true, timeout: 15000 }
+      );
+      if (resp.data.error) {
+        throw new Error(resp.data.error.data?.message || 'Odoo create error');
+      }
+      const raw = resp.data.result;
+      recordId = Array.isArray(raw) ? raw[0] : (Number.isFinite(Number(raw)) ? Number(raw) : raw);
+    }
+
+    console.log('createVehicleMaintenanceOdoo success, recordId:', recordId);
+    return recordId;
+  } catch (error) {
+    console.error('createVehicleMaintenanceOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// ============================================================
+// Mobile Repair / Job Card API Functions
+// ============================================================
+
+// Ensure valid Odoo session — re-authenticate if cookie is missing or expired
+const ensureOdooSession = async () => {
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/+$/, '');
+  let headers = await getOdooAuthHeaders();
+  // Quick check: if no cookie at all, authenticate immediately
+  if (!headers.Cookie) {
+    console.log('[MobileRepair] No odoo_cookie found, authenticating...');
+    return await _reauthenticateOdoo();
+  }
+  // Quick verify: make a lightweight call to check session validity
+  try {
+    const resp = await axios.post(
+      `${baseUrl}/web/session/get_session_info`,
+      { jsonrpc: '2.0', method: 'call', params: {} },
+      { headers, timeout: 8000 }
+    );
+    if (resp.data?.result?.uid) {
+      return headers; // session is valid
+    }
+    console.log('[MobileRepair] Session invalid (no uid), re-authenticating...');
+    return await _reauthenticateOdoo();
+  } catch (e) {
+    console.log('[MobileRepair] Session check failed, re-authenticating...', e?.message);
+    return await _reauthenticateOdoo();
+  }
+};
+
+const _reauthenticateOdoo = async () => {
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/+$/, '');
+  try {
+    const authResp = await axios.post(
+      `${baseUrl}/web/session/authenticate`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { db: DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
+      },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+    if (authResp.data?.error) {
+      console.error('[MobileRepair] Auth error:', authResp.data.error?.data?.message || authResp.data.error);
+      throw new Error('Odoo authentication failed');
+    }
+    const setCookie = authResp.headers['set-cookie'] || authResp.headers['Set-Cookie'];
+    let cookieStr = '';
+    if (setCookie) {
+      cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
+    }
+    const sid = authResp.data?.result?.session_id;
+    if (!cookieStr && sid) cookieStr = `session_id=${sid}`;
+    if (cookieStr) {
+      await AsyncStorage.setItem('odoo_cookie', cookieStr);
+      console.log('[MobileRepair] Re-authenticated successfully, cookie stored');
+    } else {
+      console.warn('[MobileRepair] Auth succeeded but no cookie/session_id received');
+    }
+    const headers = { 'Content-Type': 'application/json' };
+    if (cookieStr) headers.Cookie = cookieStr;
+    return headers;
+  } catch (error) {
+    console.error('[MobileRepair] _reauthenticateOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+const JOB_CARD_MODELS = ['job.card', 'mobile.repair.job.card', 'repair.order'];
+
+// Fuzzy match stage name to a known stage category (used by moveJobCardToNextStageOdoo)
+const matchStage = (name) => {
+  if (!name) return 'draft';
+  const n = name.toLowerCase().trim();
+  if (n.includes('draft')) return 'draft';
+  if (n.includes('inspect')) return 'inspection';
+  if (n.includes('quotation') || n.includes('quote')) return 'quotation';
+  if (n.includes('repair') || n.includes('progress')) return 'repair';
+  if (n.includes('complete') || n.includes('done')) return 'completed';
+  if (n.includes('cancel')) return 'cancelled';
+  return 'draft';
+};
+
+const callOdooWithModelFallback = async (models, method, args, kwargs, headers, reqTimeout = 15000) => {
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/+$/, '');
+  const url = `${baseUrl}/web/dataset/call_kw`;
+
+  // Check if an RPC error means "model not found" (should try next model)
+  const isModelNotFound = (err) => {
+    const msg = (err?.data?.message || err?.message || '').toLowerCase();
+    return msg.includes('not found') || msg.includes('does not exist') ||
+           msg.includes('no module named') || msg.includes('not installed');
+  };
+
+  let lastError = null;
+  for (const model of models) {
+    try {
+      console.log(`[MobileRepair] callOdoo: ${model}.${method}`);
+      const resp = await axios.post(
+        url,
+        { jsonrpc: '2.0', method: 'call', params: { model, method, args, kwargs } },
+        { headers, timeout: reqTimeout }
+      );
+      if (resp.data.error) {
+        if (resp.data.error?.data?.name === 'odoo.http.SessionExpiredException') {
+          console.log('[MobileRepair] Session expired, re-authenticating...');
+          const newHeaders = await _reauthenticateOdoo();
+          const retryResp = await axios.post(
+            url,
+            { jsonrpc: '2.0', method: 'call', params: { model, method, args, kwargs } },
+            { headers: newHeaders, timeout: reqTimeout }
+          );
+          if (retryResp.data.error) {
+            lastError = retryResp.data.error;
+            if (!isModelNotFound(retryResp.data.error)) throw lastError;
+            continue;
+          }
+          return { result: retryResp.data.result, model };
+        }
+        const rpcErr = resp.data.error;
+        console.log(`[MobileRepair] ${model}.${method} RPC error:`, rpcErr?.data?.message || '');
+        lastError = rpcErr;
+        // If model exists but call failed (validation error etc), throw immediately
+        if (!isModelNotFound(rpcErr)) throw rpcErr;
+        continue;
+      }
+      return { result: resp.data.result, model };
+    } catch (e) {
+      // If it's a thrown RPC error (not HTTP), re-throw it
+      if (e?.data?.message || e?.message?.includes('mandatory')) throw e;
+      console.log(`[MobileRepair] ${model}.${method} HTTP error:`, e?.response?.status || e?.message || '');
+      lastError = e;
+      continue;
+    }
+  }
+  throw lastError || new Error('All model names failed');
+};
+
+export const fetchJobCardsListOdoo = async ({ offset = 0, limit = 30, searchText = '' } = {}) => {
+  try {
+    const headers = await ensureOdooSession();
+    let domain = [];
+    if (searchText) {
+      domain = ['|', ['name', 'ilike', searchText], ['partner_id', 'ilike', searchText]];
+    }
+    const { result } = await callOdooWithModelFallback(
+      JOB_CARD_MODELS, 'search_read', [],
+      { domain, fields: [], offset, limit, order: 'create_date desc' }, headers
+    );
+    // Map using correct Odoo field names from job.card model
+    return (result || []).map(jc => ({
+      id: jc.id,
+      ref: jc.name || '',                                               // name = "Job Card No."
+      partner_name: Array.isArray(jc.partner_id) ? jc.partner_id[1] : '',
+      phone: jc.phone || '',
+      device_brand: Array.isArray(jc.brand_id) ? jc.brand_id[1] : '',   // brand_id
+      device_model: Array.isArray(jc.model_id) ? jc.model_id[1] : '',   // model_id
+      stage_id: Array.isArray(jc.stage_id) ? jc.stage_id[0] : jc.stage_id,
+      stage_name: Array.isArray(jc.stage_id) ? jc.stage_id[1] : (jc.state || 'Draft'),
+      priority: jc.priority || '0',
+      receiving_date: jc.receiving_date || '',
+      expected_delivery_date: jc.delivery_date || '',                    // delivery_date
+      assigned_to: Array.isArray(jc.assigned_to) ? jc.assigned_to[1] : '',
+      repair_team: Array.isArray(jc.team_id) ? jc.team_id[1] : '',      // team_id
+      total_amount: jc.total_amount || 0,
+      issue_complaint: jc.issue || '',                                   // issue
+    }));
+  } catch (error) {
+    console.error('fetchJobCardsListOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// ---- Dashboard Statistics ----
+export const fetchJobCardDashboardOdoo = async () => {
+  try {
+    const headers = await ensureOdooSession();
+
+    // 1. Fetch ALL job cards with ALL fields (fields:[] = return everything)
+    const { result: allCards } = await callOdooWithModelFallback(
+      JOB_CARD_MODELS, 'search_read', [],
+      { domain: [], fields: [], limit: 0 },
+      headers
+    );
+    const cards = allCards || [];
+    console.log('[Dashboard] Total cards fetched:', cards.length);
+    // Log all field names from first card to discover actual stage/type field names
+    if (cards.length > 0) {
+      console.log('[Dashboard] ALL FIELD NAMES:', Object.keys(cards[0]).join(', '));
+      // Log fields that might be stage-related
+      const stageFields = Object.entries(cards[0]).filter(([k]) =>
+        k.includes('stage') || k.includes('state') || k.includes('status') || k.includes('step')
+      );
+      console.log('[Dashboard] Stage-related fields:', JSON.stringify(stageFields));
+      // Log fields that might be inspection/delivery related
+      const typeFields = Object.entries(cards[0]).filter(([k]) =>
+        k.includes('inspect') || k.includes('delivery') || k.includes('type')
+      );
+      console.log('[Dashboard] Type-related fields:', JSON.stringify(typeFields));
+    }
+
+    // 2. Fetch ALL field metadata so we can find selection labels
+    let inspLabels = {};
+    let delLabels = {};
+    try {
+      const { result: fieldsMeta } = await callOdooWithModelFallback(
+        JOB_CARD_MODELS, 'fields_get', [],
+        { attributes: ['type', 'selection', 'string'] }, headers
+      );
+      // Find all selection fields and log them
+      const selectionFields = Object.entries(fieldsMeta || {}).filter(([, v]) => v.type === 'selection');
+      console.log('[Dashboard] Selection fields:', selectionFields.map(([k, v]) => `${k}: ${JSON.stringify(v.selection)}`).join(' | '));
+
+      // Try known field names for inspection/delivery
+      const inspField = fieldsMeta?.inspection_type || fieldsMeta?.inspect_type;
+      const delField = fieldsMeta?.delivery_type || fieldsMeta?.deliver_type;
+      if (inspField?.selection) {
+        inspField.selection.forEach(([val, label]) => { inspLabels[val] = label; });
+      }
+      if (delField?.selection) {
+        delField.selection.forEach(([val, label]) => { delLabels[val] = label; });
+      }
+      console.log('[Dashboard] inspLabels:', JSON.stringify(inspLabels));
+      console.log('[Dashboard] delLabels:', JSON.stringify(delLabels));
+    } catch (e) {
+      console.log('[Dashboard] fields_get failed:', e?.message);
+    }
+
+    // 3. Count by stage
+    const stageCounts = { draft: 0, inspection: 0, quotation: 0, repair: 0, completed: 0, cancelled: 0 };
+    const inspectionTypes = {};
+    const deliveryTypes = {};
+
+    cards.forEach((jc, idx) => {
+      // --- Stage ---
+      // Try multiple possible field names for stage
+      const stageVal = jc.stage_id || jc.stage || jc.state || jc.status || '';
+      let stageName = '';
+      if (Array.isArray(stageVal) && stageVal.length >= 2) {
+        stageName = stageVal[1];
+      } else if (typeof stageVal === 'string') {
+        stageName = stageVal;
+      }
+      const cat = matchStage(stageName);
+      if (idx < 5) console.log(`[Dashboard] Card #${jc.id} stage: raw=${JSON.stringify(stageVal)} name="${stageName}" → ${cat}`);
+      if (stageCounts[cat] !== undefined) stageCounts[cat]++;
+
+      // --- Inspection type ---
+      const iRaw = jc.inspection_type || jc.inspect_type || '';
+      if (iRaw && iRaw !== false) {
+        const iLabel = inspLabels[iRaw] || iRaw;
+        inspectionTypes[iLabel] = (inspectionTypes[iLabel] || 0) + 1;
+      }
+
+      // --- Delivery type ---
+      const dRaw = jc.delivery_type || jc.deliver_type || '';
+      if (dRaw && dRaw !== false) {
+        const dLabel = delLabels[dRaw] || dRaw;
+        deliveryTypes[dLabel] = (deliveryTypes[dLabel] || 0) + 1;
+      }
+    });
+
+    // Add zero-count entries for all selection options
+    Object.values(inspLabels).forEach(label => {
+      if (inspectionTypes[label] === undefined) inspectionTypes[label] = 0;
+    });
+    Object.values(delLabels).forEach(label => {
+      if (deliveryTypes[label] === undefined) deliveryTypes[label] = 0;
+    });
+
+    const total = cards.length;
+    const completed = stageCounts.completed;
+    const pending = total - completed - stageCounts.cancelled;
+
+    console.log('[Dashboard] stageCounts:', JSON.stringify(stageCounts));
+    console.log('[Dashboard] inspectionTypes:', JSON.stringify(inspectionTypes));
+    console.log('[Dashboard] deliveryTypes:', JSON.stringify(deliveryTypes));
+
+    return {
+      stageCounts,
+      statistics: { total, completed, pending },
+      inspectionTypes,
+      deliveryTypes,
+    };
+  } catch (error) {
+    console.error('fetchJobCardDashboardOdoo error:', error?.message || error);
+    return {
+      stageCounts: { draft: 0, inspection: 0, quotation: 0, repair: 0, completed: 0, cancelled: 0 },
+      statistics: { total: 0, completed: 0, pending: 0 },
+      inspectionTypes: {},
+      deliveryTypes: {},
+    };
+  }
+};
+
+// Character-by-character tag removal — works on all JS engines including Hermes
+const _removeTags = (str) => {
+  let out = '';
+  let inTag = false;
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === '<') { inTag = true; continue; }
+    if (str[i] === '>') { inTag = false; continue; }
+    if (!inTag) out += str[i];
+  }
+  return out;
+};
+const _decodeEntities = (str) => {
+  let t = str;
+  t = t.replace(/&nbsp;/gi, ' ');
+  t = t.replace(/&amp;/gi, '&');
+  t = t.replace(/&lt;/gi, '<');
+  t = t.replace(/&gt;/gi, '>');
+  t = t.replace(/&quot;/gi, '"');
+  t = t.replace(/&#39;/gi, "'");
+  t = t.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)));
+  t = t.replace(/&[a-zA-Z]+;/g, ' ');
+  return t;
+};
+// Strip ALL HTML from Odoo fields — 3 full passes (strip → decode → strip → decode → strip)
+const stripOdooHtml = (html) => {
+  if (!html || typeof html !== 'string') return html || '';
+  let t = html;
+  // Convert block elements to newlines
+  t = t.replace(/<br\s*\/?>/gi, '\n');
+  t = t.replace(/<\/p>/gi, '\n');
+  t = t.replace(/<\/div>/gi, '\n');
+  t = t.replace(/<\/tr>/gi, '\n');
+  t = t.replace(/<\/li>/gi, '\n');
+  t = t.replace(/<li[^>]*>/gi, '- ');
+  // Pass 1: strip tags → decode entities
+  t = _removeTags(t);
+  t = _decodeEntities(t);
+  // Pass 2: strip again → decode again (handles double-encoded)
+  t = _removeTags(t);
+  t = _decodeEntities(t);
+  // Pass 3: final strip
+  t = _removeTags(t);
+  // Clean whitespace
+  t = t.replace(/\n{3,}/g, '\n\n');
+  t = t.replace(/[ \t]{2,}/g, ' ');
+  return t.trim();
+};
+
+export const fetchJobCardDetailsOdoo = async (jobCardId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      JOB_CARD_MODELS, 'read', [[jobCardId]], { fields: [] }, headers
+    );
+    const jc = Array.isArray(result) && result.length > 0 ? result[0] : null;
+    if (!jc) return null;
+    console.log('[MobileRepair] Raw job card data - stage_id:', jc.stage_id, 'state:', jc.state, 'status:', jc.status);
+    // Log all issue-related fields to find the correct field name
+    const issueFields = Object.keys(jc).filter(k => k.includes('issue') || k.includes('complaint') || k.includes('problem') || k.includes('description'));
+    console.log('[MobileRepair] Issue-related fields:', JSON.stringify(issueFields.map(f => f + '=' + JSON.stringify(jc[f]))));
+    console.log('[MobileRepair] jc.issue =', JSON.stringify(jc.issue), '| jc.issue_description =', JSON.stringify(jc.issue_description), '| jc.complaint =', JSON.stringify(jc.complaint));
+    const m2o = (val) => Array.isArray(val) ? { id: val[0], name: val[1] } : (val ? { id: val, name: '' } : null);
+    // Stage: try stage_id (Many2one), then fall back to state/status (Selection field)
+    let stage = m2o(jc.stage_id);
+    if (!stage || !stage.name) {
+      const stateName = jc.state || jc.status || '';
+      if (stateName) {
+        // Convert selection value to display name
+        const stateMap = {
+          'draft': 'Draft', 'inspection': 'In Inspection', 'in_inspection': 'In Inspection',
+          'quotation': 'Quotation', 'quote': 'Quotation',
+          'repair': 'Repair', 'in_repair': 'Repair', 'in_progress': 'Repair',
+          'done': 'Completed', 'completed': 'Completed', 'complete': 'Completed',
+          'cancel': 'Cancelled', 'cancelled': 'Cancelled',
+        };
+        stage = { id: 0, name: stateMap[stateName.toLowerCase()] || stateName };
+      }
+    }
+    // Map using correct Odoo field names from job.card model
+    return {
+      id: jc.id, ref: jc.name || '',                          // name = "Job Card No."
+      partner: m2o(jc.partner_id), phone: jc.phone || '', email: jc.email || '',
+      priority: jc.priority || '0',
+      device_brand: m2o(jc.brand_id),                          // brand_id (not device_brand_id)
+      device_series: m2o(jc.series_id),                        // series_id (not device_series_id)
+      device_model: m2o(jc.model_id),                          // model_id (not device_model_id)
+      imei_1: jc.imei_1 || '', imei_2: jc.imei_2 || '',
+      device_password: jc.device_password || '',
+      physical_condition: jc.device_condition || '',            // device_condition (not physical_condition)
+      under_warranty: jc.is_warranty || false,                  // is_warranty (not under_warranty)
+      issue_type: m2o(jc.issue_type_id),                          // many2one
+      issue_type_ids: jc.issue_type_ids || [],                     // many2many
+      // "Issue / Complaint": use issue text, fallback to issue type name if issue is empty/dash
+      issue_complaint: (jc.issue && jc.issue !== '-' && jc.issue !== false) ? jc.issue
+        : (Array.isArray(jc.issue_type_id) ? jc.issue_type_id[1] : '') || '',
+      issue_notes: jc.issue_notes || '',                           // "Additional Issue Details"
+      accessories_received: jc.accessories || '',               // accessories (not accessories_received)
+      receiving_date: jc.receiving_date || '',
+      expected_delivery_date: jc.delivery_date || '',           // delivery_date (not expected_delivery_date)
+      delivery_type: jc.delivery_type || '', inspection_type: jc.inspection_type || '',
+      repair_team: m2o(jc.team_id),                            // team_id (not repair_team_id)
+      assigned_to: m2o(jc.assigned_to),
+      responsible: m2o(jc.responsible_id),
+      inspection_date: jc.inspection_date || '', completion_date: jc.completion_date || '',
+      stage, state: jc.state || '',
+      sale_order: m2o(jc.sale_order_id), easy_sales: m2o(jc.easy_sales_id), task: m2o(jc.task_id),
+      total_amount: jc.total_amount || 0,
+      inspection_notes: stripOdooHtml(jc.inspection_notes || ''),
+      checklist_ids: jc.checklist_ids || [],
+      repair_step_ids: jc.repair_step_ids || [],
+      service_line_ids: jc.service_line_ids || [],
+      spare_part_ids: jc.spare_part_line_ids || [],
+      total_service_charge: jc.total_service_charge || 0,
+      diagnosis_result: stripOdooHtml(jc.ai_diagnosis || ''),   // strip Odoo HTML at API level
+      create_date: jc.create_date || '',
+      sale_order_count: jc.sale_order_count || 0,
+      spare_request_count: jc.spare_request_count || 0,
+      // Estimation fields
+      estimated_hours: jc.estimated_hours || jc.estimated_time || 0,
+      estimated_parts_cost: jc.estimated_parts_cost || jc.parts_cost || 0,
+      estimated_labor_cost: jc.estimated_labor_cost || jc.labor_cost || 0,
+      total_estimated_cost: jc.total_estimated_cost || jc.estimated_total || jc.total_cost || 0,
+      // Symptom IDs
+      symptom_ids: jc.symptom_ids || jc.symptom_line_ids || [],
+    };
+  } catch (error) {
+    console.error('fetchJobCardDetailsOdoo error:', error?.message || error);
+    return null;
+  }
+};
+
+// ---- Diagnosis Records ----
+const DIAGNOSIS_MODELS = ['job.card.diagnosis', 'diagnosis.line', 'repair.diagnosis', 'mobile.repair.diagnosis'];
+
+export const fetchDiagnosisListOdoo = async ({ jobCardId = null, offset = 0, limit = 50 } = {}) => {
+  try {
+    const headers = await ensureOdooSession();
+    let domain = [];
+    if (jobCardId) {
+      domain = [['job_card_id', '=', jobCardId]];
+    }
+    const { result } = await callOdooWithModelFallback(
+      DIAGNOSIS_MODELS, 'search_read', [],
+      { domain, fields: [], offset, limit, order: 'id desc' }, headers
+    );
+    const records = result || [];
+    console.log('[Diagnosis] Fetched:', records.length);
+    if (records.length > 0) console.log('[Diagnosis] Sample keys:', Object.keys(records[0]).join(', '));
+    return records.map(r => ({
+      id: r.id,
+      job_card_ref: Array.isArray(r.job_card_id) ? r.job_card_id[1] : (r.job_card_id || ''),
+      job_card_id: Array.isArray(r.job_card_id) ? r.job_card_id[0] : r.job_card_id,
+      test_name: r.test_name || r.name || '',
+      category: Array.isArray(r.category_id) ? r.category_id[1] : (r.category || r.category_id || ''),
+      result: r.result || r.test_result || r.state || 'not_tested',
+      ai_confidence: r.ai_confidence || r.confidence || 0,
+      root_cause: Array.isArray(r.root_cause_id) ? r.root_cause_id[1] : (r.root_cause || ''),
+    }));
+  } catch (error) {
+    console.error('fetchDiagnosisListOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// ---- Repair Steps ----
+const REPAIR_STEP_MODELS = ['repair.step', 'job.card.repair.step', 'repair.step.line', 'mobile.repair.step'];
+
+export const fetchRepairStepsListOdoo = async ({ jobCardId = null, offset = 0, limit = 50 } = {}) => {
+  try {
+    const headers = await ensureOdooSession();
+    let domain = [];
+    if (jobCardId) {
+      domain = [['job_card_id', '=', jobCardId]];
+    }
+    const { result } = await callOdooWithModelFallback(
+      REPAIR_STEP_MODELS, 'search_read', [],
+      { domain, fields: [], offset, limit, order: 'id asc' }, headers
+    );
+    const records = result || [];
+    console.log('[RepairSteps] Fetched:', records.length);
+    if (records.length > 0) console.log('[RepairSteps] Sample keys:', Object.keys(records[0]).join(', '));
+    if (records.length > 0) {
+      console.log('[RepairSteps] RAW FIRST RECORD:', JSON.stringify(records[0], null, 2));
+    }
+    return records.map(r => ({
+      id: r.id,
+      job_card_ref: Array.isArray(r.job_card_id) ? r.job_card_id[1] : (r.job_card_id || ''),
+      job_card_id: Array.isArray(r.job_card_id) ? r.job_card_id[0] : r.job_card_id,
+      step_title: r.step_title || r.name || '',
+      difficulty: r.difficulty || 'easy',
+      estimated_minutes: r.estimated_minutes || r.estimated_time || 0,
+      status: r.status || r.state || 'pending',
+      source: r.source || '',
+      technician_notes: r.technician_notes || r.notes || '',
+    }));
+  } catch (error) {
+    console.error('fetchRepairStepsListOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchRepairStepDetailOdoo = async (stepId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      REPAIR_STEP_MODELS, 'read', [[stepId]], { fields: [] }, headers
+    );
+    const r = Array.isArray(result) ? result[0] : result;
+    if (!r) return null;
+    console.log('[RepairStepDetail] Keys:', Object.keys(r).join(', '));
+    return {
+      id: r.id,
+      job_card_ref: Array.isArray(r.job_card_id) ? r.job_card_id[1] : (r.job_card_id || ''),
+      job_card_id: Array.isArray(r.job_card_id) ? r.job_card_id[0] : r.job_card_id,
+      step_title: r.step_title || r.name || '',
+      difficulty: r.difficulty || 'easy',
+      estimated_minutes: r.estimated_minutes || r.estimated_time || 0,
+      status: r.status || r.state || 'pending',
+      source: r.source || '',
+      source_url: r.source_url || '',
+      instructions: r.instructions || r.description || '',
+      parts_used: Array.isArray(r.parts_used_ids) ? r.parts_used_ids : (r.parts_used || []),
+      part_cost: r.part_cost || r.parts_cost || 0,
+      before_photo: r.before_photo || r.before_image || false,
+      after_photo: r.after_photo || r.after_image || false,
+      technician_notes: r.technician_notes || r.notes || '',
+    };
+  } catch (error) {
+    console.error('fetchRepairStepDetailOdoo error:', error?.message || error);
+    return null;
+  }
+};
+
+export const updateRepairStepStatusOdoo = async (stepId, status) => {
+  try {
+    const headers = await ensureOdooSession();
+    // Try action methods first (action_done, action_skip, action_fail)
+    const actionMap = { done: 'action_done', skip: 'action_skip', failed: 'action_fail' };
+    const actionMethod = actionMap[status];
+    if (actionMethod) {
+      try {
+        await callOdooWithModelFallback(
+          REPAIR_STEP_MODELS, actionMethod, [[stepId]], {}, headers
+        );
+        console.log(`[RepairStep] ${actionMethod} succeeded for step ${stepId}`);
+        return true;
+      } catch (e) {
+        console.log(`[RepairStep] ${actionMethod} failed, falling back to write:`, e?.message);
+      }
+    }
+    // Fallback: write status directly
+    await callOdooWithModelFallback(
+      REPAIR_STEP_MODELS, 'write', [[stepId], { status }], {}, headers
+    );
+    console.log(`[RepairStep] write status=${status} succeeded for step ${stepId}`);
+    return true;
+  } catch (error) {
+    console.error('updateRepairStepStatusOdoo error:', error?.message || error);
+    throw new Error('Failed to update repair step status');
+  }
+};
+
+export const deleteRepairStepOdoo = async (stepId) => {
+  try {
+    const headers = await ensureOdooSession();
+    await callOdooWithModelFallback(
+      REPAIR_STEP_MODELS, 'unlink', [[stepId]], {}, headers
+    );
+    return true;
+  } catch (error) {
+    console.error('deleteRepairStepOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const fetchJobCardStagesOdoo = async () => {
+  try {
+    const headers = await ensureOdooSession();
+
+    // Step 1: Discover the real stage model from job.card's stage_id field
+    let stageModelName = null;
+    try {
+      const { result: fields } = await callOdooWithModelFallback(
+        JOB_CARD_MODELS, 'fields_get', [],
+        { attributes: ['type', 'relation', 'selection'] }, headers
+      );
+      if (fields?.stage_id?.type === 'many2one' && fields?.stage_id?.relation) {
+        stageModelName = fields.stage_id.relation;
+        console.log('[MobileRepair] Discovered stage model:', stageModelName);
+      }
+    } catch {}
+
+    // Step 2: Try discovered model first, then known fallbacks
+    const modelsToTry = [...new Set([
+      stageModelName, 'mobile.repair.stage', 'job.card.stage', 'repair.stage',
+    ].filter(Boolean))];
+
+    for (const model of modelsToTry) {
+      try {
+        const resp = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          { jsonrpc: '2.0', method: 'call', params: {
+            model, method: 'search_read', args: [],
+            kwargs: { domain: [], fields: ['id', 'name', 'sequence'], order: 'sequence asc', limit: 20 },
+          }},
+          { headers, timeout: reqTimeout }
+        );
+        if (!resp.data?.error && resp.data?.result?.length > 0) {
+          console.log('[MobileRepair] Loaded ' + resp.data.result.length + ' stages from ' + model);
+          return resp.data.result.map(s => ({ id: s.id, name: s.name || '', sequence: s.sequence || 0 }));
+        }
+      } catch { continue; }
+    }
+
+    // Step 3: If no stage model works, build stages from state selection values
+    try {
+      const { result: fields } = await callOdooWithModelFallback(
+        JOB_CARD_MODELS, 'fields_get', [],
+        { attributes: ['type', 'selection'] }, headers
+      );
+      if (fields?.state?.selection && Array.isArray(fields.state.selection)) {
+        console.log('[MobileRepair] Using state selection values as stages');
+        return fields.state.selection.map(([value, label], idx) => ({
+          id: value,
+          name: label,
+          sequence: idx + 1,
+          isStateSelection: true,
+        }));
+      }
+    } catch {}
+
+    // Absolute fallback — use state values (not numeric IDs)
+    return [
+      { id: 'draft', name: 'Draft', sequence: 1, isStateSelection: true },
+      { id: 'in_inspection', name: 'In Inspection', sequence: 2, isStateSelection: true },
+      { id: 'quotation', name: 'Quotation', sequence: 3, isStateSelection: true },
+      { id: 'repair', name: 'Repair', sequence: 4, isStateSelection: true },
+      { id: 'done', name: 'Completed', sequence: 5, isStateSelection: true },
+    ];
+  } catch (error) {
+    console.error('fetchJobCardStagesOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+export const createJobCardOdoo = async (payload) => {
+  try {
+    const headers = await ensureOdooSession();
+    const data = { ...payload };
+    // Convert relational fields to integer IDs
+    ['partner_id', 'brand_id', 'series_id', 'model_id', 'team_id', 'assigned_to', 'responsible_id', 'issue_type_id'].forEach(f => {
+      if (data[f] && typeof data[f] === 'object') data[f] = data[f].id;
+      if (data[f] && typeof data[f] === 'string') {
+        const n = parseInt(data[f], 10);
+        if (!isNaN(n)) data[f] = n; else delete data[f];
+      }
+    });
+    // Remove empty/null values
+    Object.keys(data).forEach(k => { if (data[k] === undefined || data[k] === '' || data[k] === null) delete data[k]; });
+
+    // Discover valid fields via fields_get and strip unknown ones (prevents 400/error)
+    try {
+      const { result: validFields } = await callOdooWithModelFallback(
+        JOB_CARD_MODELS, 'fields_get', [], { attributes: ['type'] }, headers
+      );
+      if (validFields) {
+        const validSet = new Set(Object.keys(validFields));
+        Object.keys(data).forEach(k => {
+          if (k !== 'id' && !validSet.has(k)) {
+            console.log(`[MobileRepair] createJobCard: removing unknown field "${k}"`);
+            delete data[k];
+          }
+        });
+      }
+    } catch (e) {
+      console.log('[MobileRepair] fields_get check failed, sending as-is:', e?.message);
+    }
+
+    console.log('[MobileRepair] createJobCard payload keys:', Object.keys(data).join(', '));
+    console.log('[MobileRepair] createJobCard issue value:', JSON.stringify(data.issue), '| issue_type_id:', data.issue_type_id);
+
+    if (data.id) {
+      const id = data.id; delete data.id;
+      await callOdooWithModelFallback(JOB_CARD_MODELS, 'write', [[id], data], {}, headers);
+      return id;
+    } else {
+      const { result } = await callOdooWithModelFallback(JOB_CARD_MODELS, 'create', [data], {}, headers);
+      return Array.isArray(result) ? result[0] : result;
+    }
+  } catch (error) {
+    console.error('createJobCardOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const updateJobCardStageOdoo = async (jobCardId, stageId) => {
+  try {
+    const headers = await ensureOdooSession();
+    // If stageId is a string, it's a state selection value — write state field
+    if (typeof stageId === 'string') {
+      await callOdooWithModelFallback(JOB_CARD_MODELS, 'write', [[jobCardId], { state: stageId }], {}, headers);
+    } else {
+      await callOdooWithModelFallback(JOB_CARD_MODELS, 'write', [[jobCardId], { stage_id: stageId }], {}, headers);
+    }
+    return true;
+  } catch (error) {
+    console.error('updateJobCardStageOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Move job card to next stage — tries action methods first, then write state/stage_id
+export const moveJobCardToNextStageOdoo = async (jobCardId, targetState) => {
+  const headers = await ensureOdooSession();
+
+  // Map target state to action method names to try
+  const ACTION_METHODS = {
+    'inspection': ['action_start_inspection', 'action_inspect', 'action_in_inspection'],
+    'quotation': ['action_create_quotation', 'action_quotation'],
+    'repair': ['action_start_repair', 'action_repair'],
+    'completed': ['action_done', 'action_complete', 'action_mark_completed'],
+    'cancelled': ['action_cancel'],
+  };
+
+  // Step 1: Try action methods on the model
+  const methods = ACTION_METHODS[targetState] || [];
+  for (const method of methods) {
+    try {
+      await callOdooWithModelFallback(JOB_CARD_MODELS, method, [[jobCardId]], {}, headers);
+      console.log('[MobileRepair] Stage transition via ' + method + ' succeeded');
+      return true;
+    } catch (e) {
+      console.log('[MobileRepair] Action ' + method + ' failed:', e?.message || e?.data?.message || '');
+      continue;
+    }
+  }
+
+  // Step 2: Try writing state field directly
+  const STATE_VALUES = {
+    'inspection': ['in_inspection', 'inspection', 'inspect'],
+    'quotation': ['quotation', 'quote'],
+    'repair': ['repair', 'in_repair', 'in_progress'],
+    'completed': ['done', 'completed', 'complete'],
+    'cancelled': ['cancelled', 'cancel'],
+  };
+
+  const stateValues = STATE_VALUES[targetState] || [targetState];
+  for (const stateVal of stateValues) {
+    try {
+      await callOdooWithModelFallback(JOB_CARD_MODELS, 'write', [[jobCardId], { state: stateVal }], {}, headers);
+      console.log('[MobileRepair] Stage transition via state=' + stateVal + ' succeeded');
+      return true;
+    } catch { continue; }
+  }
+
+  // Step 3: Last resort — discover stage model and write stage_id
+  try {
+    const { result: fields } = await callOdooWithModelFallback(
+      JOB_CARD_MODELS, 'fields_get', [],
+      { attributes: ['type', 'relation'] }, headers
+    );
+    if (fields?.stage_id?.relation) {
+      const stageModel = fields.stage_id.relation;
+      const resp = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: {
+          model: stageModel, method: 'search_read', args: [],
+          kwargs: { domain: [], fields: ['id', 'name', 'sequence'], order: 'sequence asc', limit: 20 },
+        }},
+        { headers, timeout: reqTimeout }
+      );
+      if (!resp.data?.error && resp.data?.result) {
+        const allStages = resp.data.result;
+        const target = allStages.find(s => matchStage(s.name) === targetState);
+        if (target) {
+          await callOdooWithModelFallback(JOB_CARD_MODELS, 'write', [[jobCardId], { stage_id: target.id }], {}, headers);
+          console.log('[MobileRepair] Stage transition via stage_id=' + target.id + ' succeeded');
+          return true;
+        }
+      }
+    }
+  } catch {}
+
+  throw new Error('Failed to move job card to ' + targetState);
+};
+
+// ---- Model Discovery via fields_get ----
+// Discovers the actual Odoo model names for Many2one fields on job.card
+let _discoveredRelatedModels = null;
+
+export const discoverJobCardRelatedModelsOdoo = async () => {
+  if (_discoveredRelatedModels) return _discoveredRelatedModels;
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      JOB_CARD_MODELS, 'fields_get', [],
+      { attributes: ['type', 'relation', 'string'] }, headers
+    );
+    if (!result) return null;
+
+    const models = {};
+    const fieldMap = {
+      'device_brand_id': 'brand',
+      'device_series_id': 'series',
+      'device_model_id': 'model',
+      'repair_team_id': 'team',
+      'stage_id': 'stage',
+      'assigned_to': 'user',
+      'responsible_id': 'responsible',
+    };
+
+    for (const [field, key] of Object.entries(fieldMap)) {
+      if (result[field] && result[field].relation) {
+        models[key] = result[field].relation;
+      }
+    }
+    console.log('[MobileRepair] Discovered related models:', JSON.stringify(models));
+    _discoveredRelatedModels = models;
+    return models;
+  } catch (error) {
+    console.error('[MobileRepair] discoverModels error:', error?.message || error);
+    return null;
+  }
+};
+
+// Helper: search_read on a discovered model with fallback names
+// Uses kwargs-based domain (matching the working fetchProductsOdoo pattern)
+const fetchFromDiscoveredModel = async (discoveredKey, fallbackModels, domain, fields, limit, order) => {
+  const headers = await ensureOdooSession();
+  const discovered = await discoverJobCardRelatedModelsOdoo();
+  const modelNames = discovered?.[discoveredKey]
+    ? [discovered[discoveredKey], ...fallbackModels]
+    : fallbackModels;
+  console.log(`[MobileRepair] Fetching ${discoveredKey} from models:`, modelNames);
+  let lastError = null;
+  for (const model of modelNames) {
+    try {
+      const resp = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0', method: 'call',
+          params: {
+            model, method: 'search_read',
+            args: [],
+            kwargs: { domain, fields, limit, order },
+          },
+        },
+        { headers, timeout: reqTimeout }
+      );
+      if (resp.data.error) { lastError = resp.data.error; console.warn(`[MobileRepair] Model ${model} failed:`, resp.data.error?.data?.message || 'error'); continue; }
+      console.log(`[MobileRepair] Model ${model} succeeded, got ${(resp.data.result || []).length} records`);
+      return resp.data.result || [];
+    } catch (e) { lastError = e; console.warn(`[MobileRepair] Model ${model} exception:`, e.message); continue; }
+  }
+  throw lastError || new Error(`All model names failed for ${discoveredKey}`);
+};
+
+export const fetchDeviceBrandsOdoo = async ({ limit = 100 } = {}) => {
+  try {
+    const result = await fetchFromDiscoveredModel(
+      'brand', ['device.brand', 'mobile.brand', 'mobile.repair.brand', 'mobile.repair.device.brand'],
+      [], ['id', 'name'], limit, 'name asc'
+    );
+    console.log(`[MobileRepair] Brands fetched: ${result.length}`);
+    return result.map(b => ({ id: b.id, name: b.name || '' }));
+  } catch (error) {
+    console.error('[MobileRepair] fetchDeviceBrandsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchDeviceSeriesOdoo = async ({ brandId, limit = 100 } = {}) => {
+  try {
+    // Try multiple domain field names for brand filter
+    const domains = brandId
+      ? [['brand_id', '=', brandId]]
+      : [];
+    const result = await fetchFromDiscoveredModel(
+      'series', ['device.series', 'mobile.series', 'mobile.repair.series', 'mobile.repair.device.series'],
+      domains, ['id', 'name'], limit, 'name asc'
+    );
+    console.log(`[MobileRepair] Series fetched: ${result.length}`);
+    return result.map(s => ({ id: s.id, name: s.name || '' }));
+  } catch (error) {
+    console.error('[MobileRepair] fetchDeviceSeriesOdoo error:', error?.message || error);
+    // If domain field name is wrong, retry without filter
+    if (brandId) {
+      try {
+        const result = await fetchFromDiscoveredModel(
+          'series', ['device.series', 'mobile.series', 'mobile.repair.series', 'mobile.repair.device.series'],
+          [], ['id', 'name'], limit, 'name asc'
+        );
+        return result.map(s => ({ id: s.id, name: s.name || '' }));
+      } catch { return []; }
+    }
+    return [];
+  }
+};
+
+export const fetchDeviceModelsOdoo = async ({ seriesId, limit = 100 } = {}) => {
+  try {
+    const domains = seriesId
+      ? [['series_id', '=', seriesId]]
+      : [];
+    const result = await fetchFromDiscoveredModel(
+      'model', ['device.model', 'mobile.model', 'mobile.repair.model', 'mobile.repair.device.model'],
+      domains, ['id', 'name'], limit, 'name asc'
+    );
+    console.log(`[MobileRepair] Models fetched: ${result.length}`);
+    return result.map(m => ({ id: m.id, name: m.name || '' }));
+  } catch (error) {
+    console.error('[MobileRepair] fetchDeviceModelsOdoo error:', error?.message || error);
+    // If domain field name is wrong, retry without filter
+    if (seriesId) {
+      try {
+        const result = await fetchFromDiscoveredModel(
+          'model', ['device.model', 'mobile.model', 'mobile.repair.model', 'mobile.repair.device.model'],
+          [], ['id', 'name'], limit, 'name asc'
+        );
+        return result.map(m => ({ id: m.id, name: m.name || '' }));
+      } catch { return []; }
+    }
+    return [];
+  }
+};
+
+export const fetchRepairTeamsOdoo = async ({ limit = 50 } = {}) => {
+  try {
+    const result = await fetchFromDiscoveredModel(
+      'team', ['repair.team', 'mobile.repair.team', 'mobile.repair.repair.team'],
+      [], ['id', 'name'], limit, 'name asc'
+    );
+    console.log(`[MobileRepair] Repair teams fetched: ${result.length}`);
+    return result.map(t => ({ id: t.id, name: t.name || '' }));
+  } catch (error) {
+    console.error('[MobileRepair] fetchRepairTeamsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchCustomersForRepairOdoo = async ({ searchText = '', limit = 100 } = {}) => {
+  try {
+    const headers = await ensureOdooSession();
+    let domain = [];
+    if (searchText) domain = [['name', 'ilike', searchText]];
+    const resp = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'res.partner', method: 'search_read',
+          args: [],
+          kwargs: { domain, fields: ['id', 'name', 'phone', 'email'], limit, order: 'name asc' },
+        },
+      },
+      { headers }
+    );
+    if (resp.data.error) {
+      console.error('[MobileRepair] fetchCustomersForRepairOdoo error:', resp.data.error?.data?.message || resp.data.error);
+      return [];
+    }
+    console.log(`[MobileRepair] Customers fetched: ${(resp.data.result || []).length}`);
+    return (resp.data.result || []).map(p => ({ id: p.id, name: p.name || '', phone: p.phone || '', email: p.email || '' }));
+  } catch (error) {
+    console.error('[MobileRepair] fetchCustomersForRepairOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Job Card Action Methods (stage transitions) — all use moveJobCardToNextStageOdoo
+export const jobCardCreateQuotationOdoo = async (jobCardId) => {
+  return moveJobCardToNextStageOdoo(jobCardId, 'quotation');
+};
+
+export const jobCardStartRepairOdoo = async (jobCardId) => {
+  return moveJobCardToNextStageOdoo(jobCardId, 'repair');
+};
+
+export const jobCardCreateInvoiceOdoo = async (jobCardId) => {
+  // Invoice creation is a special action, try dedicated methods
+  const headers = await ensureOdooSession();
+  for (const method of ['action_create_invoice', 'action_invoice']) {
+    try {
+      await callOdooWithModelFallback(JOB_CARD_MODELS, method, [[jobCardId]], {}, headers);
+      return true;
+    } catch { continue; }
+  }
+  throw new Error('Invoice creation not available');
+};
+
+export const jobCardCancelOdoo = async (jobCardId) => {
+  return moveJobCardToNextStageOdoo(jobCardId, 'cancelled');
+};
+
+export const jobCardMarkCompletedOdoo = async (jobCardId) => {
+  return moveJobCardToNextStageOdoo(jobCardId, 'completed');
+};
+
+// ---- Generate Steps from Diagnosis ----
+export const generateStepsFromDiagnosisOdoo = async (jobCardId) => {
+  try {
+    const headers = await ensureOdooSession();
+
+    // 1. Try Odoo's built-in method first
+    try {
+      const { result } = await callOdooWithModelFallback(
+        JOB_CARD_MODELS, 'action_generate_repair_steps', [[jobCardId]], {}, headers, 60000
+      );
+      console.log('[GenerateSteps] Odoo method succeeded');
+      return result || true;
+    } catch (odooErr) {
+      console.log('[GenerateSteps] Odoo method failed, parsing AI report instead:', odooErr?.data?.message || '');
+    }
+
+    // 2. Fallback: parse AI diagnosis report and create steps manually
+    const { result: jcData } = await callOdooWithModelFallback(
+      JOB_CARD_MODELS, 'read', [[jobCardId]], { fields: ['ai_diagnosis'] }, headers
+    );
+    const html = jcData?.[0]?.ai_diagnosis || '';
+    if (!html) throw new Error('No AI diagnosis report found. Run AI Diagnosis first.');
+
+    // Parse "Repair Plan" section from the HTML
+    const repairPlanMatch = html.match(/Repair Plan[\s\S]*?<ol>([\s\S]*?)<\/ol>/i);
+    if (!repairPlanMatch) throw new Error('No Repair Plan found in diagnosis report. Run AI Diagnosis first.');
+
+    const liItems = repairPlanMatch[1].match(/<li>([\s\S]*?)<\/li>/gi) || [];
+    if (liItems.length === 0) throw new Error('No steps found in Repair Plan.');
+
+    const steps = liItems.map((li, idx) => {
+      const text = li.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      // Extract title: text before first "("
+      const titleMatch = text.match(/^(.+?)\s*\(\d+/);
+      const title = titleMatch ? titleMatch[1].trim() : text.substring(0, 60);
+      // Extract minutes: "(5 min"
+      const minMatch = text.match(/\((\d+)\s*min/i);
+      const minutes = minMatch ? parseInt(minMatch[1]) : 10;
+      // Extract difficulty: "easy/medium/hard/expert"
+      const diffMatch = text.match(/\b(easy|medium|hard|expert)\b/i);
+      const difficulty = diffMatch ? diffMatch[1].toLowerCase() : 'medium';
+      // Instructions: everything after the title/duration part
+      const instrStart = text.indexOf(')');
+      const instruction = instrStart > 0 ? text.substring(instrStart + 1).trim() : '';
+
+      return {
+        job_card_id: jobCardId,
+        sequence: (idx + 1) * 10,
+        name: title,
+        instruction: instruction ? `<p>${instruction}</p>` : '',
+        difficulty,
+        estimated_minutes: minutes,
+        source: 'ai',
+        status: 'pending',
+      };
+    });
+
+    console.log('[GenerateSteps] Parsed', steps.length, 'steps from AI report');
+
+    // 3. Create repair.step records
+    for (const step of steps) {
+      await callOdooWithModelFallback(['repair.step'], 'create', [step], {}, headers);
+    }
+    console.log('[GenerateSteps] Created', steps.length, 'repair steps');
+    return true;
+  } catch (error) {
+    console.error('generateStepsFromDiagnosisOdoo error:', error?.message || error);
+    throw new Error(error?.message || 'Failed to generate steps');
+  }
+};
+
+// ---- Service Lines (one2many on job.card) ----
+export const fetchServiceLinesOdoo = async (jobCardId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      ['job.card.service.line'], 'search_read', [],
+      { domain: [['job_card_id', '=', jobCardId]], fields: ['product_id', 'description', 'quantity', 'uom_id', 'unit_price', 'tax_ids', 'subtotal', 'tax_amount', 'sequence'], order: 'sequence asc', limit: 50 }, headers
+    );
+    return (result || []).map(r => ({
+      id: r.id,
+      service: Array.isArray(r.product_id) ? r.product_id[1] : (r.product_id || ''),
+      service_id: Array.isArray(r.product_id) ? r.product_id[0] : r.product_id,
+      description: r.description || '',
+      quantity: r.quantity || 0,
+      uom: Array.isArray(r.uom_id) ? r.uom_id[1] : '',
+      unit_price: r.unit_price || 0,
+      subtotal: r.subtotal || 0,
+      tax_amount: r.tax_amount || 0,
+    }));
+  } catch (error) {
+    console.error('fetchServiceLinesOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+export const addServiceLineOdoo = async (jobCardId, { productId, description, quantity, unitPrice }) => {
+  try {
+    const headers = await ensureOdooSession();
+    const vals = {
+      job_card_id: jobCardId,
+      product_id: productId || false,
+      description: description || '',
+      quantity: quantity || 1,
+      unit_price: unitPrice || 0,
+    };
+    const { result } = await callOdooWithModelFallback(['job.card.service.line'], 'create', [vals], {}, headers);
+    return result;
+  } catch (error) {
+    console.error('addServiceLineOdoo error:', error?.message || error);
+    throw new Error(error?.data?.message || error?.message || 'Failed to add service line');
+  }
+};
+
+export const deleteServiceLineOdoo = async (lineId) => {
+  try {
+    const headers = await ensureOdooSession();
+    await callOdooWithModelFallback(['job.card.service.line'], 'unlink', [[lineId]], {}, headers);
+    return true;
+  } catch (error) {
+    console.error('deleteServiceLineOdoo error:', error?.message || error);
+    throw new Error(error?.data?.message || error?.message || 'Failed to delete service line');
+  }
+};
+
+// ---- Diagnosis Results (One2many on job.card) ----
+export const fetchDiagnosisResultsOdoo = async (jobCardId) => {
+  try {
+    const headers = await ensureOdooSession();
+    // These are diagnosis_line_ids on the job card — fetch via diagnosis model
+    const { result } = await callOdooWithModelFallback(
+      DIAGNOSIS_MODELS, 'search_read', [],
+      { domain: [['job_card_id', '=', jobCardId]], fields: [], limit: 50, order: 'id asc' }, headers
+    );
+    const records = result || [];
+    console.log('[DiagResults] Fetched:', records.length, 'for job card:', jobCardId);
+    if (records.length > 0) {
+      console.log('[DiagResults] Sample keys:', Object.keys(records[0]).join(', '));
+      // Dump first record raw values so we can see the correct field names
+      const r0 = records[0];
+      console.log('[DiagResults] RAW FIRST RECORD:', JSON.stringify(r0, null, 2));
+    }
+    return records.map(r => ({
+      id: r.id,
+      test_name: r.test_name || r.name || '',
+      category: Array.isArray(r.category_id) ? r.category_id[1] : (r.category || ''),
+      symptom_tested: Array.isArray(r.symptom_id) ? r.symptom_id[1] : (r.symptom_tested || ''),
+      result: r.result || r.test_result || 'not_tested',
+      ai_confidence: r.ai_confidence || r.confidence || r.confidence_score || r.ai_confidence_score || 0,
+      root_cause: Array.isArray(r.root_cause_id) ? r.root_cause_id[1] : (r.root_cause || ''),
+    }));
+  } catch (error) {
+    console.error('fetchDiagnosisResultsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// Update diagnosis result (pass / fail / not_tested)
+export const updateDiagnosisResultOdoo = async (diagId, result) => {
+  try {
+    const headers = await ensureOdooSession();
+    await callOdooWithModelFallback(
+      DIAGNOSIS_MODELS, 'write', [[diagId], { result }], {}, headers
+    );
+    return true;
+  } catch (error) {
+    console.error('updateDiagnosisResultOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Delete a diagnosis record
+export const deleteDiagnosisOdoo = async (diagId) => {
+  try {
+    const headers = await ensureOdooSession();
+    await callOdooWithModelFallback(
+      DIAGNOSIS_MODELS, 'unlink', [[diagId]], {}, headers
+    );
+    return true;
+  } catch (error) {
+    console.error('deleteDiagnosisOdoo error:', error?.message || error);
+    throw error;
+  }
+};
+
+// ---- AI Suggested Spare Parts ----
+const SUGGESTED_PARTS_MODELS = ['ai.suggested.part', 'job.card.suggested.part', 'repair.suggested.part', 'ai.spare.part.suggestion'];
+
+export const fetchAISuggestedPartsOdoo = async (jobCardId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      SUGGESTED_PARTS_MODELS, 'search_read', [],
+      { domain: [['job_card_id', '=', jobCardId]], fields: [], limit: 50, order: 'id asc' }, headers
+    );
+    const records = result || [];
+    console.log('[SuggestedParts] Fetched:', records.length);
+    if (records.length > 0) console.log('[SuggestedParts] Sample keys:', Object.keys(records[0]).join(', '));
+    return records.map(r => ({
+      id: r.id,
+      part_name: r.ai_part_name || r.name || r.part_name || '',
+      quantity: r.quantity || r.qty || 1,
+      estimated_cost: r.estimated_cost || r.cost || 0,
+      matched_product: Array.isArray(r.matched_product_id) ? r.matched_product_id[1] : (r.matched_product || ''),
+      status: r.status || r.state || '',
+      in_stock: r.in_stock || false,
+      stock_status: r.stock_status || '',
+    }));
+  } catch (error) {
+    console.error('fetchAISuggestedPartsOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
+// ---- Diagnosis & Repair Steps Counts for Job Card ----
+export const fetchJobCardCountsOdoo = async (jobCardId) => {
+  try {
+    const headers = await ensureOdooSession();
+    let diagCount = 0;
+    let stepsCount = 0;
+    try {
+      const { result: d } = await callOdooWithModelFallback(
+        DIAGNOSIS_MODELS, 'search_count', [], { domain: [['job_card_id', '=', jobCardId]] }, headers
+      );
+      diagCount = d || 0;
+    } catch (e) { /* model may not exist */ }
+    try {
+      const { result: s } = await callOdooWithModelFallback(
+        REPAIR_STEP_MODELS, 'search_count', [], { domain: [['job_card_id', '=', jobCardId]] }, headers
+      );
+      stepsCount = s || 0;
+    } catch (e) { /* model may not exist */ }
+    return { diagnosisCount: diagCount, repairStepsCount: stepsCount };
+  } catch (error) {
+    return { diagnosisCount: 0, repairStepsCount: 0 };
+  }
+};
+
+// AI Diagnosis
+export const fetchJobCardSymptomsOdoo = async () => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      ['repair.symptom', 'mobile.repair.symptom', 'job.card.symptom'], 'search_read', [],
+      { domain: [], fields: ['id', 'name'], limit: 100, order: 'name asc' }, headers
+    );
+    return (result || []).map(s => ({ id: s.id, name: s.name || '' }));
+  } catch (error) { return []; }
+};
+
+export const runAIDiagnosisOdoo = async (jobCardId, options = {}) => {
+  try {
+    const headers = await ensureOdooSession();
+    const {
+      reportedProblem = '',
+      symptomIds = [],
+      searchForums = true,
+      useAI = true,
+      useKnowledgeBase = true,
+    } = options;
+
+    // Step 1: Create repair.diagnosis.wizard record
+    const wizardVals = {
+      job_card_id: jobCardId,
+      reported_problem: reportedProblem || '-',
+      search_forums: searchForums,
+      use_ai: useAI,
+      use_knowledge_base: useKnowledgeBase,
+    };
+    if (symptomIds.length > 0) {
+      wizardVals.symptom_ids = [[6, 0, symptomIds]];
+    }
+    console.log('[AIDiagnosis] Creating wizard with:', JSON.stringify(wizardVals));
+    const { result: wizardId } = await callOdooWithModelFallback(['repair.diagnosis.wizard'], 'create', [wizardVals], {}, headers);
+    console.log('[AIDiagnosis] Wizard created, ID:', wizardId);
+
+    // Step 2: Call action_run_diagnosis on the wizard
+    console.log('[AIDiagnosis] Running action_run_diagnosis...');
+    await callOdooWithModelFallback(['repair.diagnosis.wizard'], 'action_run_diagnosis', [[wizardId]], {}, headers, 120000);
+
+    // Step 3: Read back result_text from the wizard
+    const { result: wizData } = await callOdooWithModelFallback(['repair.diagnosis.wizard'], 'read', [[wizardId], ['result_text', 'state']], {}, headers);
+    const resultHtml = wizData?.[0]?.result_text || '';
+    console.log('[AIDiagnosis] Wizard state:', wizData?.[0]?.state, '| result_text length:', resultHtml.length);
+
+    // Step 4: Auto-generate repair steps from the diagnosis
+    try {
+      await callOdooWithModelFallback(JOB_CARD_MODELS, 'action_generate_repair_steps', [[jobCardId]], {}, headers, 60000);
+      console.log('[AIDiagnosis] Repair steps generated');
+    } catch (e) {
+      console.log('[AIDiagnosis] Generate steps skipped:', e?.data?.message || e?.message || '');
+    }
+
+    if (resultHtml) {
+      return stripOdooHtml(resultHtml);
+    }
+
+    // Fallback: read ai_diagnosis from the job card
+    const { result: jcData } = await callOdooWithModelFallback(
+      JOB_CARD_MODELS, 'read', [[jobCardId]], { fields: ['ai_diagnosis'] }, headers
+    );
+    const report = jcData?.[0]?.ai_diagnosis || '';
+    return stripOdooHtml(report) || 'AI Diagnosis completed but no report text was returned.';
+  } catch (error) {
+    console.error('[AIDiagnosis] Error:', error?.data?.message || error?.message || error);
+    throw new Error(error?.data?.message || error?.message || 'AI Diagnosis failed');
+  }
+};
+
+// ---- Vinafix Forum Search ----
+const VINAFIX_BASE = 'https://vinafix.com';
+const VINAFIX_USER = 'SHINIL';
+const VINAFIX_PASS = '@BIOS@';
+const VINAFIX_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+let _vinafixCookies = null;
+let _vinafixLoginAttempt = 0;
+
+const _extractCookies = (resp) => {
+  // React Native may return set-cookie in different formats
+  const raw = resp.headers['set-cookie'] || resp.headers['Set-Cookie'] || [];
+  const arr = Array.isArray(raw) ? raw : [raw];
+  return arr.filter(Boolean).map(c => c.split(';')[0]);
+};
+
+const _mergeCookies = (existing, newOnes) => {
+  const map = {};
+  [...existing, ...newOnes].forEach(c => {
+    const eq = c.indexOf('=');
+    if (eq > 0) map[c.substring(0, eq).trim()] = c;
+  });
+  return Object.values(map).join('; ');
+};
+
+const _vinafixLogin = async () => {
+  _vinafixLoginAttempt++;
+  console.log(`[Vinafix] Login attempt #${_vinafixLoginAttempt}...`);
+  try {
+    // 1. GET login page → CSRF token + cookies
+    const loginPage = await axios.get(`${VINAFIX_BASE}/login/`, {
+      timeout: 15000,
+      headers: { 'User-Agent': VINAFIX_UA, 'Accept': 'text/html' },
+    });
+
+    const pageHtml = typeof loginPage.data === 'string' ? loginPage.data : '';
+    console.log('[Vinafix] Login page size:', pageHtml.length);
+
+    // Try multiple CSRF token patterns
+    let xfToken = '';
+    const patterns = [
+      /name="_xfToken"\s+value="([^"]+)"/,
+      /data-csrf="([^"]+)"/,
+      /"csrf"\s*:\s*"([^"]+)"/,
+      /_xfToken['"]\s*(?:value|:)\s*['"]\s*([^'"]+)/,
+    ];
+    for (const p of patterns) {
+      const m = pageHtml.match(p);
+      if (m) { xfToken = m[1]; break; }
+    }
+    console.log('[Vinafix] CSRF token:', xfToken ? `${xfToken.substring(0, 20)}...` : 'NOT FOUND');
+
+    let cookieParts = _extractCookies(loginPage);
+    console.log('[Vinafix] Login page cookies:', cookieParts.length, cookieParts.map(c => c.split('=')[0]).join(', '));
+
+    // 2. POST login
+    const formData = `login=${encodeURIComponent(VINAFIX_USER)}&password=${encodeURIComponent(VINAFIX_PASS)}&_xfToken=${encodeURIComponent(xfToken)}&remember=1&_xfRedirect=${encodeURIComponent('/')}`;
+    console.log('[Vinafix] Posting login...');
+
+    const loginResp = await axios.post(`${VINAFIX_BASE}/login/login`, formData, {
+      timeout: 15000,
+      maxRedirects: 0,
+      validateStatus: (s) => s >= 200 && s < 400,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': cookieParts.join('; '),
+        'User-Agent': VINAFIX_UA,
+        'Referer': `${VINAFIX_BASE}/login/`,
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+    });
+
+    console.log('[Vinafix] Login response status:', loginResp.status);
+    const newCookies = _extractCookies(loginResp);
+    console.log('[Vinafix] Login response cookies:', newCookies.length, newCookies.map(c => c.split('=')[0]).join(', '));
+
+    const allCookies = _mergeCookies(cookieParts, newCookies);
+    _vinafixCookies = allCookies;
+
+    // Check if login succeeded (xf_user cookie should be present)
+    const hasUserCookie = allCookies.includes('xf_user');
+    console.log('[Vinafix] Login', hasUserCookie ? 'SUCCESSFUL (xf_user cookie found)' : 'may have failed (no xf_user cookie)');
+
+    // If login resp is HTML, check for error messages
+    if (typeof loginResp.data === 'string' && loginResp.data.includes('Incorrect password')) {
+      throw new Error('Incorrect username or password');
+    }
+
+    return allCookies;
+  } catch (err) {
+    console.error('[Vinafix] Login failed:', err?.message, 'Status:', err?.response?.status);
+    _vinafixCookies = null;
+    throw new Error('Vinafix login failed: ' + (err?.message || 'Unknown error'));
+  }
+};
+
+export const searchVinafixForums = async (query) => {
+  try {
+    if (!query) return [];
+    console.log('[Vinafix] Searching for:', query);
+
+    // Login if no session
+    if (!_vinafixCookies) await _vinafixLogin();
+
+    // 1. GET search page for CSRF token
+    console.log('[Vinafix] Fetching search page...');
+    const tokenPage = await axios.get(`${VINAFIX_BASE}/search/`, {
+      timeout: 10000,
+      headers: { 'Cookie': _vinafixCookies, 'User-Agent': VINAFIX_UA, 'Accept': 'text/html' },
+    });
+
+    const tokenHtml = typeof tokenPage.data === 'string' ? tokenPage.data : '';
+    // Merge any new cookies
+    const tokenCookies = _extractCookies(tokenPage);
+    if (tokenCookies.length > 0) {
+      _vinafixCookies = _mergeCookies(_vinafixCookies.split('; '), tokenCookies);
+    }
+
+    let xfToken = '';
+    const tokenMatch = tokenHtml.match(/name="_xfToken"\s+value="([^"]+)"/) ||
+                        tokenHtml.match(/"csrf"\s*:\s*"([^"]+)"/) ||
+                        tokenHtml.match(/data-csrf="([^"]+)"/);
+    if (tokenMatch) xfToken = tokenMatch[1];
+    console.log('[Vinafix] Search page token:', xfToken ? 'found' : 'NOT FOUND');
+
+    // Check if we're logged in
+    if (tokenHtml.includes('>Log in<') && !tokenHtml.includes(VINAFIX_USER)) {
+      console.log('[Vinafix] Not logged in, re-authenticating...');
+      _vinafixCookies = null;
+      if (_vinafixLoginAttempt < 3) {
+        await _vinafixLogin();
+        return searchVinafixForums(query);
+      }
+      throw new Error('Login failed after retries');
+    }
+
+    // 2. POST search
+    console.log('[Vinafix] Posting search...');
+    const searchForm = `keywords=${encodeURIComponent(query)}&type=post&order=relevance&_xfToken=${encodeURIComponent(xfToken)}`;
+    const searchResp = await axios.post(`${VINAFIX_BASE}/search/search`, searchForm, {
+      timeout: 20000,
+      maxRedirects: 5,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': _vinafixCookies,
+        'User-Agent': VINAFIX_UA,
+        'Referer': `${VINAFIX_BASE}/search/`,
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+    });
+
+    const html = typeof searchResp.data === 'string' ? searchResp.data : '';
+    console.log('[Vinafix] Search response status:', searchResp.status, 'size:', html.length);
+    console.log('[Vinafix] Response URL:', searchResp.request?.responseURL || searchResp.config?.url || 'unknown');
+
+    // Log a sample of the HTML to understand structure
+    const sampleIdx = html.indexOf('contentRow');
+    if (sampleIdx > -1) {
+      console.log('[Vinafix] Found contentRow at index', sampleIdx);
+      console.log('[Vinafix] HTML sample:', html.substring(sampleIdx, sampleIdx + 500));
+    } else {
+      // Try other XenForo patterns
+      const altPatterns = ['search-result', 'listPlain', 'block-body', 'js-searchResult', 'data-content-type'];
+      for (const pat of altPatterns) {
+        const idx = html.indexOf(pat);
+        if (idx > -1) {
+          console.log(`[Vinafix] Found "${pat}" at index ${idx}`);
+          console.log('[Vinafix] HTML sample:', html.substring(Math.max(0, idx - 100), idx + 400));
+          break;
+        }
+      }
+      if (!altPatterns.some(p => html.includes(p))) {
+        // Log first 1000 chars to see what we actually got
+        console.log('[Vinafix] No results patterns found. First 1000 chars:', html.substring(0, 1000));
+      }
+    }
+
+    // 3. Parse search results — try multiple XenForo HTML patterns
+    const results = [];
+
+    // Pattern 1: contentRow-title with thread links
+    if (html.includes('contentRow')) {
+      const blocks = html.split(/contentRow-title/g);
+      for (let i = 1; i < blocks.length && results.length < 10; i++) {
+        const block = blocks[i];
+        const linkMatch = block.match(/href="([^"]+)"[^>]*>([^<]+)/);
+        const snippetMatch = block.match(/contentRow-snippet[^>]*>([\s\S]*?)<\/div/);
+        if (linkMatch) {
+          const rawUrl = linkMatch[1];
+          const url = rawUrl.startsWith('http') ? rawUrl : `${VINAFIX_BASE}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
+          const title = linkMatch[2].replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n)).replace(/&amp;/g, '&').trim();
+          const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim() : '';
+          if (title.length > 2) results.push({ title, url, snippet });
+        }
+      }
+    }
+
+    // Pattern 2: XenForo 2.x search results with data-content-type
+    if (results.length === 0 && html.includes('data-content-type')) {
+      const blocks = html.split(/data-content-type/g);
+      for (let i = 1; i < blocks.length && results.length < 10; i++) {
+        const block = blocks[i];
+        const linkMatch = block.match(/href="([^"]+)"[^>]*class="[^"]*"[^>]*>([^<]+)/);
+        if (linkMatch) {
+          const rawUrl = linkMatch[1];
+          const url = rawUrl.startsWith('http') ? rawUrl : `${VINAFIX_BASE}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
+          const title = linkMatch[2].replace(/&#\d+;/g, '').replace(/&amp;/g, '&').trim();
+          if (title.length > 2) results.push({ title, url, snippet: '' });
+        }
+      }
+    }
+
+    // Pattern 3: generic link extraction from search results area
+    if (results.length === 0) {
+      const threadLinks = html.match(/href="(\/threads\/[^"]+)"[^>]*>([^<]{3,})/g) || [];
+      const seen = new Set();
+      for (const m of threadLinks) {
+        if (results.length >= 10) break;
+        const parts = m.match(/href="([^"]+)"[^>]*>([^<]+)/);
+        if (parts && !seen.has(parts[1])) {
+          seen.add(parts[1]);
+          const url = `${VINAFIX_BASE}${parts[1]}`;
+          const title = parts[2].replace(/&#\d+;/g, '').replace(/&amp;/g, '&').trim();
+          if (title.length > 2) results.push({ title, url, snippet: '' });
+        }
+      }
+    }
+
+    console.log('[Vinafix] Parsed results:', results.length);
+    _vinafixLoginAttempt = 0; // reset on success
+    return results;
+  } catch (err) {
+    console.error('[Vinafix] Search error:', err?.message);
+    _vinafixCookies = null;
+    throw new Error('Forum search failed: ' + (err?.message || 'Unknown error'));
+  }
+};
+
+// ---- AI Estimate / Generate Estimate Wizard ----
+
+// Open the estimate wizard for a job card — discovers wizard model, gets defaults
+export const openEstimateWizardOdoo = async (jobCardId) => {
+  const headers = await ensureOdooSession();
+
+  // Step 1: Call action method on job.card to get the wizard action dict
+  const actionMethods = ['action_generate_estimate', 'action_ai_estimate', 'action_estimate', 'generate_estimate'];
+  let wizardAction = null;
+
+  for (const method of actionMethods) {
+    try {
+      const { result } = await callOdooWithModelFallback(
+        JOB_CARD_MODELS, method, [[jobCardId]], {}, headers
+      );
+      if (result && typeof result === 'object' && result.res_model) {
+        wizardAction = result;
+        console.log('[MobileRepair] Estimate wizard opened via ' + method + ', model=' + result.res_model);
+        break;
+      }
+    } catch { continue; }
+  }
+
+  if (!wizardAction) throw new Error('Estimate wizard not available');
+
+  const wizardModel = wizardAction.res_model;
+  const context = wizardAction.context || {};
+
+  // Step 2: Get default values from the wizard model
+  let defaults = {};
+  try {
+    const defaultFields = [
+      'job_card_id', 'estimated_hours', 'labor_rate', 'labor_cost',
+      'parts_cost', 'total_estimated_cost', 'notes', 'part_line_ids',
+    ];
+    const resp = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      { jsonrpc: '2.0', method: 'call', params: {
+        model: wizardModel, method: 'default_get',
+        args: [defaultFields],
+        kwargs: { context },
+      }},
+      { headers, timeout: reqTimeout }
+    );
+    if (!resp.data?.error && resp.data?.result) {
+      defaults = resp.data.result;
+    }
+  } catch (e) {
+    console.log('[MobileRepair] default_get failed:', e?.message);
+  }
+
+  // Step 3: Also try fields_get to discover field names
+  let fieldInfo = {};
+  try {
+    const resp = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      { jsonrpc: '2.0', method: 'call', params: {
+        model: wizardModel, method: 'fields_get',
+        args: [],
+        kwargs: { attributes: ['type', 'string', 'relation'] },
+      }},
+      { headers, timeout: reqTimeout }
+    );
+    if (!resp.data?.error && resp.data?.result) {
+      fieldInfo = resp.data.result;
+    }
+  } catch {}
+
+  return { wizardModel, context, defaults, fieldInfo };
+};
+
+// Apply estimate — creates wizard record with data and calls apply action
+export const applyEstimateOdoo = async (wizardModel, wizardData, context, createQuotation = false) => {
+  const headers = await ensureOdooSession();
+
+  // Create wizard record
+  const createResp = await axios.post(
+    `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+    { jsonrpc: '2.0', method: 'call', params: {
+      model: wizardModel, method: 'create',
+      args: [[wizardData]],
+      kwargs: { context },
+    }},
+    { headers, timeout: reqTimeout }
+  );
+
+  if (createResp.data?.error) {
+    throw new Error(createResp.data.error?.data?.message || 'Failed to create estimate');
+  }
+  const wizardId = Array.isArray(createResp.data?.result) ? createResp.data.result[0] : createResp.data?.result;
+
+  // Call the appropriate action
+  const applyMethods = createQuotation
+    ? ['action_apply_and_create_quotation', 'action_apply_create_quotation', 'apply_and_create_quotation']
+    : ['action_apply_estimate', 'action_apply', 'apply_estimate'];
+
+  for (const method of applyMethods) {
+    try {
+      const resp = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: {
+          model: wizardModel, method,
+          args: [[wizardId]],
+          kwargs: {},
+        }},
+        { headers, timeout: reqTimeout }
+      );
+      if (!resp.data?.error) {
+        console.log('[MobileRepair] Estimate applied via ' + method);
+        return resp.data?.result;
+      }
+    } catch { continue; }
+  }
+
+  throw new Error('Failed to apply estimate');
+};
+
+// ============================================================
+// ======  CUSTOMER VISIT & VISIT PLAN — Odoo Functions  ======
+// ============================================================
+
+const VISIT_MODELS = ['customer.visit'];
+const VISIT_PLAN_MODELS = ['visit.plan'];
+const VISIT_PURPOSE_MODELS = ['visit.purpose'];
+
+// ---- Visit Purposes (dropdown) ----
+export const fetchVisitPurposesOdoo = async () => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      VISIT_PURPOSE_MODELS, 'search_read', [],
+      { domain: [['active', '=', true]], fields: ['id', 'name'], order: 'name' }, headers
+    );
+    return (result || []).map(p => ({ id: p.id, name: p.name }));
+  } catch (err) {
+    console.error('fetchVisitPurposesOdoo error:', err?.message || err);
+    return [];
+  }
+};
+
+// ---- Employees (hr.employee) for dropdown ----
+export const fetchEmployeesOdoo = async (searchText = '') => {
+  try {
+    const headers = await ensureOdooSession();
+    let domain = [];
+    if (searchText) {
+      domain = [['name', 'ilike', searchText]];
+    }
+    const { result } = await callOdooWithModelFallback(
+      ['hr.employee'], 'search_read', [],
+      { domain, fields: ['id', 'name', 'department_id', 'parent_id'], limit: 50, order: 'name' }, headers
+    );
+    return (result || []).map(e => ({
+      id: e.id,
+      name: e.name,
+      department: Array.isArray(e.department_id) ? e.department_id[1] : '',
+      manager_id: Array.isArray(e.parent_id) ? e.parent_id[0] : null,
+      manager_name: Array.isArray(e.parent_id) ? e.parent_id[1] : '',
+    }));
+  } catch (err) {
+    console.error('fetchEmployeesOdoo error:', err?.message || err);
+    return [];
+  }
+};
+
+// ---- Customer Visits ----
+export const fetchCustomerVisitsOdoo = async ({ offset = 0, limit = 30, fromDate, toDate, customerId, employeeId } = {}) => {
+  try {
+    const headers = await ensureOdooSession();
+    let domain = [];
+    if (fromDate) domain.push(['date_time', '>=', `${fromDate} 00:00:00`]);
+    if (toDate) domain.push(['date_time', '<=', `${toDate} 23:59:59`]);
+    if (customerId) domain.push(['partner_id', '=', customerId]);
+    if (employeeId) domain.push(['employee_id', '=', employeeId]);
+
+    const { result } = await callOdooWithModelFallback(
+      VISIT_MODELS, 'search_read', [],
+      {
+        domain,
+        fields: ['id', 'name', 'partner_id', 'employee_id', 'date_time', 'purpose_id',
+          'visit_duration', 'remarks', 'latitude', 'longitude', 'location_name',
+          'visit_plan_id', 'state'],
+        offset, limit, order: 'date_time desc'
+      }, headers
+    );
+    return (result || []).map(v => ({
+      id: v.id,
+      name: v.name,
+      customer: Array.isArray(v.partner_id) ? { id: v.partner_id[0], name: v.partner_id[1] } : null,
+      employee: Array.isArray(v.employee_id) ? { id: v.employee_id[0], name: v.employee_id[1] } : null,
+      date_time: v.date_time,
+      purpose: Array.isArray(v.purpose_id) ? { id: v.purpose_id[0], name: v.purpose_id[1] } : null,
+      visit_duration: v.visit_duration,
+      remarks: v.remarks,
+      latitude: v.latitude,
+      longitude: v.longitude,
+      location_name: v.location_name,
+      visit_plan_id: Array.isArray(v.visit_plan_id) ? v.visit_plan_id[0] : null,
+      state: v.state,
+    }));
+  } catch (err) {
+    console.error('fetchCustomerVisitsOdoo error:', err?.message || err);
+    return [];
+  }
+};
+
+export const fetchCustomerVisitDetailsOdoo = async (visitId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      VISIT_MODELS, 'read', [[visitId]],
+      { fields: ['id', 'name', 'partner_id', 'employee_id', 'date_time', 'purpose_id',
+        'visit_duration', 'remarks', 'latitude', 'longitude', 'location_name',
+        'visit_plan_id', 'state'] }, headers
+    );
+    const v = result?.[0];
+    if (!v) return null;
+    return {
+      id: v.id,
+      name: v.name,
+      customer: Array.isArray(v.partner_id) ? { id: v.partner_id[0], name: v.partner_id[1] } : null,
+      employee: Array.isArray(v.employee_id) ? { id: v.employee_id[0], name: v.employee_id[1] } : null,
+      date_time: v.date_time,
+      purpose: Array.isArray(v.purpose_id) ? { id: v.purpose_id[0], name: v.purpose_id[1] } : null,
+      visit_duration: v.visit_duration,
+      remarks: v.remarks,
+      latitude: v.latitude,
+      longitude: v.longitude,
+      location_name: v.location_name,
+      visit_plan_id: Array.isArray(v.visit_plan_id) ? v.visit_plan_id[0] : null,
+      state: v.state,
+    };
+  } catch (err) {
+    console.error('fetchCustomerVisitDetailsOdoo error:', err?.message || err);
+    return null;
+  }
+};
+
+export const createCustomerVisitOdoo = async (data) => {
+  try {
+    const headers = await ensureOdooSession();
+    const vals = {
+      partner_id: data.customerId,
+      employee_id: data.employeeId,
+      date_time: data.dateTime,
+      purpose_id: data.purposeId || false,
+      visit_duration: data.visitDuration || false,
+      remarks: data.remarks || '',
+      latitude: data.latitude || 0,
+      longitude: data.longitude || 0,
+      location_name: data.locationName || '',
+      visit_plan_id: data.visitPlanId || false,
+    };
+    if (data.images && data.images.length > 0) {
+      vals.image_ids = data.images.map((img, index) => [0, 0, {
+        image: img.base64,
+        image_filename: img.filename || `visit_image_${index + 1}.jpg`,
+      }]);
+    }
+    if (data.voiceBase64) {
+      vals.voice_note = data.voiceBase64;
+      vals.voice_note_filename = data.voiceFilename || 'voice_note.m4a';
+    }
+    const { result } = await callOdooWithModelFallback(
+      VISIT_MODELS, 'create', [[vals]], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('createCustomerVisitOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+export const updateCustomerVisitOdoo = async (visitId, data) => {
+  try {
+    const headers = await ensureOdooSession();
+    const vals = {};
+    if (data.customerId !== undefined) vals.partner_id = data.customerId;
+    if (data.employeeId !== undefined) vals.employee_id = data.employeeId;
+    if (data.dateTime !== undefined) vals.date_time = data.dateTime;
+    if (data.purposeId !== undefined) vals.purpose_id = data.purposeId || false;
+    if (data.visitDuration !== undefined) vals.visit_duration = data.visitDuration || false;
+    if (data.remarks !== undefined) vals.remarks = data.remarks;
+    if (data.latitude !== undefined) vals.latitude = data.latitude;
+    if (data.longitude !== undefined) vals.longitude = data.longitude;
+    if (data.locationName !== undefined) vals.location_name = data.locationName;
+    if (data.contactPerson !== undefined) vals.contact_person = data.contactPerson;
+    if (data.contactNumber !== undefined) vals.contact_number = data.contactNumber;
+    if (data.timeIn !== undefined) vals.time_in = data.timeIn || false;
+    if (data.timeOut !== undefined) vals.time_out = data.timeOut || false;
+    if (data.state !== undefined) vals.state = data.state;
+
+    const { result } = await callOdooWithModelFallback(
+      VISIT_MODELS, 'write', [[visitId], vals], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('updateCustomerVisitOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+export const markCustomerVisitAsDoneOdoo = async (visitId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      VISIT_MODELS, 'write', [[visitId], { state: 'done' }], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('markCustomerVisitAsDoneOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+export const resetCustomerVisitToDraftOdoo = async (visitId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      VISIT_MODELS, 'write', [[visitId], { state: 'draft' }], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('resetCustomerVisitToDraftOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+// ---- Visit Plans ----
+export const fetchVisitPlansOdoo = async ({ offset = 0, limit = 30, date, employeeId, approvalStatus } = {}) => {
+  try {
+    const headers = await ensureOdooSession();
+    let domain = [];
+    if (date) {
+      domain.push(['visit_date', '>=', `${date} 00:00:00`]);
+      domain.push(['visit_date', '<=', `${date} 23:59:59`]);
+    }
+    if (employeeId) domain.push(['employee_id', '=', employeeId]);
+    if (approvalStatus) domain.push(['approval_status', '=', approvalStatus]);
+
+    const { result } = await callOdooWithModelFallback(
+      VISIT_PLAN_MODELS, 'search_read', [],
+      {
+        domain,
+        fields: ['id', 'name', 'partner_id', 'employee_id', 'created_by_id', 'manager_id',
+          'visit_date', 'purpose_id', 'remarks', 'approval_status', 'visit_status'],
+        offset, limit, order: 'visit_date desc'
+      }, headers
+    );
+    return (result || []).map(p => ({
+      id: p.id,
+      name: p.name,
+      customer: Array.isArray(p.partner_id) ? { id: p.partner_id[0], name: p.partner_id[1] } : null,
+      employee: Array.isArray(p.employee_id) ? { id: p.employee_id[0], name: p.employee_id[1] } : null,
+      created_by: Array.isArray(p.created_by_id) ? { id: p.created_by_id[0], name: p.created_by_id[1] } : null,
+      manager: Array.isArray(p.manager_id) ? { id: p.manager_id[0], name: p.manager_id[1] } : null,
+      visit_date: p.visit_date,
+      purpose: Array.isArray(p.purpose_id) ? { id: p.purpose_id[0], name: p.purpose_id[1] } : null,
+      remarks: p.remarks,
+      approval_status: p.approval_status,
+      visit_status: p.visit_status,
+    }));
+  } catch (err) {
+    console.error('fetchVisitPlansOdoo error:', err?.message || err);
+    return [];
+  }
+};
+
+export const fetchVisitPlanDetailsOdoo = async (planId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      VISIT_PLAN_MODELS, 'read', [[planId]],
+      { fields: ['id', 'name', 'partner_id', 'employee_id', 'created_by_id', 'manager_id',
+        'visit_date', 'purpose_id', 'remarks', 'approval_status', 'visit_status'] }, headers
+    );
+    const p = result?.[0];
+    if (!p) return null;
+    return {
+      id: p.id,
+      name: p.name,
+      customer: Array.isArray(p.partner_id) ? { id: p.partner_id[0], name: p.partner_id[1] } : null,
+      employee: Array.isArray(p.employee_id) ? { id: p.employee_id[0], name: p.employee_id[1] } : null,
+      created_by: Array.isArray(p.created_by_id) ? { id: p.created_by_id[0], name: p.created_by_id[1] } : null,
+      manager: Array.isArray(p.manager_id) ? { id: p.manager_id[0], name: p.manager_id[1] } : null,
+      visit_date: p.visit_date,
+      purpose: Array.isArray(p.purpose_id) ? { id: p.purpose_id[0], name: p.purpose_id[1] } : null,
+      remarks: p.remarks,
+      approval_status: p.approval_status,
+      visit_status: p.visit_status,
+    };
+  } catch (err) {
+    console.error('fetchVisitPlanDetailsOdoo error:', err?.message || err);
+    return null;
+  }
+};
+
+export const createVisitPlanOdoo = async (data) => {
+  try {
+    const headers = await ensureOdooSession();
+    const vals = {
+      partner_id: data.customerId,
+      employee_id: data.employeeId,
+      created_by_id: data.createdById || false,
+      manager_id: data.managerId || false,
+      visit_date: data.visitDate,
+      purpose_id: data.purposeId || false,
+      remarks: data.remarks || '',
+    };
+    const { result } = await callOdooWithModelFallback(
+      VISIT_PLAN_MODELS, 'create', [[vals]], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('createVisitPlanOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+export const updateVisitPlanOdoo = async (planId, data) => {
+  try {
+    const headers = await ensureOdooSession();
+    const vals = {};
+    if (data.customerId !== undefined) vals.partner_id = data.customerId;
+    if (data.employeeId !== undefined) vals.employee_id = data.employeeId;
+    if (data.visitDate !== undefined) vals.visit_date = data.visitDate;
+    if (data.purposeId !== undefined) vals.purpose_id = data.purposeId || false;
+    if (data.remarks !== undefined) vals.remarks = data.remarks;
+    if (data.approvalStatus !== undefined) vals.approval_status = data.approvalStatus;
+    if (data.visitStatus !== undefined) vals.visit_status = data.visitStatus;
+
+    const { result } = await callOdooWithModelFallback(
+      VISIT_PLAN_MODELS, 'write', [[planId], vals], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('updateVisitPlanOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+export const sendVisitPlansForApprovalOdoo = async (planIds) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      VISIT_PLAN_MODELS, 'write', [planIds, { approval_status: 'pending' }], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('sendVisitPlansForApprovalOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+export const approveVisitPlanOdoo = async (planId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      VISIT_PLAN_MODELS, 'write', [[planId], { approval_status: 'approved' }], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('approveVisitPlanOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+export const rejectVisitPlanOdoo = async (planId) => {
+  try {
+    const headers = await ensureOdooSession();
+    const { result } = await callOdooWithModelFallback(
+      VISIT_PLAN_MODELS, 'write', [[planId], { approval_status: 'rejected' }], {}, headers
+    );
+    return result;
+  } catch (err) {
+    console.error('rejectVisitPlanOdoo error:', err?.message || err);
+    throw err;
+  }
+};
+
+// =============================================
+// ESTIMATE PURCHASE — estimate.purchase model
+// =============================================
+
+export const fetchEstimatePurchasesOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = searchText
+      ? ['|', ['name', 'ilike', searchText], ['partner_id', 'ilike', searchText]]
+      : [];
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'estimate.purchase',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'date', 'partner_id', 'company_id', 'currency_id', 'warehouse_id',
+                     'payment_method_id', 'state', 'amount_total', 'payment_state', 'reference'],
+            offset, limit, order: 'date desc, id desc',
+          },
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) {
+      console.error('[EstimatePurchase] list error:', response.data.error?.data?.message || response.data.error);
+      return [];
+    }
+    return response.data.result || [];
+  } catch (error) {
+    console.error('[EstimatePurchase] fetchList error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchEstimatePurchaseDetailOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    // Fetch main record
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'estimate.purchase',
+          method: 'read',
+          args: [[id]],
+          kwargs: {
+            fields: ['id', 'name', 'date', 'partner_id', 'company_id', 'currency_id', 'warehouse_id',
+                     'payment_method_id', 'payment_term_id', 'state', 'amount_total', 'payment_state',
+                     'reference', 'notes', 'line_ids', 'purchase_order_id', 'picking_id', 'invoice_id',
+                     'is_credit_purchase', 'auto_validate_bill', 'auto_register_payment'],
+          },
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Odoo error');
+    const records = response.data.result || [];
+    if (records.length === 0) throw new Error('Record not found');
+    const record = records[0];
+
+    // Fetch order lines
+    if (record.line_ids && record.line_ids.length > 0) {
+      const linesResp = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'estimate.purchase.line',
+            method: 'read',
+            args: [record.line_ids],
+            kwargs: {
+              fields: ['id', 'product_id', 'description', 'quantity', 'uom_id', 'price_unit', 'subtotal', 'display_type', 'name'],
+            },
+          },
+        },
+        { headers, timeout: 15000 }
+      );
+      record.order_lines_detail = linesResp.data.result || [];
+    } else {
+      record.order_lines_detail = [];
+    }
+    return record;
+  } catch (error) {
+    console.error('[EstimatePurchase] fetchDetail error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const createEstimatePurchaseOdoo = async ({ partnerId, warehouseId, paymentMethodId, companyId, reference, notes, orderLines }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const lineCommands = (orderLines || []).map(line => ([0, 0, {
+      product_id: line.product_id,
+      quantity: line.qty || line.quantity || 1,
+      price_unit: line.price_unit || 0,
+    }]));
+
+    const vals = {
+      partner_id: partnerId,
+      line_ids: lineCommands,
+    };
+    if (warehouseId) vals.warehouse_id = warehouseId;
+    if (paymentMethodId) vals.payment_method_id = paymentMethodId;
+    if (companyId) vals.company_id = companyId;
+    if (reference) vals.reference = reference;
+    if (notes) vals.notes = notes;
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'estimate.purchase',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create estimate purchase');
+    return response.data.result;
+  } catch (error) {
+    console.error('[EstimatePurchase] create error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const confirmEstimatePurchaseOdoo = async (id, companyId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const context = {};
+    if (companyId) context.allowed_company_ids = [companyId];
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'estimate.purchase',
+          method: 'action_confirm',
+          args: [[id]],
+          kwargs: { context },
+        },
+      },
+      { headers, timeout: 30000 }
+    );
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to confirm');
+    return response.data.result;
+  } catch (error) {
+    console.error('[EstimatePurchase] confirm error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const cancelEstimatePurchaseOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'estimate.purchase',
+          method: 'action_cancel',
+          args: [[id]],
+          kwargs: {},
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to cancel');
+    return response.data.result;
+  } catch (error) {
+    console.error('[EstimatePurchase] cancel error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const draftEstimatePurchaseOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'estimate.purchase',
+          method: 'action_draft',
+          args: [[id]],
+          kwargs: {},
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to set draft');
+    return response.data.result;
+  } catch (error) {
+    console.error('[EstimatePurchase] draft error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const fetchEstimatePurchasePaymentMethodsOdoo = async (companyId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = companyId ? [['company_id', '=', companyId], ['active', '=', true]] : [['active', '=', true]];
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'estimate.purchase.payment.method',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'is_default', 'is_vendor_account', 'journal_type'],
+            order: 'sequence, id',
+          },
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) return [];
+    return response.data.result || [];
+  } catch (error) {
+    console.error('[EstimatePurchase] fetchPaymentMethods error:', error?.message || error);
+    return [];
+  }
+};
+
+// =============================================
+// ESTIMATE SALE — estimate.sale model
+// =============================================
+
+export const fetchEstimateSalesOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = searchText ? ['|', ['name', 'ilike', searchText], ['partner_id', 'ilike', searchText]] : [];
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'estimate.sale', method: 'search_read', args: [domain],
+        kwargs: { fields: ['id', 'name', 'date', 'partner_id', 'state', 'amount_total', 'payment_state', 'reference'], offset, limit, order: 'date desc, id desc' } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return response.data.result || [];
+  } catch (error) { console.error('[EstimateSale] fetchList error:', error?.message); return []; }
+};
+
+export const fetchEstimateSaleDetailOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'estimate.sale', method: 'read', args: [[id]],
+        kwargs: { fields: ['id', 'name', 'date', 'partner_id', 'company_id', 'currency_id', 'warehouse_id', 'quick_payment_method_id', 'state', 'amount_total', 'amount_paid', 'amount_due', 'payment_state', 'reference', 'notes', 'line_ids', 'sale_order_id', 'picking_id', 'invoice_id'] } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Odoo error');
+    const records = response.data.result || [];
+    if (records.length === 0) throw new Error('Record not found');
+    const record = records[0];
+    if (record.line_ids && record.line_ids.length > 0) {
+      const linesResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'estimate.sale.line', method: 'read', args: [record.line_ids],
+          kwargs: { fields: ['id', 'product_id', 'description', 'quantity', 'uom_id', 'price_unit', 'subtotal', 'display_type', 'name'] } },
+      }, { headers, timeout: 15000 });
+      record.order_lines_detail = linesResp.data.result || [];
+    } else { record.order_lines_detail = []; }
+    return record;
+  } catch (error) { console.error('[EstimateSale] fetchDetail error:', error?.message); throw error; }
+};
+
+export const createEstimateSaleOdoo = async ({ partnerId, warehouseId, paymentMethodId, reference, notes, orderLines }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const lineCommands = (orderLines || []).map(line => ([0, 0, { product_id: line.product_id, quantity: line.qty || line.quantity || 1, price_unit: line.price_unit || 0 }]));
+    const vals = { partner_id: partnerId, line_ids: lineCommands };
+    if (warehouseId) vals.warehouse_id = warehouseId;
+    if (paymentMethodId) vals.quick_payment_method_id = paymentMethodId;
+    if (reference) vals.reference = reference;
+    if (notes) vals.notes = notes;
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'estimate.sale', method: 'create', args: [vals], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create');
+    return response.data.result;
+  } catch (error) { console.error('[EstimateSale] create error:', error?.message); throw error; }
+};
+
+export const confirmEstimateSaleOdoo = async (id, companyId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const context = companyId ? { allowed_company_ids: [companyId] } : {};
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'estimate.sale', method: 'action_confirm', args: [[id]], kwargs: { context } },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to confirm');
+    return response.data.result;
+  } catch (error) { throw error; }
+};
+
+export const cancelEstimateSaleOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'estimate.sale', method: 'action_cancel', args: [[id]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to cancel');
+    return response.data.result;
+  } catch (error) { throw error; }
+};
+
+export const draftEstimateSaleOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'estimate.sale', method: 'action_draft', args: [[id]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed');
+    return response.data.result;
+  } catch (error) { throw error; }
+};
+
+export const fetchEstimateSalePaymentMethodsOdoo = async (companyId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = companyId ? [['company_id', '=', companyId], ['active', '=', true]] : [['active', '=', true]];
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'estimate.sale.payment.method', method: 'search_read', args: [domain],
+        kwargs: { fields: ['id', 'name', 'is_default', 'is_customer_account', 'journal_type'], order: 'sequence, id' } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return response.data.result || [];
+  } catch (error) { console.error('[EstimateSale] fetchPaymentMethods error:', error?.message); return []; }
+};
+
+export const fetchWarehousesSessionOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.warehouse',
+          method: 'search_read',
+          args: [[]],
+          kwargs: { fields: ['id', 'name', 'code', 'company_id'], limit: 50 },
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) return [];
+    return (response.data.result || []).map(w => ({
+      id: w.id, name: w.name, code: w.code, label: w.name,
+      company_id: Array.isArray(w.company_id) ? w.company_id[0] : w.company_id,
+    }));
+  } catch (error) {
+    console.error('[fetchWarehousesSessionOdoo] error:', error?.message || error);
+    return [];
+  }
+};
+
+// =============================================
+// QUICK PURCHASE RETURN — quick.purchase.return
+// =============================================
+
+export const fetchQuickPurchaseReturnsOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = searchText
+      ? ['|', ['name', 'ilike', searchText], ['partner_id', 'ilike', searchText]]
+      : [];
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.purchase.return', method: 'search_read', args: [domain],
+        kwargs: { fields: ['id', 'name', 'date', 'partner_id', 'source_invoice_id', 'state', 'amount_untaxed', 'amount_tax', 'amount_total', 'currency_id'], offset, limit, order: 'date desc, id desc' } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return response.data.result || [];
+  } catch (error) {
+    console.error('[QuickPurchaseReturn] fetchList error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchQuickPurchaseReturnDetailOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.purchase.return', method: 'read', args: [[id]],
+        kwargs: { fields: ['id', 'name', 'date', 'partner_id', 'source_invoice_id', 'company_id', 'currency_id', 'warehouse_id', 'state', 'amount_untaxed', 'amount_tax', 'amount_total', 'notes', 'line_ids', 'credit_note_id', 'return_picking_id'] } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Odoo error');
+    const records = response.data.result || [];
+    if (records.length === 0) throw new Error('Record not found');
+    const record = records[0];
+    if (record.line_ids && record.line_ids.length > 0) {
+      const linesResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'quick.purchase.return.line', method: 'read', args: [record.line_ids],
+          kwargs: { fields: ['id', 'product_id', 'description', 'purchased_qty', 'already_returned_qty', 'returnable_qty', 'return_qty', 'uom_id', 'price_unit', 'discount', 'subtotal', 'tax_amount', 'total'] } },
+      }, { headers, timeout: 15000 });
+      record.lines_detail = linesResp.data.result || [];
+    } else { record.lines_detail = []; }
+    return record;
+  } catch (error) {
+    console.error('[QuickPurchaseReturn] fetchDetail error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const fetchVendorBillsOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    let domain = [['move_type', '=', 'in_invoice'], ['state', '=', 'posted'], ['source_module', 'in', ['easy_purchase', 'estimate_purchase']]];
+    if (searchText && searchText.trim()) {
+      domain = ['&', ...domain, '|', ['name', 'ilike', searchText], ['partner_id', 'ilike', searchText]];
+    }
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.move', method: 'search_read', args: [domain],
+        kwargs: { fields: ['id', 'name', 'partner_id', 'invoice_date', 'amount_total', 'currency_id', 'invoice_origin', 'ref'], offset, limit, order: 'invoice_date desc' } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return (response.data.result || []).map(b => {
+      const estRef = b.ref || '';
+      const origin = b.invoice_origin || '';
+      const extra = estRef || origin;
+      const billLabel = extra ? `${b.name || ''} (${extra})` : (b.name || '');
+      return {
+        id: b.id, name: b.name || '', label: billLabel,
+        partner_id: b.partner_id, invoice_date: b.invoice_date, amount_total: b.amount_total,
+        invoice_origin: origin,
+      };
+    });
+  } catch (error) {
+    console.error('[fetchVendorBillsOdoo] error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchVendorBillLinesOdoo = async (invoiceId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = [['move_id', '=', invoiceId], ['product_id', '!=', false]];
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.move.line', method: 'search_read', args: [domain],
+        kwargs: { fields: ['id', 'product_id', 'name', 'quantity', 'price_unit', 'discount', 'tax_ids', 'product_uom_id'], limit: 200 } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) { console.error('[fetchVendorBillLines] error:', response.data.error); return []; }
+    return response.data.result || [];
+  } catch (error) {
+    console.error('[fetchVendorBillLinesOdoo] error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchPurchaseOrderWarehouseOdoo = async (poName) => {
+  try {
+    if (!poName) return null;
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'purchase.order', method: 'search_read',
+        args: [[['name', '=', poName]]],
+        kwargs: { fields: ['id', 'picking_type_id'], limit: 1 } },
+    }, { headers, timeout: 15000 });
+    const po = (response.data.result || [])[0];
+    if (!po || !po.picking_type_id) return null;
+    // Get warehouse from picking type
+    const ptResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'stock.picking.type', method: 'read',
+        args: [[Array.isArray(po.picking_type_id) ? po.picking_type_id[0] : po.picking_type_id]],
+        kwargs: { fields: ['warehouse_id'] } },
+    }, { headers, timeout: 15000 });
+    const pt = (ptResp.data.result || [])[0];
+    if (!pt || !pt.warehouse_id) return null;
+    return { id: Array.isArray(pt.warehouse_id) ? pt.warehouse_id[0] : pt.warehouse_id, name: Array.isArray(pt.warehouse_id) ? pt.warehouse_id[1] : '', label: Array.isArray(pt.warehouse_id) ? pt.warehouse_id[1] : '' };
+  } catch (error) {
+    console.error('[fetchPurchaseOrderWarehouseOdoo] error:', error?.message || error);
+    return null;
+  }
+};
+
+export const createQuickPurchaseReturnOdoo = async ({ sourceInvoiceId, warehouseId, notes, lines }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const lineCommands = (lines || []).filter(l => l.return_qty > 0).map(l => ([0, 0, {
+      source_invoice_line_id: l.source_invoice_line_id || false,
+      product_id: l.product_id,
+      description: l.description || '',
+      purchased_qty: l.purchased_qty || 0,
+      already_returned_qty: l.already_returned_qty || 0,
+      returnable_qty: l.returnable_qty || 0,
+      return_qty: l.return_qty,
+      price_unit: l.price_unit || 0,
+      uom_id: l.uom_id || false,
+    }]));
+    const vals = { source_invoice_id: sourceInvoiceId, line_ids: lineCommands };
+    if (warehouseId) vals.warehouse_id = warehouseId;
+    if (notes) vals.notes = notes;
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.purchase.return', method: 'create', args: [vals], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create');
+    return response.data.result;
+  } catch (error) {
+    console.error('[QuickPurchaseReturn] create error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const confirmQuickPurchaseReturnOdoo = async (id, companyId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const context = companyId ? { allowed_company_ids: [companyId] } : {};
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.purchase.return', method: 'action_confirm', args: [[id]], kwargs: { context } },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to confirm');
+    return response.data.result;
+  } catch (error) {
+    console.error('[QuickPurchaseReturn] confirm error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const cancelQuickPurchaseReturnOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.purchase.return', method: 'action_cancel', args: [[id]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to cancel');
+    return response.data.result;
+  } catch (error) { throw error; }
+};
+
+export const draftQuickPurchaseReturnOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.purchase.return', method: 'action_draft', args: [[id]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to set draft');
+    return response.data.result;
+  } catch (error) { throw error; }
+};
+
+// =============================================
+// QUICK SALES RETURN — quick.sales.return
+// =============================================
+
+export const fetchQuickSalesReturnsOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = searchText
+      ? ['|', ['name', 'ilike', searchText], ['partner_id', 'ilike', searchText]]
+      : [];
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.sales.return', method: 'search_read', args: [domain],
+        kwargs: { fields: ['id', 'name', 'date', 'partner_id', 'source_invoice_id', 'state', 'amount_untaxed', 'amount_tax', 'amount_total', 'currency_id'], offset, limit, order: 'date desc, id desc' } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return response.data.result || [];
+  } catch (error) {
+    console.error('[QuickSalesReturn] fetchList error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchQuickSalesReturnDetailOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.sales.return', method: 'read', args: [[id]],
+        kwargs: { fields: ['id', 'name', 'date', 'partner_id', 'source_invoice_id', 'company_id', 'currency_id', 'warehouse_id', 'state', 'amount_untaxed', 'amount_tax', 'amount_total', 'notes', 'line_ids', 'credit_note_id', 'return_picking_id'] } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Odoo error');
+    const records = response.data.result || [];
+    if (records.length === 0) throw new Error('Record not found');
+    const record = records[0];
+    if (record.line_ids && record.line_ids.length > 0) {
+      const linesResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'quick.sales.return.line', method: 'read', args: [record.line_ids],
+          kwargs: { fields: ['id', 'product_id', 'description', 'sold_qty', 'already_returned_qty', 'returnable_qty', 'return_qty', 'uom_id', 'price_unit', 'discount', 'subtotal', 'tax_amount', 'total'] } },
+      }, { headers, timeout: 15000 });
+      record.lines_detail = linesResp.data.result || [];
+    } else { record.lines_detail = []; }
+    return record;
+  } catch (error) {
+    console.error('[QuickSalesReturn] fetchDetail error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const fetchPostedCustomerInvoicesForReturnOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    let domain = [['move_type', '=', 'out_invoice'], ['state', '=', 'posted'], ['source_module', 'in', ['easy_sale', 'estimate_sale']]];
+    if (searchText && searchText.trim()) {
+      domain = ['&', ...domain, '|', ['name', 'ilike', searchText], ['partner_id', 'ilike', searchText]];
+    }
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.move', method: 'search_read', args: [domain],
+        kwargs: { fields: ['id', 'name', 'partner_id', 'invoice_date', 'amount_total', 'currency_id', 'invoice_origin', 'ref'], offset, limit, order: 'invoice_date desc' } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return (response.data.result || []).map(b => {
+      const estRef = b.ref || '';
+      const origin = b.invoice_origin || '';
+      const extra = estRef || origin;
+      const invoiceLabel = extra ? `${b.name || ''} (${extra})` : (b.name || '');
+      return {
+        id: b.id, name: b.name || '', label: invoiceLabel,
+        partner_id: b.partner_id, invoice_date: b.invoice_date, amount_total: b.amount_total,
+        invoice_origin: origin,
+      };
+    });
+  } catch (error) {
+    console.error('[fetchPostedCustomerInvoicesForReturnOdoo] error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchCustomerInvoiceLinesOdoo = async (invoiceId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const domain = [['move_id', '=', invoiceId], ['product_id', '!=', false]];
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.move.line', method: 'search_read', args: [domain],
+        kwargs: { fields: ['id', 'product_id', 'name', 'quantity', 'price_unit', 'discount', 'tax_ids', 'product_uom_id'], limit: 200 } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) { console.error('[fetchCustomerInvoiceLines] error:', response.data.error); return []; }
+    return response.data.result || [];
+  } catch (error) {
+    console.error('[fetchCustomerInvoiceLinesOdoo] error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchSaleOrderWarehouseOdoo = async (soName) => {
+  try {
+    if (!soName) return null;
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'sale.order', method: 'search_read',
+        args: [[['name', '=', soName]]],
+        kwargs: { fields: ['id', 'warehouse_id'], limit: 1 } },
+    }, { headers, timeout: 15000 });
+    const so = (response.data.result || [])[0];
+    if (!so || !so.warehouse_id) return null;
+    return { id: Array.isArray(so.warehouse_id) ? so.warehouse_id[0] : so.warehouse_id, name: Array.isArray(so.warehouse_id) ? so.warehouse_id[1] : '', label: Array.isArray(so.warehouse_id) ? so.warehouse_id[1] : '' };
+  } catch (error) {
+    console.error('[fetchSaleOrderWarehouseOdoo] error:', error?.message || error);
+    return null;
+  }
+};
+
+export const createQuickSalesReturnOdoo = async ({ sourceInvoiceId, warehouseId, notes, lines }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const lineCommands = (lines || []).filter(l => l.return_qty > 0).map(l => ([0, 0, {
+      source_invoice_line_id: l.source_invoice_line_id || false,
+      product_id: l.product_id,
+      description: l.description || '',
+      sold_qty: l.sold_qty || 0,
+      already_returned_qty: l.already_returned_qty || 0,
+      returnable_qty: l.returnable_qty || 0,
+      return_qty: l.return_qty,
+      price_unit: l.price_unit || 0,
+      uom_id: l.uom_id || false,
+    }]));
+    const vals = { source_invoice_id: sourceInvoiceId, line_ids: lineCommands };
+    if (warehouseId) vals.warehouse_id = warehouseId;
+    if (notes) vals.notes = notes;
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.sales.return', method: 'create', args: [vals], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create');
+    return response.data.result;
+  } catch (error) {
+    console.error('[QuickSalesReturn] create error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const confirmQuickSalesReturnOdoo = async (id, companyId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const context = companyId ? { allowed_company_ids: [companyId] } : {};
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.sales.return', method: 'action_confirm', args: [[id]], kwargs: { context } },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to confirm');
+    return response.data.result;
+  } catch (error) {
+    console.error('[QuickSalesReturn] confirm error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const cancelQuickSalesReturnOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.sales.return', method: 'action_cancel', args: [[id]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to cancel');
+    return response.data.result;
+  } catch (error) { throw error; }
+};
+
+export const draftQuickSalesReturnOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'quick.sales.return', method: 'action_draft', args: [[id]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to set draft');
+    return response.data.result;
+  } catch (error) { throw error; }
+};
+
+// =============================================
+// APP BANNER — app.banner
+// =============================================
+
+export const fetchAppBannersOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'app.banner', method: 'search_read', args: [[['active', '=', true]]],
+        kwargs: { fields: ['id', 'name', 'image', 'sequence'], order: 'sequence asc, id asc' } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return response.data.result || [];
+  } catch (error) {
+    console.error('[AppBanner] fetchList error:', error?.message || error);
+    return [];
+  }
+};
+
+export const createAppBannerOdoo = async ({ name, imageBase64 }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = { image: imageBase64 };
+    if (name) vals.name = name;
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'app.banner', method: 'create', args: [vals], kwargs: {} },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create banner');
+    return response.data.result;
+  } catch (error) {
+    console.error('[AppBanner] create error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const deleteAppBannerOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'app.banner', method: 'unlink', args: [[id]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to delete banner');
+    return response.data.result;
+  } catch (error) {
+    console.error('[AppBanner] delete error:', error?.message || error);
+    throw error;
+  }
+};
+
+// =============================================
+// PRODUCT CREATION — product.product
+// =============================================
+
+export const fetchUomsOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'uom.uom', method: 'search_read', args: [[]],
+        kwargs: { fields: ['id', 'name'], limit: 200 } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return (response.data.result || []).map(u => ({ id: u.id, name: u.name || '', label: u.name || '' }));
+  } catch (error) {
+    console.error('[fetchUomsOdoo] error:', error?.message || error);
+    return [];
+  }
+};
+
+export const fetchPurchaseTaxesOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.tax', method: 'search_read', args: [[['type_tax_use', '=', 'purchase']]],
+        kwargs: { fields: ['id', 'name', 'amount', 'type_tax_use'], limit: 50 } },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) return [];
+    return (response.data.result || []).map(t => ({ id: t.id, name: t.name || '', label: t.name || '', amount: t.amount || 0 }));
+  } catch (error) {
+    console.error('[fetchPurchaseTaxesOdoo] error:', error?.message || error);
+    return [];
+  }
+};
+
+export const createProductOdoo = async ({ name, categId, listPrice, standardPrice, barcode, defaultCode, uomId, taxesId, supplierTaxesId, image, descriptionSale }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = {
+      name,
+      categ_id: categId,
+      sale_ok: true,
+      purchase_ok: true,
+    };
+    if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
+    if (standardPrice !== undefined && standardPrice !== '') vals.standard_price = parseFloat(standardPrice) || 0;
+    if (barcode) vals.barcode = barcode;
+    if (defaultCode) vals.default_code = defaultCode;
+    if (uomId) { vals.uom_id = uomId; vals.uom_po_id = uomId; }
+    if (taxesId && taxesId.length > 0) vals.taxes_id = [[6, 0, taxesId]];
+    if (supplierTaxesId && supplierTaxesId.length > 0) vals.supplier_taxes_id = [[6, 0, supplierTaxesId]];
+    if (image) vals.image_1920 = image;
+    if (descriptionSale) vals.description_sale = descriptionSale;
+
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'product.product', method: 'create', args: [vals], kwargs: {} },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create product');
+    return response.data.result;
+  } catch (error) {
+    console.error('[createProductOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const fetchVendorsOdoo = async ({ offset = 0, limit = 50, searchText } = {}) => {
+  try {
+    let domain = [];
+    if (searchText && searchText.trim() !== '') {
+      const term = searchText.trim();
+      domain = ['|', ['name', 'ilike', term], ['phone', 'ilike', term]];
+    }
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.partner',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'email', 'phone'],
+            offset, limit, order: 'name asc',
+          },
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) return [];
+    return (response.data.result || []).map(p => ({ id: p.id, name: p.name || '', label: p.name || '', email: p.email || '', phone: p.phone || '' }));
+  } catch (error) {
+    console.error('[fetchVendorsOdoo] error:', error?.message || error);
+    return [];
+  }
+};
