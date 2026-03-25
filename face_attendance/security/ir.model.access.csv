@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_face_attendance_log_manager,face.attendance.log.manager,model_face_attendance_log,hr_attendance.group_hr_attendance_manager,1,1,1,1
+access_face_attendance_log_user,face.attendance.log.user,model_face_attendance_log,hr_attendance.group_hr_attendance,1,0,0,0
+access_face_door_mismatch_report_manager,face.door.mismatch.report.manager,model_face_door_mismatch_report,hr_attendance.group_hr_attendance_manager,1,1,1,1
+access_face_door_mismatch_line_manager,face.door.mismatch.line.manager,model_face_door_mismatch_line,hr_attendance.group_hr_attendance_manager,1,1,1,1
+access_face_door_mismatch_line_user,face.door.mismatch.line.user,model_face_door_mismatch_line,hr_attendance.group_hr_attendance,1,0,0,0

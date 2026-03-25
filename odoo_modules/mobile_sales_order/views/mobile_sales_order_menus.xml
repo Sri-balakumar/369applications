@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Root Menu -->
+    <menuitem id="menu_mobile_sales_root"
+              name="Mobile Sales"
+              sequence="25"
+              web_icon="mobile_sales_order,static/description/icon.png"/>
+
+    <!-- Orders Menu -->
+    <menuitem id="menu_mobile_sales_orders"
+              name="Orders"
+              parent="menu_mobile_sales_root"
+              sequence="10"/>
+
+    <menuitem id="menu_mobile_sales_order_list"
+              name="Mobile Sales Orders"
+              parent="menu_mobile_sales_orders"
+              action="action_mobile_sales_order"
+              sequence="10"/>
+
+    <!-- Configuration Menu -->
+    <menuitem id="menu_mobile_sales_config"
+              name="Configuration"
+              parent="menu_mobile_sales_root"
+              sequence="90"/>
+
+    <menuitem id="menu_mobile_sales_payment_methods"
+              name="Payment Methods"
+              parent="menu_mobile_sales_config"
+              action="action_mobile_sales_payment_method"
+              sequence="10"/>
+</odoo>

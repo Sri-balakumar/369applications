@@ -1,0 +1,20 @@
+{
+    'name': 'Customer Visit',
+    'version': '19.0.1.0.0',
+    'category': 'Sales',
+    'summary': 'Customer Visit Tracking and Visit Plan Management',
+    'depends': ['base', 'hr', 'mail'],
+    'data': [
+        'security/ir.model.access.csv',
+        'data/ir_sequence_data.xml',
+        'data/visit_purpose_data.xml',
+        'views/visit_purpose_views.xml',
+        'views/customer_visit_views.xml',
+        'views/visit_plan_views.xml',
+        'views/res_partner_views.xml',
+    ],
+    'installable': True,
+    'application': True,
+    'auto_install': False,
+    'license': 'LGPL-3',
+}

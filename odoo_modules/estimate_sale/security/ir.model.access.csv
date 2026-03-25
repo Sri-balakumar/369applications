@@ -1,0 +1,9 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_estimate_sale_user,estimate.sale.user,model_estimate_sale,sales_team.group_sale_salesman,1,1,1,0
+access_estimate_sale_manager,estimate.sale.manager,model_estimate_sale,sales_team.group_sale_manager,1,1,1,1
+access_estimate_sale_line_user,estimate.sale.line.user,model_estimate_sale_line,sales_team.group_sale_salesman,1,1,1,0
+access_estimate_sale_line_manager,estimate.sale.line.manager,model_estimate_sale_line,sales_team.group_sale_manager,1,1,1,1
+access_estimate_sale_payment_method_user,estimate.sale.payment.method.user,model_estimate_sale_payment_method,sales_team.group_sale_salesman,1,0,0,0
+access_estimate_sale_payment_method_manager,estimate.sale.payment.method.manager,model_estimate_sale_payment_method,sales_team.group_sale_manager,1,1,1,1
+access_estimate_sale_payment_line_user,estimate.sale.payment.line.user,model_estimate_sale_payment_line,sales_team.group_sale_salesman,1,1,1,1
+access_estimate_sale_payment_line_manager,estimate.sale.payment.line.manager,model_estimate_sale_payment_line,sales_team.group_sale_manager,1,1,1,1

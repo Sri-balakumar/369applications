@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+        This file adds a menu item to the Easy Sales app.
+        It should only be loaded if easy_sales module is installed.
+        Add this file to the manifest only when easy_sales is a dependency.
+    -->
+
+    <!-- Add to Easy Sales app -->
+    <menuitem id="quick_sales_return_menu_in_easy_sales"
+              name="Sales Return"
+              parent="easy_sales.easy_sales_menu_root"
+              action="quick_sales_return_action"
+              sequence="20"
+              groups="sales_team.group_sale_salesman"/>
+
+</odoo>

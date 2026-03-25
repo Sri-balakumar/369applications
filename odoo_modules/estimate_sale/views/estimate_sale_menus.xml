@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <menuitem id="estimate_sale_menu_root"
+              name="Estimate Sale"
+              sequence="48"
+              web_icon="estimate_sale,static/description/icon.png"
+              groups="sales_team.group_sale_salesman"/>
+
+    <menuitem id="estimate_sale_menu_sales"
+              name="Sales"
+              parent="estimate_sale_menu_root"
+              sequence="10"/>
+
+    <menuitem id="estimate_sale_menu_action"
+              name="Estimate Sales Entry"
+              parent="estimate_sale_menu_sales"
+              action="estimate_sale_action"
+              sequence="10"/>
+
+    <menuitem id="estimate_sale_menu_config"
+              name="Configuration"
+              parent="estimate_sale_menu_root"
+              sequence="99"
+              groups="sales_team.group_sale_manager"/>
+
+    <menuitem id="estimate_sale_menu_payment_methods"
+              name="Payment Methods"
+              parent="estimate_sale_menu_config"
+              action="estimate_sale_payment_method_action"
+              sequence="10"/>
+
+    <menuitem id="estimate_sale_menu_in_sale"
+              name="Estimate Sale"
+              parent="sale.sale_menu_root"
+              action="estimate_sale_action"
+              sequence="7"/>
+
+</odoo>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Top Level Menu -->
+    <menuitem id="menu_gross_profit_root"
+              name="Gross Profit"
+              sequence="45"
+              groups="account.group_account_invoice,account.group_account_manager"/>
+
+    <!-- Reports Submenu -->
+    <menuitem id="menu_gp_reports"
+              name="Reports"
+              parent="menu_gross_profit_root"
+              sequence="10"/>
+
+    <!-- GP Report Wizard -->
+    <menuitem id="menu_gp_report_wizard"
+              name="Generate GP Report"
+              parent="menu_gp_reports"
+              action="action_gp_report_wizard"
+              sequence="10"/>
+
+    <!-- Also under Accounting Reports -->
+    <menuitem id="menu_gp_under_accounting"
+              name="Gross Profit"
+              parent="account.menu_finance_reports"
+              action="action_gp_report_wizard"
+              sequence="100"/>
+
+</odoo>

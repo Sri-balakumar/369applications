@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_gp_report_wizard_form" model="ir.ui.view">
+        <field name="name">gp.report.wizard.form</field>
+        <field name="model">gp.report.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Gross Profit Report">
+                <header>
+                    <button name="action_generate_report" type="object"
+                            string="Generate Report" class="btn-primary"
+                            icon="fa-bar-chart"/>
+                    <button name="action_export_excel" type="object"
+                            string="Export to Excel" class="btn-success"
+                            icon="fa-file-excel-o"/>
+                    <button name="action_print_pdf" type="object"
+                            string="Print PDF" class="btn-secondary"
+                            icon="fa-file-pdf-o"/>
+                </header>
+
+                <div class="alert alert-info" role="alert" style="margin-bottom:0;">
+                    <strong>Formula:</strong>
+                    Gross Profit = Sales Revenue - Cost of Goods Sold (COGS) |
+                    GP Margin % = (Gross Profit / Sales Revenue) x 100
+                </div>
+
+                <sheet>
+                    <div class="row mt-3 mb-4" invisible="not line_ids">
+                        <div class="col-3">
+                            <div class="card bg-primary text-white text-center p-3">
+                                <h6>Total Sales</h6>
+                                <h4><field name="total_sales" widget="monetary"/></h4>
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="card bg-warning text-dark text-center p-3">
+                                <h6>Total COGS</h6>
+                                <h4><field name="total_cogs" widget="monetary"/></h4>
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="card bg-success text-white text-center p-3">
+                                <h6>Gross Profit</h6>
+                                <h4><field name="total_gp" widget="monetary"/></h4>
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="card bg-info text-white text-center p-3">
+                                <h6>GP Margin %</h6>
+                                <h4><field name="total_gp_margin"/>%</h4>
+                            </div>
+                        </div>
+                    </div>
+
+                    <field name="company_currency_id" invisible="1"/>
+                    <field name="has_child_companies" invisible="1"/>
+
+                    <group>
+                        <group string="Report Configuration">
+                            <field name="report_type" widget="radio"/>
+                        </group>
+                        <group string="Date Range">
+                            <field name="period"/>
+                            <field name="date_from" invisible="period != 'custom'"/>
+                            <field name="date_to" invisible="period != 'custom'"/>
+                            <field name="gp_margin_filter" string="GP Margin Filter"/>
+                            <label for="gp_margin_value" string="GP %"
+                                   invisible="gp_margin_filter == 'none'"/>
+                            <div invisible="gp_margin_filter == 'none'">
+                                <field name="gp_margin_value" class="oe_inline"
+                                       style="width: 80px;"/>
+                                <span invisible="gp_margin_filter != 'between'"
+                                      class="oe_inline"> to </span>
+                                <field name="gp_margin_value_to" class="oe_inline"
+                                       style="width: 80px;"
+                                       invisible="gp_margin_filter != 'between'"/>
+                                <span class="oe_inline"> %</span>
+                            </div>
+                            <separator string="Company / Branch" colspan="2"/>
+                            <field name="company_scope" widget="radio"/>
+                            <field name="company_ids" widget="many2many_tags"
+                                   options="{'no_create': True}"
+                                   invisible="company_scope != 'selected'"/>
+                            <field name="branch_ids" widget="many2many_tags"
+                                   options="{'no_create': True}"
+                                   domain="[('parent_id', 'in', company_ids)]"
+                                   invisible="company_scope != 'selected' or not has_child_companies"/>
+                        </group>
+                    </group>
+
+                    <group string="Filters (Optional)" col="4">
+                        <field name="product_ids" widget="many2many_tags"
+                               options="{'no_create': True}"/>
+                        <field name="product_categ_ids" widget="many2many_tags"
+                               options="{'no_create': True}"/>
+                        <field name="salesperson_ids" widget="many2many_tags"
+                               options="{'no_create': True}"/>
+                        <field name="partner_ids" widget="many2many_tags"
+                               options="{'no_create': True}"/>
+                    </group>
+
+                    <notebook invisible="not line_ids">
+                        <page string="Report Results" name="results">
+                            <field name="line_ids" readonly="1">
+                                <list decoration-success="gross_profit &gt; 0"
+                                      decoration-danger="gross_profit &lt; 0">
+                                    <field name="product_id" optional="show"/>
+                                    <field name="product_categ_id" optional="show"/>
+                                    <field name="salesperson_id" optional="show"/>
+                                    <field name="partner_id" optional="hide"/>
+                                    <field name="company_id" optional="show"/>
+                                    <field name="invoice_id" optional="hide"/>
+                                    <field name="invoice_date" optional="hide"/>
+                                    <field name="currency_id" column_invisible="1"/>
+                                    <field name="quantity" sum="Total Qty"/>
+                                    <field name="unit_sale_price" optional="hide"/>
+                                    <field name="unit_cost_price" optional="hide"/>
+                                    <field name="sale_amount" sum="Total Sales" widget="monetary"/>
+                                    <field name="cost_amount" sum="Total COGS" widget="monetary"/>
+                                    <field name="gross_profit" sum="Total GP" widget="monetary"/>
+                                    <field name="gp_margin" widget="progressbar"
+                                           options="{'max_value': 100}"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <footer/>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_gp_report_wizard" model="ir.actions.act_window">
+        <field name="name">Gross Profit Report</field>
+        <field name="res_model">gp.report.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="view_id" ref="view_gp_report_wizard_form"/>
+    </record>
+
+</odoo>

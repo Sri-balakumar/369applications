@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_transaction_auditing_user,transaction.auditing.user,model_transaction_auditing,base.group_user,1,1,1,0
+access_transaction_auditing_manager,transaction.auditing.manager,model_transaction_auditing,base.group_system,1,1,1,1
+access_transaction_auditing_attachment_user,transaction.auditing.attachment.user,model_transaction_auditing_attachment,base.group_user,1,1,1,0
+access_transaction_auditing_attachment_manager,transaction.auditing.attachment.manager,model_transaction_auditing_attachment,base.group_system,1,1,1,1

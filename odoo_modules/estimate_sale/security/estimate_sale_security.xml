@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="estimate_sale_comp_rule" model="ir.rule">
+        <field name="name">Estimate Sale multi-company</field>
+        <field name="model_id" ref="model_estimate_sale"/>
+        <field name="domain_force">['|',('company_id','=',False),('company_id','in',company_ids)]</field>
+    </record>
+    <record id="estimate_sale_line_comp_rule" model="ir.rule">
+        <field name="name">Estimate Sale Line multi-company</field>
+        <field name="model_id" ref="model_estimate_sale_line"/>
+        <field name="domain_force">['|',('sales_id.company_id','=',False),('sales_id.company_id','in',company_ids)]</field>
+    </record>
+    <record id="estimate_sale_payment_line_comp_rule" model="ir.rule">
+        <field name="name">Estimate Sale Payment Line multi-company</field>
+        <field name="model_id" ref="model_estimate_sale_payment_line"/>
+        <field name="domain_force">['|',('sales_id.company_id','=',False),('sales_id.company_id','in',company_ids)]</field>
+    </record>
+    <record id="estimate_sale_payment_method_comp_rule" model="ir.rule">
+        <field name="name">Estimate Sale Payment Method multi-company</field>
+        <field name="model_id" ref="model_estimate_sale_payment_method"/>
+        <field name="domain_force">['|',('company_id','=',False),('company_id','in',company_ids)]</field>
+    </record>
+</odoo>

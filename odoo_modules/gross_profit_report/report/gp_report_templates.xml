@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <template id="report_gross_profit_document">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="wizard">
+                <t t-call="web.external_layout">
+                    <div class="page">
+                        <div class="text-center mb-4">
+                            <h2 style="color: #1a237e;"><strong>Gross Profit Report</strong></h2>
+                            <h5>
+                                <t t-esc="dict(wizard._fields['report_type'].selection).get(wizard.report_type)"/>
+                            </h5>
+                            <p class="text-muted">
+                                Period: <t t-esc="wizard.date_from" t-options="{'widget': 'date'}"/>
+                                to <t t-esc="wizard.date_to" t-options="{'widget': 'date'}"/>
+                            </p>
+                        </div>
+
+                        <!-- Summary -->
+                        <div class="row mb-4">
+                            <div class="col-3 text-center">
+                                <div style="background: #e3f2fd; padding: 10px; border-radius: 6px;">
+                                    <small>Total Sales</small><br/>
+                                    <strong style="color: #1565c0;">
+                                        <t t-esc="wizard.total_sales" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </strong>
+                                </div>
+                            </div>
+                            <div class="col-3 text-center">
+                                <div style="background: #fff3e0; padding: 10px; border-radius: 6px;">
+                                    <small>Total COGS</small><br/>
+                                    <strong style="color: #e65100;">
+                                        <t t-esc="wizard.total_cogs" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </strong>
+                                </div>
+                            </div>
+                            <div class="col-3 text-center">
+                                <div style="background: #e8f5e9; padding: 10px; border-radius: 6px;">
+                                    <small>Gross Profit</small><br/>
+                                    <strong style="color: #2e7d32;">
+                                        <t t-esc="wizard.total_gp" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </strong>
+                                </div>
+                            </div>
+                            <div class="col-3 text-center">
+                                <div style="background: #e0f7fa; padding: 10px; border-radius: 6px;">
+                                    <small>GP Margin</small><br/>
+                                    <strong style="color: #00838f;">
+                                        <t t-esc="'%.2f' % wizard.total_gp_margin"/>%
+                                    </strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Table -->
+                        <table class="table table-sm table-bordered" style="font-size: 11px;">
+                            <thead style="background: #1a237e; color: white;">
+                                <tr>
+                                    <th class="text-center" style="width:5%;">#</th>
+                                    <th>Name</th>
+                                    <th>Category</th>
+                                    <th class="text-right">Qty</th>
+                                    <th class="text-right">Sales</th>
+                                    <th class="text-right">COGS</th>
+                                    <th class="text-right">Gross Profit</th>
+                                    <th class="text-right">GP %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <t t-set="idx" t-value="0"/>
+                                <tr t-foreach="wizard.line_ids" t-as="line">
+                                    <t t-set="idx" t-value="idx + 1"/>
+                                    <td class="text-center"><t t-esc="idx"/></td>
+                                    <td>
+                                        <t t-if="wizard.report_type in ('product', 'detailed')" t-esc="line.product_id.display_name or 'N/A'"/>
+                                        <t t-elif="wizard.report_type == 'salesperson'" t-esc="line.salesperson_id.name or 'No Salesperson'"/>
+                                        <t t-elif="wizard.report_type == 'customer'" t-esc="line.partner_id.name or 'No Customer'"/>
+                                        <t t-elif="wizard.report_type == 'category'" t-esc="line.product_categ_id.complete_name or 'Uncategorized'"/>
+                                        <t t-elif="wizard.report_type == 'company'" t-esc="line.company_id.name or 'N/A'"/>
+                                    </td>
+                                    <td><t t-esc="line.product_categ_id.name if line.product_categ_id else ''"/></td>
+                                    <td class="text-right"><t t-esc="'%.2f' % line.quantity"/></td>
+                                    <td class="text-right">
+                                        <t t-esc="line.sale_amount" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </td>
+                                    <td class="text-right">
+                                        <t t-esc="line.cost_amount" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </td>
+                                    <td class="text-right"
+                                        t-attf-style="color: {{ 'green' if line.gross_profit >= 0 else 'red' }}; font-weight: bold;">
+                                        <t t-esc="line.gross_profit" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </td>
+                                    <td class="text-right"><t t-esc="'%.2f' % line.gp_margin"/>%</td>
+                                </tr>
+                            </tbody>
+                            <tfoot style="background: #e8eaf6; font-weight: bold;">
+                                <tr>
+                                    <td colspan="3" class="text-right"><strong>TOTALS</strong></td>
+                                    <td class="text-right"><t t-esc="'%.2f' % sum(wizard.line_ids.mapped('quantity'))"/></td>
+                                    <td class="text-right">
+                                        <t t-esc="wizard.total_sales" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </td>
+                                    <td class="text-right">
+                                        <t t-esc="wizard.total_cogs" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </td>
+                                    <td class="text-right" style="color: green;">
+                                        <t t-esc="wizard.total_gp" t-options="{'widget': 'monetary', 'display_currency': wizard.company_currency_id}"/>
+                                    </td>
+                                    <td class="text-right"><t t-esc="'%.2f' % wizard.total_gp_margin"/>%</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+
+</odoo>

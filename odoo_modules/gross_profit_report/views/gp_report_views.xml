@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Report Line List View Only -->
+    <record id="view_gp_report_line_list" model="ir.ui.view">
+        <field name="name">gross.profit.report.line.list</field>
+        <field name="model">gross.profit.report.line</field>
+        <field name="arch" type="xml">
+            <list decoration-success="gross_profit &gt; 0"
+                  decoration-danger="gross_profit &lt; 0"
+                  default_order="gross_profit desc">
+                <field name="product_id"/>
+                <field name="product_categ_id" optional="show"/>
+                <field name="salesperson_id" optional="show"/>
+                <field name="partner_id" optional="hide"/>
+                <field name="company_id" optional="hide" groups="base.group_multi_company"/>
+                <field name="invoice_id" optional="hide"/>
+                <field name="invoice_date" optional="hide"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="quantity" sum="Total"/>
+                <field name="sale_amount" sum="Total" widget="monetary"/>
+                <field name="cost_amount" sum="Total" widget="monetary"/>
+                <field name="gross_profit" sum="Total" widget="monetary"/>
+                <field name="gp_margin" widget="progressbar" options="{'max_value': 100}"/>
+                <field name="unit_sale_price" optional="hide"/>
+                <field name="unit_cost_price" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+</odoo>

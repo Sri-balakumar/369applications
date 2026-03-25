@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Root Menu for Quick Sales Return App -->
+    <menuitem id="quick_sales_return_menu_root"
+              name="Easy Sales Returns"
+              sequence="47"
+              web_icon="quick_sales_return,static/description/icon.png"
+              groups="sales_team.group_sale_salesman"/>
+
+    <!-- Sub Menu - Returns -->
+    <menuitem id="quick_sales_return_menu_returns"
+              name="Returns"
+              parent="quick_sales_return_menu_root"
+              sequence="10"/>
+
+    <!-- Action Menu Item - All Returns -->
+    <menuitem id="quick_sales_return_menu_action"
+              name="Sales Returns"
+              parent="quick_sales_return_menu_returns"
+              action="quick_sales_return_action"
+              sequence="10"/>
+
+    <!-- Quick New Return -->
+    <menuitem id="quick_sales_return_menu_new"
+              name="New Return"
+              parent="quick_sales_return_menu_returns"
+              action="quick_sales_return_action_new"
+              sequence="5"/>
+
+    <!-- Also add to Sales app for convenience -->
+    <menuitem id="quick_sales_return_menu_in_sale"
+              name="Quick Return"
+              parent="sale.sale_menu_root"
+              action="quick_sales_return_action"
+              sequence="6"/>
+
+</odoo>

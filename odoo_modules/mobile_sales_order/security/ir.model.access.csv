@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_mobile_sales_order_user,mobile.sales.order.user,model_mobile_sales_order,sales_team.group_sale_salesman,1,1,1,0
+access_mobile_sales_order_manager,mobile.sales.order.manager,model_mobile_sales_order,sales_team.group_sale_manager,1,1,1,1
+access_mobile_sales_order_line_user,mobile.sales.order.line.user,model_mobile_sales_order_line,sales_team.group_sale_salesman,1,1,1,0
+access_mobile_sales_order_line_manager,mobile.sales.order.line.manager,model_mobile_sales_order_line,sales_team.group_sale_manager,1,1,1,1
+access_mobile_sales_payment_method_user,mobile.sales.payment.method.user,model_mobile_sales_payment_method,sales_team.group_sale_salesman,1,0,0,0
+access_mobile_sales_payment_method_manager,mobile.sales.payment.method.manager,model_mobile_sales_payment_method,sales_team.group_sale_manager,1,1,1,1

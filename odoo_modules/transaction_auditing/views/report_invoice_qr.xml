@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Add QR code to the invoice PDF report -->
+    <template id="report_invoice_qr_code" inherit_id="account.report_invoice_document">
+        <xpath expr="//div[@id='informations']" position="after">
+            <div class="row mt-3 mb-3">
+                <div class="col-12 text-center">
+                    <img t-att-src="'/report/barcode/?barcode_type=QR&amp;value=%s&amp;width=150&amp;height=150' % o.id"
+                         style="width: 150px; height: 150px;"
+                         alt="Invoice QR Code"/>
+                    <br/>
+                    <small style="color: #666;">Scan this QR code to audit this invoice</small>
+                </div>
+            </div>
+        </xpath>
+    </template>
+
+</odoo>

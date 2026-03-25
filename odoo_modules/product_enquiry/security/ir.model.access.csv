@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_product_enquiry_user,product.enquiry.user,model_product_enquiry,base.group_user,1,1,1,0
+access_product_enquiry_manager,product.enquiry.manager,model_product_enquiry,base.group_system,1,1,1,1
+access_product_enquiry_attachment_user,product.enquiry.attachment.user,model_product_enquiry_attachment,base.group_user,1,1,1,0
+access_product_enquiry_attachment_manager,product.enquiry.attachment.manager,model_product_enquiry_attachment,base.group_system,1,1,1,1

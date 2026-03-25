@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_staff_tracking_user,staff.tracking.user,model_staff_tracking,base.group_user,1,1,1,1
+access_user_location_user,user.location.user,model_user_location,base.group_user,1,1,1,1

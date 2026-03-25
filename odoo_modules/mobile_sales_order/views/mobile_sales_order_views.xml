@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ==================== Mobile Sales Order ==================== -->
+
+    <!-- Tree View -->
+    <record id="view_mobile_sales_order_tree" model="ir.ui.view">
+        <field name="name">mobile.sales.order.tree</field>
+        <field name="model">mobile.sales.order</field>
+        <field name="arch" type="xml">
+            <list string="Mobile Sales Orders" default_order="date desc, id desc">
+                <field name="name" string="Reference"/>
+                <field name="date"/>
+                <field name="partner_id" string="Customer"/>
+                <field name="warehouse_id"/>
+                <field name="sale_order_id" string="Sale Order"/>
+                <field name="invoice_id" string="Invoice"/>
+                <field name="amount_total" sum="Total"/>
+                <field name="state" widget="badge" decoration-info="state == 'draft'"
+                       decoration-success="state == 'done'" decoration-danger="state == 'cancelled'"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_mobile_sales_order_form" model="ir.ui.view">
+        <field name="name">mobile.sales.order.form</field>
+        <field name="model">mobile.sales.order</field>
+        <field name="arch" type="xml">
+            <form string="Mobile Sales Order">
+                <header>
+                    <button name="action_confirm" type="object" string="Confirm Order"
+                            class="btn-primary" invisible="state != 'draft'"
+                            confirm="This will create a Sale Order, Delivery, and Invoice. Continue?"/>
+                    <button name="action_cancel" type="object" string="Cancel"
+                            invisible="state != 'draft'"/>
+                    <button name="action_draft" type="object" string="Set to Draft"
+                            invisible="state != 'cancelled'"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,done"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" readonly="1"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="partner_id" readonly="state != 'draft'"/>
+                            <field name="date" readonly="state != 'draft'"/>
+                            <field name="warehouse_id" readonly="state != 'draft'"/>
+                        </group>
+                        <group>
+                            <field name="payment_method_id" readonly="state != 'draft'"/>
+                            <field name="reference" readonly="state != 'draft'"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="currency_id" invisible="1"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <page string="Order Lines" name="order_lines">
+                            <field name="line_ids" readonly="state != 'draft'">
+                                <list editable="bottom">
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="product_id"/>
+                                    <field name="description" optional="hide"/>
+                                    <field name="quantity"/>
+                                    <field name="uom_id" optional="show"/>
+                                    <field name="price_unit"/>
+                                    <field name="subtotal" sum="Total"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Other Info" name="other_info">
+                            <group>
+                                <field name="notes" placeholder="Additional notes..."/>
+                            </group>
+                        </page>
+                    </notebook>
+
+                    <group class="oe_subtotal_footer oe_right">
+                        <field name="amount_untaxed"/>
+                        <field name="amount_tax"/>
+                        <field name="amount_total" class="oe_subtotal_footer_separator"/>
+                    </group>
+
+                    <group string="Linked Documents" invisible="state == 'draft'">
+                        <group>
+                            <field name="sale_order_id" readonly="1"/>
+                            <field name="picking_id" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="invoice_id" readonly="1"/>
+                        </group>
+                    </group>
+                </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids" groups="base.group_user"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <!-- Search View -->
+    <record id="view_mobile_sales_order_search" model="ir.ui.view">
+        <field name="name">mobile.sales.order.search</field>
+        <field name="model">mobile.sales.order</field>
+        <field name="arch" type="xml">
+            <search string="Search Mobile Sales Orders">
+                <field name="name"/>
+                <field name="partner_id"/>
+                <filter name="filter_draft" string="Draft" domain="[('state', '=', 'draft')]"/>
+                <filter name="filter_done" string="Done" domain="[('state', '=', 'done')]"/>
+                <filter name="filter_cancelled" string="Cancelled" domain="[('state', '=', 'cancelled')]"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_mobile_sales_order" model="ir.actions.act_window">
+        <field name="name">Mobile Sales Orders</field>
+        <field name="res_model">mobile.sales.order</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_mobile_sales_order_search"/>
+        <field name="context">{'search_default_filter_draft': 0}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first Mobile Sales Order
+            </p>
+            <p>
+                Sales orders created from the mobile app will appear here.
+            </p>
+        </field>
+    </record>
+
+    <!-- ==================== Payment Method ==================== -->
+
+    <!-- Tree View -->
+    <record id="view_mobile_sales_payment_method_tree" model="ir.ui.view">
+        <field name="name">mobile.sales.payment.method.tree</field>
+        <field name="model">mobile.sales.payment.method</field>
+        <field name="arch" type="xml">
+            <list string="Payment Methods" editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="journal_type"/>
+                <field name="is_default"/>
+                <field name="is_customer_account"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_mobile_sales_payment_method" model="ir.actions.act_window">
+        <field name="name">Payment Methods</field>
+        <field name="res_model">mobile.sales.payment.method</field>
+        <field name="view_mode">list</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create payment methods for the mobile app
+            </p>
+        </field>
+    </record>
+
+</odoo>
