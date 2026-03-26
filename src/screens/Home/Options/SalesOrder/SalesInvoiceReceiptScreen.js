@@ -5,7 +5,9 @@ import { NavigationHeader } from '@components/Header';
 import { Button } from '@components/common/Button';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo } from '@api/services/generalApi';
+import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo, downloadInvoicePdfOdoo } from '@api/services/generalApi';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { useCurrencyStore } from '@stores/currency';
 import { useAuthStore } from '@stores/auth';
 import { showToastMessage } from '@components/Toast';
@@ -94,7 +96,13 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
         }
       }
 
-      console.warn('[Invoice] All tiers failed - no product data available');
+      // FALLBACK: If we have orderData with amounts but no lines, still show the invoice
+      if (orderData && (orderData.amountTotal > 0 || orderData.name)) {
+        console.log('[Invoice] FALLBACK: Using orderData with 0 lines but has header/totals');
+        setInvoice(buildFromOrderData(orderData));
+      } else {
+        console.warn('[Invoice] All tiers failed - no product data available');
+      }
       setLoading(false);
     };
 
@@ -109,11 +117,37 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       const linesSummary = invoice.lines.map((l, i) =>
         `${i + 1}. ${l.productName}  Qty: ${l.quantity}  Price: ${l.priceUnit.toFixed(3)}  Total: ${l.subtotal.toFixed(3)}`
       ).join('\n');
-      const message = `INVOICE: ${invoice.name}\nDate: ${invoice.invoiceDate}\nCustomer: ${invoice.partnerName}\nCompany: ${invoice.companyName}\n\n--- Products ---\n${linesSummary}\n\nSubtotal: ${invoice.amountUntaxed.toFixed(3)} ${currency}\nTax: ${invoice.amountTax.toFixed(3)} ${currency}\nGrand Total: ${invoice.amountTotal.toFixed(3)} ${currency}\n\nCashier: ${cashierName}`;
+      const message = `INVOICE: ${invoice.name}\nDate: ${invoice.invoiceDate}\nCustomer: ${invoice.partnerName}\nCompany: ${invoice.companyName}\n\n--- Products ---\n${linesSummary}\n\nTotal: ${invoice.amountTotal.toFixed(3)} ${currency}\n\nCashier: ${cashierName}`;
       await Share.share({ message, title: `Invoice ${invoice.name}` });
     } catch (err) {
       console.error('Share error:', err);
       showToastMessage('Failed to share invoice');
+    }
+  };
+
+  const [downloading, setDownloading] = useState(false);
+  const handleDownloadPdf = async () => {
+    if (!invoiceId) {
+      showToastMessage('Invoice ID not available');
+      return;
+    }
+    setDownloading(true);
+    try {
+      const base64Pdf = await downloadInvoicePdfOdoo(invoiceId);
+      const fileName = `Invoice_${invoice?.name || invoiceId}.pdf`;
+      const fileUri = `${FileSystem.cacheDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(fileUri, base64Pdf, { encoding: FileSystem.EncodingType.Base64 });
+      console.log('[DownloadPDF] Saved to:', fileUri);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      } else {
+        showToastMessage('PDF saved: ' + fileUri);
+      }
+    } catch (err) {
+      console.error('[DownloadPDF] error:', err);
+      showToastMessage('Failed to download PDF. Make sure mobile_invoice_report module is installed in Odoo.');
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -177,16 +211,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
 
           <View style={s.divider} />
 
-          {/* Summary */}
-          <View style={s.summaryRow}>
-            <Text style={s.summaryLabel}>Subtotal</Text>
-            <Text style={s.summaryValue}>{invoice.amountUntaxed.toFixed(3)} {currency}</Text>
-          </View>
-          <View style={s.summaryRow}>
-            <Text style={s.summaryLabel}>Tax</Text>
-            <Text style={s.summaryValue}>{invoice.amountTax.toFixed(3)} {currency}</Text>
-          </View>
-
           <View style={s.divider} />
 
           <View style={s.grandTotalRow}>
@@ -214,6 +238,15 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             backgroundColor="#333"
             title="Print / Share Invoice"
             onPress={handlePrint}
+          />
+        </View>
+
+        <View style={{ marginTop: 10 }}>
+          <Button
+            backgroundColor="#E85D04"
+            title={downloading ? "Downloading..." : "Download PDF"}
+            onPress={handleDownloadPdf}
+            loading={downloading}
           />
         </View>
 

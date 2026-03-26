@@ -17,7 +17,7 @@ const useCurrencyStore = create((set) => ({
         if (currencyCode) set({ currency: currencyCode });
     },
     setCurrencyFromOdoo: (data) => {
-        if (data && data.code) set({ currency: data.code, currencySymbol: data.symbol || data.code });
+        if (data && data.code) set({ currency: data.code, currencySymbol: data.code });
     },
 }));
 

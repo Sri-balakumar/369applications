@@ -15,6 +15,8 @@ import {
   updateSaleOrderLinesOdoo,
   fetchProductByBarcodeOdoo,
   searchInvoicesByOriginOdoo,
+  validateSaleOrderPickingsOdoo,
+  cancelSaleOrderOdoo,
 } from '@api/services/generalApi';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useCurrencyStore } from '@stores/currency';
@@ -38,7 +40,7 @@ const STATE_COLORS = {
 
 const SaleOrderDetailScreen = ({ navigation, route }) => {
   const { orderId } = route?.params || {};
-  const currencySymbol = useCurrencyStore((state) => state.currencySymbol) || '$';
+  const currencySymbol = useCurrencyStore((state) => state.currency) || 'OMR';
 
   const [record, setRecord] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -230,14 +232,17 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const handleCreateInvoice = async () => {
     setInvoicing(true);
     try {
+      // CAPTURE order data FIRST before any async state changes
+      const od = buildOrderData();
+      console.log('[Invoice] Captured orderData with', od.lines.length, 'lines before create');
       const companyId = record?.company_id ? (Array.isArray(record.company_id) ? record.company_id[0] : record.company_id) : null;
+      // Validate deliveries (auto-deliver) so stock.quant updates (supports negative stock)
+      await validateSaleOrderPickingsOdoo(orderId);
       const result = await createInvoiceFromQuotationOdoo(orderId, companyId);
       const invoiceId = result?.result;
       if (invoiceId) {
         setCreatedInvoiceId(invoiceId);
-        await fetchDetail(false);
-        const od = buildOrderData();
-        console.log('[Invoice] Passing orderData with', od.lines.length, 'lines:', JSON.stringify(od.lines));
+        fetchDetail(false); // Refresh in background, don't await
         navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId, orderData: od });
       } else {
         await fetchDetail(false);
@@ -257,6 +262,27 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
       console.log('[Invoice] View - Passing orderData with', od.lines.length, 'lines');
       navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId, orderData: od });
     }
+  };
+
+  const [cancelling, setCancelling] = useState(false);
+  const handleCancelOrder = () => {
+    Alert.alert('Cancel Order', 'Are you sure you want to cancel this order?', [
+      { text: 'No', style: 'cancel' },
+      {
+        text: 'Yes, Cancel', style: 'destructive', onPress: async () => {
+          setCancelling(true);
+          try {
+            await cancelSaleOrderOdoo(orderId);
+            Alert.alert('Order Cancelled', 'The order has been cancelled successfully.');
+            await fetchDetail(false);
+          } catch (err) {
+            Alert.alert('Error', err?.message || 'Failed to cancel order.');
+          } finally {
+            setCancelling(false);
+          }
+        },
+      },
+    ]);
   };
 
   if (!record) {
@@ -468,14 +494,6 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
 
         {/* Totals Card */}
         <View style={styles.card}>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Untaxed Amount:</Text>
-            <Text style={styles.totalValue}>{currencySymbol} {untaxed.toFixed ? untaxed.toFixed(3) : '0.000'}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Taxes:</Text>
-            <Text style={styles.totalValue}>{currencySymbol} {taxes.toFixed ? taxes.toFixed(3) : '0.000'}</Text>
-          </View>
           <View style={[styles.totalRow, styles.grandTotalRow]}>
             <Text style={styles.grandTotalLabel}>Total:</Text>
             <Text style={styles.grandTotalValue}>{currencySymbol} {total.toFixed ? total.toFixed(3) : '0.000'}</Text>
@@ -506,6 +524,18 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
           </View>
         )}
 
+        {/* Cancel Order Button */}
+        {isDraft && (
+          <View style={{ marginVertical: 8 }}>
+            <Button
+              backgroundColor="#F44336"
+              title="Cancel Order"
+              onPress={handleCancelOrder}
+              loading={cancelling}
+            />
+          </View>
+        )}
+
         {/* Create Invoice Button */}
         {canInvoice && (
           <View style={{ marginVertical: 8 }}>
@@ -530,7 +560,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
         )}
 
       </RoundedScrollContainer>
-      <OverlayLoader visible={confirming || invoicing || saving} />
+      <OverlayLoader visible={confirming || invoicing || saving || cancelling} />
     </SafeAreaView>
   );
 };

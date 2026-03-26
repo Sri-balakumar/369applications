@@ -17,6 +17,7 @@ const ProductsList = ({ item, onPress, showQuickAdd, onQuickAdd }) => {
 
     const currency = useCurrencyStore((state) => state.currency);
     const priceValue = (item?.price ?? item?.list_price ?? 0);
+    const stockQty = item?.qty_available ?? item?.total_product_quantity ?? null;
 
     return (
         <TouchableOpacity onPress={onPress} style={styles.container} activeOpacity={0.7}>
@@ -33,6 +34,11 @@ const ProductsList = ({ item, onPress, showQuickAdd, onQuickAdd }) => {
                     onLoad={() => setImageLoading(false)}
                     onError={() => setImageLoading(false)}
                 />
+                {stockQty !== null && (
+                    <View style={[styles.stockBadge, { backgroundColor: stockQty > 0 ? '#4CAF50' : '#F44336' }]}>
+                        <Text style={styles.stockText}>{stockQty}</Text>
+                    </View>
+                )}
             </View>
             <View style={styles.textContainer}>
                 <Text style={styles.name} numberOfLines={2}>{item?.product_name?.trim()}</Text>
@@ -110,5 +116,18 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 16,
         fontWeight: '700',
+    },
+    stockBadge: {
+        position: 'absolute',
+        bottom: 4,
+        left: 4,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 8,
+    },
+    stockText: {
+        color: '#fff',
+        fontSize: 10,
+        fontFamily: FONT_FAMILY.urbanistBold,
     },
 });

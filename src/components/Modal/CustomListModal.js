@@ -21,6 +21,7 @@ const CustomListModal = ({
   isVisible,
   onAdd = () => { },
   onAddIcon = true,
+  onEdit,
   onClose = () => { },
   title,
 }) => {
@@ -86,13 +87,18 @@ const CustomListModal = ({
           keyExtractor={(item, index) => String(item.id || index)}
           renderItem={({ item }) => (
             <TouchableOpacity
-              style={styles.listItem}
+              style={[styles.listItem, onEdit && { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
               onPress={() => handleCustomModal(item)}
               activeOpacity={0.6}
             >
-              <Text style={styles.itemText}>
+              <Text style={[styles.itemText, onEdit && { flex: 1 }]}>
                 {item.label || item.name || ''}
               </Text>
+              {onEdit && (
+                <TouchableOpacity onPress={() => onEdit(item)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <AntDesign name="edit" size={18} color={COLORS.primaryThemeColor} />
+                </TouchableOpacity>
+              )}
             </TouchableOpacity>
           )}
           showsVerticalScrollIndicator={false}

@@ -606,6 +606,7 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
               "uom_id",          // many2one [id, name]
               "image_128",       // product image
               "taxes_id",        // customer taxes
+              "qty_available",   // on-hand stock quantity
             ],
             limit: odooLimit,
             order: "name asc",
@@ -675,6 +676,7 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
           : null,
         tax_percent: taxPercent,
         taxes: productTaxes,
+        qty_available: p.qty_available ?? 0,
       };
     });
   } catch (error) {
@@ -904,7 +906,7 @@ export const fetchPosCategoriesOdoo = async () => {
     const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
       jsonrpc: '2.0', method: 'call',
       params: { model: 'pos.category', method: 'search_read', args: [[]],
-        kwargs: { fields: ['id', 'name', 'image_128'], limit: 100, order: 'sequence asc, name asc' } },
+        kwargs: { fields: ['id', 'name', 'image_128', 'parent_id', 'color'], limit: 100, order: 'sequence asc, name asc' } },
     }, { headers, timeout: 15000 });
     if (response.data.error) {
       console.error('[fetchPosCategoriesOdoo] error:', response.data.error?.data?.message);
@@ -915,10 +917,88 @@ export const fetchPosCategoriesOdoo = async () => {
       name: c.name || '',
       category_name: c.name || '',
       image_url: c.image_128 ? `data:image/png;base64,${c.image_128}` : null,
+      image_base64: c.image_128 || null,
+      parent_id: c.parent_id || null,
+      color: c.color ?? 0,
     }));
   } catch (error) {
     console.error('[fetchPosCategoriesOdoo] error:', error?.message || error);
     return [];
+  }
+};
+
+// Create a new POS category in Odoo
+export const createPosCategoryOdoo = async ({ name, parentId, color, image }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = { name };
+    if (parentId) vals.parent_id = parentId;
+    if (color !== undefined && color !== null) vals.color = color;
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'pos.category', method: 'create', args: [vals], kwargs: {} },
+    }, { headers, timeout: 60000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create category');
+    const newId = response.data.result;
+    // Upload image separately if provided
+    if (image && newId) {
+      await uploadPosCategoryImageOdoo(newId, image);
+    }
+    return newId;
+  } catch (error) {
+    console.error('[createPosCategoryOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Update an existing POS category in Odoo
+export const updatePosCategoryOdoo = async (id, { name, parentId, color, image }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = {};
+    if (name !== undefined) vals.name = name;
+    if (parentId !== undefined) vals.parent_id = parentId || false;
+    if (color !== undefined && color !== null) vals.color = color;
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'pos.category', method: 'write', args: [[id], vals], kwargs: {} },
+    }, { headers, timeout: 60000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to update category');
+    // Upload image separately if provided
+    if (image) {
+      await uploadPosCategoryImageOdoo(id, image);
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('[updatePosCategoryOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Upload image to POS category - separate call for reliability
+export const uploadPosCategoryImageOdoo = async (categoryId, base64Image) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    console.log('[uploadPosCategoryImage] Uploading image for category', categoryId, 'size:', base64Image.length);
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'pos.category',
+        method: 'write',
+        args: [[categoryId], { image_128: base64Image }],
+        kwargs: {},
+      },
+    }, { headers, timeout: 120000 });
+    if (response.data.error) {
+      console.error('[uploadPosCategoryImage] Odoo error:', JSON.stringify(response.data.error));
+      throw new Error(response.data.error?.data?.message || 'Failed to upload image');
+    }
+    console.log('[uploadPosCategoryImage] Success, result:', response.data.result);
+    return response.data.result;
+  } catch (error) {
+    console.error('[uploadPosCategoryImage] error:', error?.message || error);
+    // Don't throw — image failure shouldn't block category save
+    console.warn('[uploadPosCategoryImage] Image upload failed but category was saved');
   }
 };
 
@@ -3900,6 +3980,67 @@ export const confirmSaleOrderOdoo = async (orderId, companyId = null) => {
   }
 };
 
+// Validate (auto-deliver) all pickings for a confirmed sale order
+// This triggers stock.quant updates and allows negative stock via pos_negative_stock module
+export const validateSaleOrderPickingsOdoo = async (orderId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // 1. Get picking_ids from sale order
+    const soResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['picking_ids'] } },
+    }, { headers, timeout: 15000 });
+    const pickingIds = soResp.data?.result?.[0]?.picking_ids || [];
+    if (pickingIds.length === 0) {
+      console.log('[validatePickings] No pickings found for order', orderId);
+      return;
+    }
+
+    // 2. Read pickings to find unvalidated ones
+    const pickResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'stock.picking', method: 'read', args: [pickingIds], kwargs: { fields: ['id', 'state', 'move_ids'] } },
+    }, { headers, timeout: 15000 });
+    const pickings = (pickResp.data?.result || []).filter(p => !['done', 'cancel'].includes(p.state));
+
+    if (pickings.length === 0) {
+      console.log('[validatePickings] All pickings already done/cancelled');
+      return;
+    }
+
+    // 3. For each picking, set move quantities and validate
+    for (const picking of pickings) {
+      if (picking.move_ids && picking.move_ids.length > 0) {
+        // Read move quantities
+        const movesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'stock.move', method: 'read', args: [picking.move_ids], kwargs: { fields: ['id', 'product_uom_qty'] } },
+        }, { headers, timeout: 15000 });
+
+        // Set delivered quantity = ordered quantity for each move
+        for (const move of (movesResp.data?.result || [])) {
+          await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'stock.move', method: 'write', args: [[move.id], { quantity: move.product_uom_qty }], kwargs: {} },
+          }, { headers, timeout: 15000 });
+        }
+      }
+
+      // Validate the picking — this triggers _action_done() which updates stock.quant
+      await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'stock.picking', method: 'button_validate', args: [[picking.id]], kwargs: {} },
+      }, { headers, timeout: 15000 });
+
+      console.log('[validatePickings] Validated picking', picking.id);
+    }
+  } catch (error) {
+    console.warn('[validatePickings] Error validating pickings for order', orderId, ':', error?.message);
+    // Don't throw — picking validation failure should not block invoice creation
+  }
+};
+
 // Update order lines on a draft sale.order in Odoo
 // Changes: array of { lineId, qty, price_unit } to update, or { lineId, delete: true } to remove
 // Additions: array of { product_id, qty, price_unit } to add
@@ -3997,112 +4138,58 @@ export const createInvoiceFromQuotationOdoo = async (orderId, companyId = null) 
 
     const baseContext = { allowed_company_ids: companyIds };
 
-    // Step 1: Read the sale order to get partner, lines, and amounts
-    const soResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-      jsonrpc: '2.0', method: 'call',
-      params: { model: 'sale.order', method: 'read', args: [[orderId]],
-        kwargs: { fields: ['name', 'partner_id', 'order_line', 'currency_id', 'amount_total'], context: baseContext } },
-    }, { headers, timeout: 15000 });
-    if (soResp.data.error) throw new Error(soResp.data.error.data?.message || 'Failed to read sale order');
-    const so = soResp.data.result?.[0];
-    if (!so) throw new Error('Sale order not found');
-    const partnerId = Array.isArray(so.partner_id) ? so.partner_id[0] : so.partner_id;
-
-    // Step 2: Read sale order lines (filter out down payment lines)
-    const soLinesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-      jsonrpc: '2.0', method: 'call',
-      params: { model: 'sale.order.line', method: 'read', args: [so.order_line],
-        kwargs: { fields: ['product_id', 'name', 'product_uom_qty', 'price_unit', 'discount', 'tax_id'], context: baseContext } },
-    }, { headers, timeout: 15000 });
-    const soLines = (soLinesResp.data.result || []).filter(l => {
-      const name = (l.name || '').toLowerCase();
-      return !name.includes('down payment') && l.product_id;
-    });
-
-    // Step 3: Create invoice directly via account.move
-    const invoiceLines = soLines.map(l => [0, 0, {
-      product_id: Array.isArray(l.product_id) ? l.product_id[0] : l.product_id,
-      name: l.name || '',
-      quantity: l.product_uom_qty || 1,
-      price_unit: l.price_unit || 0,
-      discount: l.discount || 0,
-      tax_ids: l.tax_id && l.tax_id.length > 0 ? [[6, 0, l.tax_id]] : [[5, 0, 0]],
-    }]);
-
-    // Find sales journal
-    let journalId = null;
-    try {
-      const jResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-        jsonrpc: '2.0', method: 'call',
-        params: { model: 'account.journal', method: 'search_read',
-          args: [[['type', '=', 'sale'], ['company_id', '=', companyId || allCompanyIds[0]]]],
-          kwargs: { fields: ['id'], limit: 1 } },
-      }, { headers, timeout: 10000 });
-      journalId = jResp.data.result?.[0]?.id || null;
-    } catch (e) { /* use default */ }
-
-    const moveVals = {
-      partner_id: partnerId,
-      move_type: 'out_invoice',
-      invoice_line_ids: invoiceLines,
-      invoice_origin: so.name || '',
-    };
-    if (journalId) moveVals.journal_id = journalId;
-
+    // Step 1: Use Odoo's native _create_invoices() method on sale.order
+    // This properly creates invoice with all lines, taxes, and links
+    console.log('[createInvoice] Calling _create_invoices on SO:', orderId);
     const createResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0', method: 'call',
-      params: { model: 'account.move', method: 'create', args: [moveVals], kwargs: { context: baseContext } },
-    }, { headers, timeout: 20000 });
-    if (createResp.data.error) throw new Error(createResp.data.error.data?.message || 'Failed to create invoice');
-    const invoiceId = createResp.data.result;
-    console.log('[createInvoice] Invoice created:', invoiceId);
+      params: {
+        model: 'sale.order',
+        method: '_create_invoices',
+        args: [[orderId]],
+        kwargs: { context: baseContext },
+      },
+    }, { headers, timeout: 30000 });
 
-    // Step 4: Post the invoice
-    try {
-      await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-        jsonrpc: '2.0', method: 'call',
-        params: { model: 'account.move', method: 'action_post', args: [[invoiceId]], kwargs: { context: baseContext } },
-      }, { headers, timeout: 15000 });
-      console.log('[createInvoice] Invoice posted');
-    } catch (postErr) {
-      console.warn('[createInvoice] Could not post invoice:', postErr?.message);
+    if (createResp.data.error) {
+      console.error('[createInvoice] _create_invoices error:', JSON.stringify(createResp.data.error));
+      throw new Error(createResp.data.error.data?.message || 'Failed to create invoice');
     }
 
-    // Step 5: Link invoice lines to SO lines (this makes invoice_ids computed field work)
-    try {
-      // Read invoice lines
-      const invLinesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+    // _create_invoices returns a recordset of account.move IDs
+    let invoiceId = null;
+    const result = createResp.data.result;
+    if (Array.isArray(result) && result.length > 0) {
+      invoiceId = result[0];
+    } else if (typeof result === 'number') {
+      invoiceId = result;
+    } else if (result && typeof result === 'object' && result.id) {
+      invoiceId = result.id;
+    }
+
+    if (!invoiceId) {
+      // Fallback: read invoice_ids from SO
+      const soResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0', method: 'call',
-        params: { model: 'account.move.line', method: 'search_read',
-          args: [[['move_id', '=', invoiceId], ['product_id', '!=', false]]],
-          kwargs: { fields: ['id', 'product_id'] } },
-      }, { headers, timeout: 10000 });
-      const invLines = invLinesResp.data?.result || [];
-      // Match each invoice line to its SO line by product_id
-      for (const invLine of invLines) {
-        const productId = Array.isArray(invLine.product_id) ? invLine.product_id[0] : invLine.product_id;
-        const matchingSoLine = soLines.find(sl => {
-          const slPid = Array.isArray(sl.product_id) ? sl.product_id[0] : sl.product_id;
-          return slPid === productId;
-        });
-        if (matchingSoLine) {
-          await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-            jsonrpc: '2.0', method: 'call',
-            params: { model: 'account.move.line', method: 'write',
-              args: [[invLine.id], { sale_line_ids: [[4, matchingSoLine.id]] }], kwargs: {} },
-          }, { headers, timeout: 10000 });
-        }
-      }
-      console.log('[createInvoice] Invoice lines linked to SO lines');
-    } catch (linkErr) {
-      console.warn('[createInvoice] Could not link invoice lines to SO:', linkErr?.message);
-      // Fallback: try direct write on sale.order
+        params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['invoice_ids'] } },
+      }, { headers, timeout: 15000 });
+      const invoiceIds = soResp.data?.result?.[0]?.invoice_ids || [];
+      invoiceId = invoiceIds.length > 0 ? invoiceIds[invoiceIds.length - 1] : null;
+    }
+
+    console.log('[createInvoice] Invoice created:', invoiceId);
+
+    // Step 2: Post the invoice
+    if (invoiceId) {
       try {
         await axios.post(`${baseUrl}/web/dataset/call_kw`, {
           jsonrpc: '2.0', method: 'call',
-          params: { model: 'sale.order', method: 'write', args: [[orderId], { invoice_ids: [[4, invoiceId]] }], kwargs: {} },
-        }, { headers, timeout: 10000 });
-      } catch (e) { /* ignore */ }
+          params: { model: 'account.move', method: 'action_post', args: [[invoiceId]], kwargs: { context: baseContext } },
+        }, { headers, timeout: 15000 });
+        console.log('[createInvoice] Invoice posted successfully');
+      } catch (postErr) {
+        console.warn('[createInvoice] Could not post invoice:', postErr?.message);
+      }
     }
 
     return { result: invoiceId };
@@ -8796,6 +8883,18 @@ export const confirmEstimateSaleOdoo = async (id, companyId) => {
   } catch (error) { throw error; }
 };
 
+export const cancelSaleOrderOdoo = async (id) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'sale.order', method: 'action_cancel', args: [[id]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to cancel order');
+    return response.data.result;
+  } catch (error) { throw error; }
+};
+
 export const cancelEstimateSaleOdoo = async (id) => {
   try {
     const headers = await getOdooAuthHeaders();
@@ -9530,15 +9629,16 @@ export const fetchPurchaseTaxesOdoo = async () => {
   }
 };
 
-export const createProductOdoo = async ({ name, categId, listPrice, standardPrice, barcode, defaultCode, uomId, taxesId, supplierTaxesId, image, descriptionSale }) => {
+export const createProductOdoo = async ({ name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, taxesId, supplierTaxesId, image, descriptionSale }) => {
   try {
     const headers = await getOdooAuthHeaders();
     const vals = {
       name,
-      categ_id: categId,
       sale_ok: true,
       purchase_ok: true,
     };
+    if (categId) vals.categ_id = categId;
+    if (posCategoryId) vals.pos_categ_ids = [[6, 0, [posCategoryId]]];
     if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
     if (standardPrice !== undefined && standardPrice !== '') vals.standard_price = parseFloat(standardPrice) || 0;
     if (barcode) vals.barcode = barcode;
@@ -9646,6 +9746,34 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
     };
   } catch (error) {
     console.error('[fetchInvoiceDetailOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Download invoice PDF from Odoo (uses the mobile_invoice_report module)
+export const downloadInvoicePdfOdoo = async (invoiceId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const reportUrl = `${baseUrl}/report/pdf/mobile_invoice_report.report_mobile_invoice/${invoiceId}`;
+    console.log('[downloadInvoicePdf] Fetching PDF from:', reportUrl);
+
+    const response = await axios.get(reportUrl, {
+      headers,
+      responseType: 'arraybuffer',
+      timeout: 60000,
+    });
+
+    // Convert arraybuffer to base64
+    const uint8Array = new Uint8Array(response.data);
+    let binary = '';
+    for (let i = 0; i < uint8Array.length; i++) {
+      binary += String.fromCharCode(uint8Array[i]);
+    }
+    const base64 = btoa(binary);
+    console.log('[downloadInvoicePdf] PDF downloaded, base64 length:', base64.length);
+    return base64;
+  } catch (error) {
+    console.error('[downloadInvoicePdf] error:', error?.message || error);
     throw error;
   }
 };

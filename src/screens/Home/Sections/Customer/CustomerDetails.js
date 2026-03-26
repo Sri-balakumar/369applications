@@ -11,7 +11,7 @@ import { Ionicons, AntDesign, MaterialIcons } from '@expo/vector-icons';
 import { EmptyState } from '@components/common/empty';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
-import { createSaleOrderOdoo, confirmSaleOrderOdoo, createInvoiceFromQuotationOdoo, fetchProductByBarcodeOdoo, fetchSaleOrderDetailOdoo } from '@api/services/generalApi';
+import { createSaleOrderOdoo, confirmSaleOrderOdoo, createInvoiceFromQuotationOdoo, fetchProductByBarcodeOdoo, fetchSaleOrderDetailOdoo, validateSaleOrderPickingsOdoo } from '@api/services/generalApi';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Toast from 'react-native-toast-message';
 import Text from '@components/Text';
@@ -244,13 +244,34 @@ const CustomerDetails = ({ navigation, route }) => {
       }
       // Confirm SO - don't let stock errors block invoice creation
       try { await confirmSaleOrderOdoo(odooOrderId); } catch (e) { console.warn('[DirectInvoice] SO confirm warning:', e?.message); }
+      // Validate deliveries (auto-deliver) so stock.quant updates (supports negative stock)
+      await validateSaleOrderPickingsOdoo(odooOrderId);
       const invoiceResult = await createInvoiceFromQuotationOdoo(odooOrderId);
       const invoiceId = invoiceResult?.result || null;
+      // Build orderData from cart BEFORE clearing it
+      const orderData = {
+        name: '',
+        partnerName: details?.name || '-',
+        companyName: currentUser?.company?.name || '-',
+        invoiceDate: new Date().toISOString().split('T')[0],
+        amountUntaxed: untaxedAmount,
+        amountTax: taxAmount,
+        amountTotal: totalAmount,
+        lines: products.map(p => ({
+          id: p.id,
+          productName: p.name || p.display_name || '-',
+          quantity: p.quantity || 1,
+          priceUnit: p.price || 0,
+          discount: p.discount || 0,
+          subtotal: (p.price || 0) * (p.quantity || 1),
+        })),
+      };
+      console.log('[DirectInvoice] Built orderData with', orderData.lines.length, 'lines');
       clearProducts();
       const custId = details?.id || details?._id;
       if (custId) await clearCartFromStorage(custId);
       if (invoiceId) {
-        navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderName: '' });
+        navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId: odooOrderId, orderData });
       } else {
         Alert.alert('Invoice Created', 'Invoice created successfully.', [
           { text: 'OK', onPress: () => navigation.goBack() },
@@ -321,15 +342,6 @@ const CustomerDetails = ({ navigation, route }) => {
 
             {/* Totals Card */}
             <View style={s.totalsCard}>
-              <View style={s.totalRow}>
-                <Text style={s.totalLabel}>Untaxed Amount</Text>
-                <Text style={s.totalValue}>{untaxedAmount.toFixed(3)} {currency}</Text>
-              </View>
-              <View style={s.totalRow}>
-                <Text style={s.totalLabel}>Taxes</Text>
-                <Text style={s.totalValue}>{taxAmount.toFixed(3)} {currency}</Text>
-              </View>
-              <View style={s.divider} />
               <View style={s.totalRow}>
                 <Text style={s.grandTotalLabel}>Total Amount</Text>
                 <Text style={s.grandTotalValue}>{totalAmount.toFixed(3)} {currency}</Text>

@@ -327,6 +327,7 @@ const ProductDetail = ({ navigation, route }) => {
               <View style={s.sectionCard}>
                 <DetailRow icon="category" label="Category" value={categoryName} />
                 <DetailRow icon="attach-money" label="Price" value={`${Number(priceValue).toFixed(3)} ${currency || ''}`} valueColor={COLORS.primaryThemeColor} />
+                <DetailRow icon="inventory" label="Stock on Hand" value={String(stockQty)} valueColor={stockQty > 0 ? '#4CAF50' : '#F44336'} />
               </View>
             )}
 

@@ -45,7 +45,7 @@ const FILTERS = [
 ];
 
 const SaleOrderListScreen = ({ navigation }) => {
-  const currencySymbol = useCurrencyStore((state) => state.currencySymbol) || '$';
+  const currencySymbol = useCurrencyStore((state) => state.currency) || 'OMR';
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState('all');
