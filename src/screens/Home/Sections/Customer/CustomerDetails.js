@@ -243,10 +243,13 @@ const CustomerDetails = ({ navigation, route }) => {
         return;
       }
       // Confirm SO - don't let stock errors block invoice creation
-      try { await confirmSaleOrderOdoo(odooOrderId); } catch (e) { console.warn('[DirectInvoice] SO confirm warning:', e?.message); }
+      console.log('[DirectInvoice] === STARTING INVOICE FLOW for SO:', odooOrderId, '===');
+      try { await confirmSaleOrderOdoo(odooOrderId); console.log('[DirectInvoice] SO confirmed'); } catch (e) { console.warn('[DirectInvoice] SO confirm warning:', e?.message); }
       // Validate deliveries (auto-deliver) so stock.quant updates (supports negative stock)
-      await validateSaleOrderPickingsOdoo(odooOrderId);
+      try { await validateSaleOrderPickingsOdoo(odooOrderId); console.log('[DirectInvoice] Pickings validated'); } catch (e) { console.warn('[DirectInvoice] Picking validation warning:', e?.message); }
+      console.log('[DirectInvoice] === CALLING createInvoiceFromQuotationOdoo ===');
       const invoiceResult = await createInvoiceFromQuotationOdoo(odooOrderId);
+      console.log('[DirectInvoice] === INVOICE RESULT:', JSON.stringify(invoiceResult), '===');
       const invoiceId = invoiceResult?.result || null;
       // Build orderData from cart BEFORE clearing it
       const orderData = {

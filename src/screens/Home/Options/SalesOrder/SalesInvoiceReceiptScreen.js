@@ -5,8 +5,8 @@ import { NavigationHeader } from '@components/Header';
 import { Button } from '@components/common/Button';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo, downloadInvoicePdfOdoo } from '@api/services/generalApi';
-import * as FileSystem from 'expo-file-system';
+import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo } from '@api/services/generalApi';
+import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { useCurrencyStore } from '@stores/currency';
 import { useAuthStore } from '@stores/auth';
@@ -127,25 +127,94 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
 
   const [downloading, setDownloading] = useState(false);
   const handleDownloadPdf = async () => {
-    if (!invoiceId) {
-      showToastMessage('Invoice ID not available');
+    if (!invoice) {
+      showToastMessage('Invoice data not available');
       return;
     }
     setDownloading(true);
     try {
-      const base64Pdf = await downloadInvoicePdfOdoo(invoiceId);
-      const fileName = `Invoice_${invoice?.name || invoiceId}.pdf`;
-      const fileUri = `${FileSystem.cacheDirectory}${fileName}`;
-      await FileSystem.writeAsStringAsync(fileUri, base64Pdf, { encoding: FileSystem.EncodingType.Base64 });
-      console.log('[DownloadPDF] Saved to:', fileUri);
+      // Build product rows HTML
+      const rowsHtml = (invoice.lines || []).map((line, idx) =>
+        `<tr style="border-bottom:1px solid #eee;">
+          <td style="padding:8px;">${idx + 1}. ${line.productName || '-'}</td>
+          <td style="text-align:center;padding:8px;">${line.quantity || 0}</td>
+          <td style="text-align:right;padding:8px;">${(line.priceUnit || 0).toFixed(3)}</td>
+          <td style="text-align:center;padding:8px;">${line.discount > 0 ? line.discount + '%' : '0'}</td>
+          <td style="text-align:right;padding:8px;">${(line.subtotal || 0).toFixed(3)}</td>
+        </tr>`
+      ).join('');
+
+      const html = `
+        <html>
+        <head><meta charset="utf-8"/><style>
+          body { font-family: Arial, sans-serif; color: #333; padding: 20px; }
+          h2 { color: #2e2a4f; margin: 5px 0; }
+          table { width: 100%; border-collapse: collapse; }
+          .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 15px; }
+          .info td { font-size: 12px; padding: 2px 0; }
+          .products th { text-align: center; padding: 8px; border-bottom: 2px solid #333; background: #f5f5f5; font-size: 12px; }
+          .products td { font-size: 12px; }
+          .total-box { text-align: right; margin: 15px 0; padding: 10px; background: #f9f9f9; border-radius: 8px; }
+          .grand { font-size: 18px; font-weight: bold; color: #e85d04; }
+          .footer { text-align: center; margin-top: 30px; color: #999; font-size: 10px; border-top: 1px solid #ddd; padding-top: 15px; }
+        </style></head>
+        <body>
+          <div class="header">
+            <h2>${invoice.companyName || 'Company'}</h2>
+          </div>
+          <h3 style="text-align:center;color:#2e2a4f;">INVOICE</h3>
+          <table class="info" style="margin-bottom:15px;">
+            <tr>
+              <td><strong>Date:</strong> ${invoice.invoiceDate || '-'}</td>
+              <td style="text-align:right;"><strong>Invoice:</strong> ${invoice.name || '-'}</td>
+            </tr>
+            <tr>
+              <td><strong>Cashier:</strong> ${cashierName}</td>
+              <td style="text-align:right;"><strong>Company:</strong> ${invoice.companyName || '-'}</td>
+            </tr>
+            <tr><td><strong>Customer:</strong> ${invoice.partnerName || '-'}</td></tr>
+          </table>
+          <hr/>
+          <table class="products" style="margin:15px 0;">
+            <thead><tr>
+              <th style="text-align:left;width:40%;">Product Name</th>
+              <th style="width:12%;">Qty</th>
+              <th style="text-align:right;width:16%;">Unit Price</th>
+              <th style="width:12%;">Disc</th>
+              <th style="text-align:right;width:20%;">Total</th>
+            </tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <hr/>
+          <div class="total-box">
+            <span class="grand">Grand Total: ${(invoice.amountTotal || 0).toFixed(3)} ${currency}</span>
+          </div>
+          <hr/>
+          <div style="text-align:center;margin:15px 0;">
+            <h4 style="color:#2e2a4f;">Payment Details</h4>
+            <table style="width:50%;margin:0 auto;font-size:12px;">
+              <tr><td style="color:#666;">Cash:</td><td style="text-align:right;font-weight:bold;">${(invoice.amountTotal || 0).toFixed(3)} ${currency}</td></tr>
+              <tr><td style="color:#666;">Change:</td><td style="text-align:right;font-weight:bold;">0</td></tr>
+            </table>
+          </div>
+          <div class="footer">
+            <p>Thank you for your business!</p>
+            <p>Generated from 369ai Biz Mobile App</p>
+          </div>
+        </body></html>
+      `;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      console.log('[DownloadPDF] PDF created at:', uri);
+
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(fileUri, { UTI: '.pdf', mimeType: 'application/pdf' });
+        await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
       } else {
-        showToastMessage('PDF saved: ' + fileUri);
+        showToastMessage('PDF saved successfully');
       }
     } catch (err) {
       console.error('[DownloadPDF] error:', err);
-      showToastMessage('Failed to download PDF. Make sure mobile_invoice_report module is installed in Odoo.');
+      showToastMessage('Failed to generate PDF');
     } finally {
       setDownloading(false);
     }

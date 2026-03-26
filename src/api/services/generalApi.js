@@ -4121,80 +4121,113 @@ export const createInvoiceFromQuotationOdoo = async (orderId, companyId = null) 
   try {
     const { headers, baseUrl } = await authenticateOdoo();
 
-    // Fetch all companies for allowed_company_ids
     let allCompanyIds = [1];
     try {
-      const compResp = await axios.post(
-        `${baseUrl}/web/dataset/call_kw`,
+      const compResp = await axios.post(`${baseUrl}/web/dataset/call_kw`,
         { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
-        { headers }
-      );
+        { headers });
       allCompanyIds = (compResp.data?.result || []).map(c => c.id);
     } catch (e) { /* fallback */ }
 
-    const companyIds = companyId
-      ? [companyId, ...allCompanyIds.filter(id => id !== companyId)]
-      : allCompanyIds;
+    const companyIds = companyId ? [companyId, ...allCompanyIds.filter(id => id !== companyId)] : allCompanyIds;
+    const wizardCtx = { allowed_company_ids: companyIds, active_ids: [orderId], active_id: orderId, active_model: 'sale.order' };
 
-    const baseContext = { allowed_company_ids: companyIds };
-
-    // Step 1: Use Odoo's native _create_invoices() method on sale.order
-    // This properly creates invoice with all lines, taxes, and links
-    console.log('[createInvoice] Calling _create_invoices on SO:', orderId);
-    const createResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-      jsonrpc: '2.0', method: 'call',
-      params: {
-        model: 'sale.order',
-        method: '_create_invoices',
-        args: [[orderId]],
-        kwargs: { context: baseContext },
-      },
-    }, { headers, timeout: 30000 });
-
-    if (createResp.data.error) {
-      console.error('[createInvoice] _create_invoices error:', JSON.stringify(createResp.data.error));
-      throw new Error(createResp.data.error.data?.message || 'Failed to create invoice');
+    // STEP 1: Ensure delivery is done (so 'delivered' method works)
+    console.log('[createInvoice] Step 1: Validating pickings for SO', orderId);
+    try {
+      await validateSaleOrderPickingsOdoo(orderId);
+    } catch (e) {
+      console.warn('[createInvoice] Picking validation warning:', e?.message);
     }
 
-    // _create_invoices returns a recordset of account.move IDs
+    // STEP 2: Get existing invoice_ids
+    const soBeforeResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['invoice_ids'] } },
+    }, { headers, timeout: 15000 });
+    const oldInvoiceIds = soBeforeResp.data?.result?.[0]?.invoice_ids || [];
+
+    // STEP 3: Try wizard with 'delivered' first, then 'percentage' as fallback
     let invoiceId = null;
-    const result = createResp.data.result;
-    if (Array.isArray(result) && result.length > 0) {
-      invoiceId = result[0];
-    } else if (typeof result === 'number') {
-      invoiceId = result;
-    } else if (result && typeof result === 'object' && result.id) {
-      invoiceId = result.id;
+    const methods = ['delivered', 'percentage'];
+    for (const method of methods) {
+      try {
+        console.log('[createInvoice] Step 3: Trying wizard with method:', method);
+        const wizardArgs = { advance_payment_method: method };
+        if (method === 'percentage') wizardArgs.amount = 100;
+
+        const wizardResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'sale.advance.payment.inv', method: 'create', args: [wizardArgs], kwargs: { context: wizardCtx } },
+        }, { headers, timeout: 15000 });
+
+        if (wizardResp.data.error) {
+          console.warn('[createInvoice] Wizard create failed for', method, ':', wizardResp.data.error?.data?.message);
+          continue;
+        }
+        const wizardId = wizardResp.data.result;
+        console.log('[createInvoice] Wizard created:', wizardId, 'method:', method);
+
+        const execResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'sale.advance.payment.inv', method: 'create_invoices', args: [[wizardId]], kwargs: { context: wizardCtx } },
+        }, { headers, timeout: 30000 });
+
+        if (execResp.data.error) {
+          console.warn('[createInvoice] Wizard exec failed for', method, ':', execResp.data.error?.data?.message);
+          continue;
+        }
+        console.log('[createInvoice] Wizard executed with method:', method);
+
+        // Find new invoice
+        const soAfterResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['invoice_ids'] } },
+        }, { headers, timeout: 15000 });
+        const newInvoiceIds = soAfterResp.data?.result?.[0]?.invoice_ids || [];
+        invoiceId = newInvoiceIds.find(id => !oldInvoiceIds.includes(id)) || (newInvoiceIds.length > oldInvoiceIds.length ? newInvoiceIds[newInvoiceIds.length - 1] : null);
+
+        if (invoiceId) {
+          console.log('[createInvoice] Invoice created:', invoiceId, 'via method:', method);
+          break;
+        }
+      } catch (wizErr) {
+        console.warn('[createInvoice] Method', method, 'failed:', wizErr?.message);
+      }
     }
 
     if (!invoiceId) {
-      // Fallback: read invoice_ids from SO
-      const soResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-        jsonrpc: '2.0', method: 'call',
-        params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['invoice_ids'] } },
-      }, { headers, timeout: 15000 });
-      const invoiceIds = soResp.data?.result?.[0]?.invoice_ids || [];
-      invoiceId = invoiceIds.length > 0 ? invoiceIds[invoiceIds.length - 1] : null;
+      console.error('[createInvoice] All wizard methods failed');
+      throw new Error('Failed to create invoice - all methods failed');
     }
 
-    console.log('[createInvoice] Invoice created:', invoiceId);
+    // STEP 4: Verify invoice has lines
+    const verifyResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.move', method: 'read', args: [[invoiceId]],
+        kwargs: { fields: ['name', 'amount_total', 'state', 'invoice_line_ids'] } },
+    }, { headers, timeout: 15000 });
+    const inv = verifyResp.data?.result?.[0];
+    console.log('[createInvoice] VERIFY - name:', inv?.name, 'total:', inv?.amount_total, 'lines:', inv?.invoice_line_ids?.length, 'state:', inv?.state);
 
-    // Step 2: Post the invoice
-    if (invoiceId) {
-      try {
-        await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-          jsonrpc: '2.0', method: 'call',
-          params: { model: 'account.move', method: 'action_post', args: [[invoiceId]], kwargs: { context: baseContext } },
-        }, { headers, timeout: 15000 });
+    // STEP 5: Post the invoice
+    try {
+      const postResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'account.move', method: 'action_post', args: [[invoiceId]], kwargs: { context: wizardCtx } },
+      }, { headers, timeout: 15000 });
+      if (postResp.data.error) {
+        console.warn('[createInvoice] Post error:', postResp.data.error?.data?.message);
+      } else {
         console.log('[createInvoice] Invoice posted successfully');
-      } catch (postErr) {
-        console.warn('[createInvoice] Could not post invoice:', postErr?.message);
       }
+    } catch (postErr) {
+      console.warn('[createInvoice] Could not post:', postErr?.message);
     }
 
     return { result: invoiceId };
   } catch (error) {
-    console.error('[createInvoice] Error:', error?.message || error);
+    console.error('[createInvoice] FATAL ERROR:', error?.message || error);
     throw error;
   }
 };
@@ -9754,24 +9787,42 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
 export const downloadInvoicePdfOdoo = async (invoiceId) => {
   try {
     const { headers, baseUrl } = await authenticateOdoo();
-    const reportUrl = `${baseUrl}/report/pdf/mobile_invoice_report.report_mobile_invoice/${invoiceId}`;
-    console.log('[downloadInvoicePdf] Fetching PDF from:', reportUrl);
 
-    const response = await axios.get(reportUrl, {
-      headers,
-      responseType: 'arraybuffer',
-      timeout: 60000,
-    });
+    // Try multiple report names — Odoo versions use different names
+    const reportNames = [
+      'mobile_invoice_report.report_mobile_invoice',
+      'account.report_invoice_with_payments',
+      'account.report_invoice',
+    ];
 
-    // Convert arraybuffer to base64
-    const uint8Array = new Uint8Array(response.data);
-    let binary = '';
-    for (let i = 0; i < uint8Array.length; i++) {
-      binary += String.fromCharCode(uint8Array[i]);
+    let lastError = null;
+    for (const reportName of reportNames) {
+      try {
+        const reportUrl = `${baseUrl}/report/pdf/${reportName}/${invoiceId}`;
+        console.log('[downloadInvoicePdf] Trying:', reportUrl);
+
+        const response = await axios.get(reportUrl, {
+          headers,
+          responseType: 'arraybuffer',
+          timeout: 60000,
+        });
+
+        // Convert arraybuffer to base64
+        const uint8Array = new Uint8Array(response.data);
+        let binary = '';
+        for (let i = 0; i < uint8Array.length; i++) {
+          binary += String.fromCharCode(uint8Array[i]);
+        }
+        const base64 = btoa(binary);
+        console.log('[downloadInvoicePdf] Success with', reportName, 'base64 length:', base64.length);
+        return base64;
+      } catch (err) {
+        console.warn('[downloadInvoicePdf]', reportName, 'failed:', err?.response?.status || err?.message);
+        lastError = err;
+      }
     }
-    const base64 = btoa(binary);
-    console.log('[downloadInvoicePdf] PDF downloaded, base64 length:', base64.length);
-    return base64;
+
+    throw lastError || new Error('All report formats failed');
   } catch (error) {
     console.error('[downloadInvoicePdf] error:', error?.message || error);
     throw error;
