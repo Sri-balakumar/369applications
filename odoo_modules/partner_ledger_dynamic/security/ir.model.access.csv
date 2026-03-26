@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_pl_dynamic_report_user,pl.dynamic.report.user,model_pl_dynamic_report,account.group_account_user,1,1,1,0
+access_pl_dynamic_report_mgr,pl.dynamic.report.mgr,model_pl_dynamic_report,account.group_account_manager,1,1,1,1
+access_pl_dynamic_report_partner_user,pl.dynamic.report.partner.user,model_pl_dynamic_report_partner,account.group_account_user,1,1,1,0
+access_pl_dynamic_report_partner_mgr,pl.dynamic.report.partner.mgr,model_pl_dynamic_report_partner,account.group_account_manager,1,1,1,1
+access_pl_dynamic_report_line_user,pl.dynamic.report.line.user,model_pl_dynamic_report_line,account.group_account_user,1,1,1,0
+access_pl_dynamic_report_line_mgr,pl.dynamic.report.line.mgr,model_pl_dynamic_report_line,account.group_account_manager,1,1,1,1

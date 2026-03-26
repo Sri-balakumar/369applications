@@ -30,7 +30,10 @@ const DirectInvoiceScreen = ({ route, navigation }) => {
                 const result = await createInvoiceFromQuotationOdoo(quotationId);
                 if (result && result.result) {
                   Toast.show({ type: 'success', text1: 'Invoice Created', text2: `Invoice ID: ${result.result}` });
-                  // Optionally navigate to invoice details screen here
+                  navigation.navigate('SalesInvoiceReceiptScreen', {
+                    invoiceId: result.result,
+                    orderId: quotationId,
+                  });
                 } else {
                   console.error('Direct Invoice API error:', result);
                   Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to create invoice' });

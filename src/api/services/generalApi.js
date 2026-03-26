@@ -3856,6 +3856,19 @@ export const fetchSaleOrderDetailOdoo = async (orderId) => {
 
     const record = records[0];
 
+    // Fetch partner phone/mobile from res.partner
+    if (record.partner_id) {
+      const pid = Array.isArray(record.partner_id) ? record.partner_id[0] : record.partner_id;
+      try {
+        const phoneResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'res.partner', method: 'read', args: [[pid]], kwargs: { fields: ['phone', 'mobile'] } },
+        }, { headers, timeout: 10000 });
+        const partner = phoneResp.data?.result?.[0];
+        record.partner_phone = partner?.phone || partner?.mobile || '';
+      } catch (e) { record.partner_phone = ''; }
+    }
+
     // Fetch order line details
     if (record.order_line && record.order_line.length > 0) {
       try {
@@ -9761,10 +9774,16 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
         );
       }
     }
+    const partnerId = Array.isArray(invoice.partner_id) ? invoice.partner_id[0] : null;
+    let partnerPhone = '';
+    if (partnerId) {
+      try { partnerPhone = await fetchPartnerPhoneOdoo(partnerId) || ''; } catch (e) { /* ignore */ }
+    }
     return {
       id: invoice.id, name: invoice.name || '',
-      partnerId: Array.isArray(invoice.partner_id) ? invoice.partner_id[0] : null,
+      partnerId,
       partnerName: Array.isArray(invoice.partner_id) ? invoice.partner_id[1] : '',
+      partnerPhone,
       invoiceDate: invoice.invoice_date || '',
       amountUntaxed: invoice.amount_untaxed || 0, amountTax: invoice.amount_tax || 0,
       amountTotal: invoice.amount_total || 0, amountResidual: invoice.amount_residual || 0,
@@ -9788,8 +9807,8 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
 export const fetchPartnerPhoneOdoo = async (partnerId) => {
   try {
     if (!partnerId) return null;
-    const headers = await getOdooAuthHeaders();
-    const resp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0', method: 'call',
       params: {
         model: 'res.partner', method: 'read',
@@ -9804,6 +9823,34 @@ export const fetchPartnerPhoneOdoo = async (partnerId) => {
     console.warn('[fetchPartnerPhoneOdoo] error:', e?.message);
     return null;
   }
+};
+
+// Fetch partner ID from invoice record
+export const fetchPartnerIdFromInvoice = async (invoiceId) => {
+  try {
+    if (!invoiceId) return null;
+    const { headers, baseUrl } = await authenticateOdoo();
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.move', method: 'read', args: [[invoiceId]], kwargs: { fields: ['partner_id'] } },
+    }, { headers, timeout: 10000 });
+    const inv = resp.data?.result?.[0];
+    return inv && Array.isArray(inv.partner_id) ? inv.partner_id[0] : null;
+  } catch (e) { return null; }
+};
+
+// Fetch partner ID from sale order record
+export const fetchPartnerIdFromOrder = async (orderId) => {
+  try {
+    if (!orderId) return null;
+    const { headers, baseUrl } = await authenticateOdoo();
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['partner_id'] } },
+    }, { headers, timeout: 10000 });
+    const so = resp.data?.result?.[0];
+    return so && Array.isArray(so.partner_id) ? so.partner_id[0] : null;
+  } catch (e) { return null; }
 };
 
 // Download invoice PDF from Odoo (uses the mobile_invoice_report module)
@@ -9939,3 +9986,158 @@ function _extractName(line, reportType) {
     default: return '-';
   }
 }
+
+// =============================================
+// PARTNER LEDGER DYNAMIC
+// =============================================
+
+export const generatePartnerLedgerOdoo = async ({ partnerType = 'customer_supplier', period, dateFrom, dateTo, targetMove = 'posted' } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+
+    // Step 1: Create wizard
+    const wizardVals = {
+      result_selection: partnerType,
+      target_move: targetMove,
+      reconciled: true,
+      with_currency: true,
+      company_scope: 'all_companies',
+    };
+    if (period && period !== 'custom') wizardVals.period = period;
+    if (period === 'custom' && dateFrom) wizardVals.date_from = dateFrom;
+    if (period === 'custom' && dateTo) wizardVals.date_to = dateTo;
+
+    const createResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.report.partner.ledger', method: 'create', args: [wizardVals], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (createResp.data.error) throw new Error(createResp.data.error.data?.message || 'Failed to create wizard');
+    const wizardId = createResp.data.result;
+
+    // If period is not custom, trigger onchange to calculate dates, then write them
+    if (period && period !== 'custom') {
+      try {
+        const onchangeResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'account.report.partner.ledger', method: 'write', args: [[wizardId], { period }], kwargs: {} },
+        }, { headers, timeout: 10000 });
+      } catch (e) { /* ignore onchange errors */ }
+    }
+
+    // Step 2: Generate report
+    const genResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.report.partner.ledger', method: 'action_generate_report', args: [[wizardId]], kwargs: {} },
+    }, { headers, timeout: 30000 });
+    if (genResp.data.error) throw new Error(genResp.data.error.data?.message || 'Failed to generate report');
+
+    const action = genResp.data.result;
+    const reportId = action?.res_id;
+    if (!reportId) throw new Error('No report ID returned');
+
+    // Step 3: Read report summary
+    const reportResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'pl.dynamic.report', method: 'read', args: [[reportId]],
+        kwargs: { fields: ['name', 'company_id', 'partner_type', 'date_from', 'date_to', 'report_currency', 'grand_debit', 'grand_credit', 'grand_balance', 'partner_ids'] },
+      },
+    }, { headers, timeout: 15000 });
+    if (reportResp.data.error) throw new Error(reportResp.data.error.data?.message || 'Failed to read report');
+    const report = reportResp.data.result?.[0] || {};
+
+    // Step 4: Read partner summary rows
+    let partners = [];
+    if (report.partner_ids && report.partner_ids.length > 0) {
+      const partnersResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'pl.dynamic.report.partner', method: 'read', args: [report.partner_ids],
+          kwargs: { fields: ['id', 'partner_name', 'opening_debit', 'opening_credit', 'opening_balance', 'total_debit', 'total_credit', 'closing_balance'] },
+        },
+      }, { headers, timeout: 15000 });
+      if (!partnersResp.data.error) partners = partnersResp.data.result || [];
+    }
+
+    return {
+      reportId,
+      summary: {
+        name: report.name || '',
+        companyName: Array.isArray(report.company_id) ? report.company_id[1] : '',
+        partnerType: report.partner_type || '',
+        dateFrom: report.date_from || '',
+        dateTo: report.date_to || '',
+        currency: report.report_currency || '',
+        grandDebit: report.grand_debit || 0,
+        grandCredit: report.grand_credit || 0,
+        grandBalance: report.grand_balance || 0,
+      },
+      partners: partners.map(p => ({
+        id: p.id,
+        name: p.partner_name || '-',
+        openingDebit: p.opening_debit || 0,
+        openingCredit: p.opening_credit || 0,
+        openingBalance: p.opening_balance || 0,
+        totalDebit: p.total_debit || 0,
+        totalCredit: p.total_credit || 0,
+        closingBalance: p.closing_balance || 0,
+      })),
+    };
+  } catch (error) {
+    console.error('[generatePartnerLedgerOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const fetchPartnerLedgerLinesOdoo = async (reportId, partnerName) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const domain = [['report_id', '=', reportId]];
+    if (partnerName) domain.push(['partner_name', '=', partnerName]);
+
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'pl.dynamic.report.line', method: 'search_read',
+        args: [domain],
+        kwargs: {
+          fields: ['id', 'partner_name', 'date', 'journal_code', 'reference', 'label', 'due_date', 'debit', 'credit', 'balance', 'running_balance'],
+          order: 'date, id',
+          limit: 500,
+        },
+      },
+    }, { headers, timeout: 15000 });
+    if (resp.data.error) throw new Error(resp.data.error.data?.message || 'Failed to fetch lines');
+    return (resp.data.result || []).map(l => ({
+      id: l.id,
+      date: l.date || '',
+      journalCode: l.journal_code || '',
+      reference: l.reference || '',
+      label: l.label || '',
+      dueDate: l.due_date || '',
+      debit: l.debit || 0,
+      credit: l.credit || 0,
+      balance: l.balance || 0,
+      runningBalance: l.running_balance || 0,
+    }));
+  } catch (error) {
+    console.error('[fetchPartnerLedgerLinesOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const downloadPartnerLedgerExcelOdoo = async (reportId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const resp = await axios.get(`${baseUrl}/pl_dynamic/excel/${reportId}`, {
+      headers,
+      responseType: 'arraybuffer',
+      timeout: 30000,
+    });
+    const base64 = Buffer.from(resp.data, 'binary').toString('base64');
+    return base64;
+  } catch (error) {
+    console.error('[downloadPartnerLedgerExcelOdoo] error:', error?.message || error);
+    throw error;
+  }
+};

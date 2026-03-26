@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="report_pl_dynamic_pdf">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="doc">
+                <t t-call="web.external_layout">
+                    <div class="page" style="font-size: 11px;">
+                        <h2 class="text-center mb-3">Partner Ledger Report</h2>
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <strong>Company:</strong> <span t-field="doc.company_id"/><br/>
+                                <strong>Partner Type:</strong> <span t-field="doc.partner_type"/><br/>
+                                <strong>Target Moves:</strong> <span t-field="doc.target_move"/>
+                            </div>
+                            <div class="col-6 text-end">
+                                <strong>Currency:</strong> <span t-field="doc.report_currency"/><br/>
+                                <strong>From:</strong>
+                                <t t-if="doc.date_from"><span t-field="doc.date_from"/></t>
+                                <t t-else="">—</t><br/>
+                                <strong>To:</strong>
+                                <t t-if="doc.date_to"><span t-field="doc.date_to"/></t>
+                                <t t-else="">—</t>
+                            </div>
+                        </div>
+                        <t t-foreach="doc.partner_ids" t-as="pg">
+                            <div style="background:#495057;color:white;padding:5px 10px;font-weight:bold;margin-top:12px;">
+                                <span t-field="pg.partner_name"/>
+                            </div>
+                            <table class="table table-sm table-bordered" style="font-size:10px;">
+                                <thead style="background:#e9ecef;">
+                                    <tr>
+                                        <th>Date</th><th>Journal</th><th>Reference</th>
+                                        <th>Label</th><th>Due Date</th><th>Match</th>
+                                        <th class="text-end">Debit</th>
+                                        <th class="text-end">Credit</th>
+                                        <th class="text-end">Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <t t-if="pg.opening_balance != 0">
+                                        <tr style="background:#fff3cd;font-weight:bold;">
+                                            <td colspan="6">Opening Balance</td>
+                                            <td class="text-end"><t t-esc="'{:,.3f}'.format(pg.opening_debit)"/></td>
+                                            <td class="text-end"><t t-esc="'{:,.3f}'.format(pg.opening_credit)"/></td>
+                                            <td class="text-end"><t t-esc="'{:,.3f}'.format(pg.opening_balance)"/></td>
+                                        </tr>
+                                    </t>
+                                    <t t-foreach="pg.line_ids" t-as="line">
+                                        <tr>
+                                            <td><span t-field="line.date"/></td>
+                                            <td><span t-field="line.journal_code"/></td>
+                                            <td><span t-field="line.reference"/></td>
+                                            <td><span t-field="line.label"/></td>
+                                            <td><span t-field="line.due_date"/></td>
+                                            <td><span t-field="line.matching"/></td>
+                                            <td class="text-end"><t t-esc="'{:,.3f}'.format(line.debit)"/></td>
+                                            <td class="text-end"><t t-esc="'{:,.3f}'.format(line.credit)"/></td>
+                                            <td class="text-end" style="font-weight:bold;">
+                                                <t t-esc="'{:,.3f}'.format(line.running_balance)"/>
+                                            </td>
+                                        </tr>
+                                    </t>
+                                    <tr style="background:#d1ecf1;font-weight:bold;">
+                                        <td colspan="6">Partner Total</td>
+                                        <td class="text-end"><t t-esc="'{:,.3f}'.format(pg.opening_debit + pg.total_debit)"/></td>
+                                        <td class="text-end"><t t-esc="'{:,.3f}'.format(pg.opening_credit + pg.total_credit)"/></td>
+                                        <td class="text-end"><t t-esc="'{:,.3f}'.format(pg.closing_balance)"/></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </t>
+                        <div style="background:#343a40;color:white;padding:8px 12px;margin-top:12px;">
+                            <div class="row">
+                                <div class="col-6"><strong>Grand Total</strong></div>
+                                <div class="col-2 text-end">Debit: <strong><t t-esc="'{:,.3f}'.format(doc.grand_debit)"/></strong></div>
+                                <div class="col-2 text-end">Credit: <strong><t t-esc="'{:,.3f}'.format(doc.grand_credit)"/></strong></div>
+                                <div class="col-2 text-end">Balance: <strong><t t-esc="'{:,.3f}'.format(doc.grand_balance)"/></strong></div>
+                            </div>
+                        </div>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+</odoo>

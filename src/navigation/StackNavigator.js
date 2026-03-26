@@ -76,6 +76,7 @@ import SalesInvoiceReceiptScreen from '@screens/Home/Options/SalesOrder/SalesInv
 import { MobileRepairDashboard, MobileRepairScreen, MobileRepairForm, MobileRepairDetails, DiagnosisListScreen, RepairStepsListScreen, RepairStepDetailScreen, ProductListScreen } from '@screens/Home/Options/MobileRepair';
 import { BannerManagementScreen } from '@screens/Home/Options/BannerManagement';
 import { GrossProfitReportScreen } from '@screens/Home/Options/GrossProfitReport';
+import { PartnerLedgerScreen } from '@screens/Home/Options/PartnerLedger';
 import { WhatsAppScreen } from '@screens/Home/Options/WhatsApp';
 import { ProductCreationForm } from '@screens/Home/Options/ProductCreation';
 
@@ -403,6 +404,7 @@ const StackNavigator = () => {
 
       {/* Gross Profit Report */}
       <Stack.Screen name="GrossProfitReportScreen" component={GrossProfitReportScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="PartnerLedgerScreen" component={PartnerLedgerScreen} options={{ headerShown: false }} />
       <Stack.Screen name="WhatsAppScreen" component={WhatsAppScreen} options={{ headerShown: false }} />
 
       {/* Inventory Screen */}

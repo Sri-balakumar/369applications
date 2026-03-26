@@ -5,7 +5,7 @@ import { NavigationHeader } from '@components/Header';
 import { Button } from '@components/common/Button';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo, fetchPartnerPhoneOdoo } from '@api/services/generalApi';
+import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo, fetchPartnerPhoneOdoo, fetchPartnerIdFromInvoice, fetchPartnerIdFromOrder, fetchCustomersOdoo } from '@api/services/generalApi';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
@@ -64,24 +64,21 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     const loadInvoice = async () => {
+      let invoiceData = null;
+
       // TIER 1: Use orderData passed from navigation
       if (orderData && orderData.lines && orderData.lines.length > 0) {
         console.log('[Invoice] TIER 1: Using orderData from navigation -', orderData.lines.length, 'lines');
-        setInvoice(buildFromOrderData(orderData));
-        setLoading(false);
-        return;
+        invoiceData = buildFromOrderData(orderData);
       }
-      console.log('[Invoice] TIER 1 skipped: orderData has', orderData?.lines?.length || 0, 'lines');
 
       // TIER 2: Fetch invoice from Odoo
-      if (invoiceId) {
+      if (!invoiceData && invoiceId) {
         try {
           const data = await fetchInvoiceDetailOdoo(invoiceId);
           console.log('[Invoice] TIER 2: Fetched invoice from Odoo -', data?.lines?.length || 0, 'lines');
           if (data && data.lines && data.lines.length > 0) {
-            setInvoice(data);
-            setLoading(false);
-            return;
+            invoiceData = data;
           }
         } catch (err) {
           console.error('[Invoice] TIER 2 failed:', err?.message);
@@ -89,25 +86,42 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       }
 
       // TIER 3: Fetch sale order directly and use its lines
-      if (orderId) {
+      if (!invoiceData && orderId) {
         try {
           console.log('[Invoice] TIER 3: Fetching sale order', orderId, 'directly');
           const soRecord = await fetchSaleOrderDetailOdoo(orderId);
           if (soRecord && soRecord.order_lines_detail && soRecord.order_lines_detail.length > 0) {
             console.log('[Invoice] TIER 3: Got', soRecord.order_lines_detail.length, 'lines from sale order');
-            setInvoice(buildFromSaleOrder(soRecord));
-            setLoading(false);
-            return;
+            invoiceData = buildFromSaleOrder(soRecord);
           }
         } catch (err) {
           console.error('[Invoice] TIER 3 failed:', err?.message);
         }
       }
 
-      // FALLBACK: If we have orderData with amounts but no lines, still show the invoice
-      if (orderData && (orderData.amountTotal > 0 || orderData.name)) {
+      // FALLBACK
+      if (!invoiceData && orderData && (orderData.amountTotal > 0 || orderData.name)) {
         console.log('[Invoice] FALLBACK: Using orderData with 0 lines but has header/totals');
-        setInvoice(buildFromOrderData(orderData));
+        invoiceData = buildFromOrderData(orderData);
+      }
+
+      if (invoiceData) {
+        setInvoice(invoiceData);
+
+        // Get phone from passed data first
+        let phone = invoiceData.partnerPhone || orderData?.partnerPhone || '';
+
+        // If no phone, fetch from customers list by name (same API that shows phones in customer list)
+        if (!phone && invoiceData.partnerName && invoiceData.partnerName !== '-') {
+          try {
+            const customers = await fetchCustomersOdoo({ searchText: invoiceData.partnerName, limit: 1 });
+            if (customers && customers.length > 0) {
+              phone = customers[0].phone || '';
+            }
+          } catch (e) { /* ignore */ }
+        }
+
+        setPartnerPhone(phone);
       } else {
         console.warn('[Invoice] All tiers failed - no product data available');
       }
@@ -117,24 +131,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
     loadInvoice();
   }, [invoiceId, orderId]);
 
-  // Get partner phone — use from orderData first, then fetch from Odoo as fallback
   const [partnerPhone, setPartnerPhone] = useState('');
-  useEffect(() => {
-    if (!invoice) return;
-    // Use phone from orderData if available
-    if (invoice.partnerPhone) {
-      console.log('[Invoice] Phone from orderData:', invoice.partnerPhone);
-      setPartnerPhone(invoice.partnerPhone);
-    }
-    // Also try to fetch from Odoo (may update with better data)
-    if (invoice.partnerId) {
-      console.log('[Invoice] Fetching phone for partnerId:', invoice.partnerId);
-      fetchPartnerPhoneOdoo(invoice.partnerId).then(phone => {
-        console.log('[Invoice] Fetched phone from Odoo:', phone);
-        if (phone) setPartnerPhone(phone);
-      }).catch(e => console.warn('[Invoice] Phone fetch error:', e?.message));
-    }
-  }, [invoice]);
 
   const cashierName = currentUser?.name || currentUser?.username || currentUser?.login || 'Admin';
 
@@ -144,7 +141,8 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       const linesSummary = invoice.lines.map((l, i) =>
         `${i + 1}. ${l.productName}  Qty: ${l.quantity}  Price: ${l.priceUnit.toFixed(3)}  Total: ${l.subtotal.toFixed(3)}`
       ).join('\n');
-      const message = `INVOICE: ${invoice.name}\nDate: ${invoice.invoiceDate}\nCustomer: ${invoice.partnerName}${partnerPhone ? '\nPhone: ' + partnerPhone : ''}\nCompany: ${invoice.companyName}\n\n--- Products ---\n${linesSummary}\n\nTotal: ${invoice.amountTotal.toFixed(3)} ${currency}\n\nCashier: ${cashierName}`;
+      const phoneDisplay = partnerPhone || invoice?.partnerPhone || '';
+      const message = `INVOICE: ${invoice.name}\nDate: ${invoice.invoiceDate}\nCustomer: ${invoice.partnerName}${phoneDisplay ? '\nPhone: ' + phoneDisplay : ''}\nCompany: ${invoice.companyName}\n\n--- Products ---\n${linesSummary}\n\nTotal: ${invoice.amountTotal.toFixed(3)} ${currency}\n\nCashier: ${cashierName}`;
       await Share.share({ message, title: `Invoice ${invoice.name}` });
     } catch (err) {
       console.error('Share error:', err);
@@ -206,7 +204,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
               <td style="text-align:right;"><strong>Company:</strong> ${invoice.companyName || '-'}</td>
             </tr>
             <tr><td><strong>Customer:</strong> ${invoice.partnerName || '-'}</td></tr>
-            ${partnerPhone ? `<tr><td><strong>Phone:</strong> ${partnerPhone}</td></tr>` : ''}
+            ${(partnerPhone || invoice?.partnerPhone) ? `<tr><td><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</td></tr>` : ''}
           </table>
           <hr/>
           <table class="products" style="margin:15px 0;">
@@ -345,7 +343,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             <tr><td><strong>Date:</strong> ${invoice.invoiceDate || '-'}</td><td style="text-align:right;"><strong>Invoice:</strong> ${invoice.name || '-'}</td></tr>
             <tr><td><strong>Cashier:</strong> ${cashierName}</td><td style="text-align:right;"><strong>Company:</strong> ${invoice.companyName || '-'}</td></tr>
             <tr><td><strong>Customer:</strong> ${invoice.partnerName || '-'}</td></tr>
-            ${partnerPhone ? `<tr><td><strong>Phone:</strong> ${partnerPhone}</td></tr>` : ''}
+            ${(partnerPhone || invoice?.partnerPhone) ? `<tr><td><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</td></tr>` : ''}
           </table><hr/>
           <table class="products" style="margin:15px 0;">
             <thead><tr><th style="text-align:left;width:40%;">Product Name</th><th style="width:12%;">Qty</th><th style="text-align:right;width:16%;">Unit Price</th><th style="width:12%;">Disc</th><th style="text-align:right;width:20%;">Total</th></tr></thead>
@@ -410,7 +408,17 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           </View>
           <Text style={s.infoText}>Cashier: {cashierName}</Text>
           <Text style={s.infoText}>Customer: {invoice.partnerName}</Text>
-          {partnerPhone ? <Text style={s.infoText}>Phone: {partnerPhone}</Text> : null}
+          <View style={s.phoneRow}>
+            <Text style={s.infoText}>Phone: </Text>
+            <TextInput
+              style={s.phoneInput}
+              value={partnerPhone}
+              onChangeText={setPartnerPhone}
+              placeholder="Enter phone"
+              placeholderTextColor="#bbb"
+              keyboardType="phone-pad"
+            />
+          </View>
           <Text style={s.infoText}>Company: {invoice.companyName}</Text>
 
           <View style={s.divider} />
@@ -542,6 +550,8 @@ const s = StyleSheet.create({
   dateText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, color: '#333' },
   invoiceNo: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: COLORS.primaryThemeColor },
   infoText: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistMedium, color: '#555', marginBottom: 2 },
+  phoneRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
+  phoneInput: { flex: 1, fontSize: 13, fontFamily: FONT_FAMILY.urbanistMedium, color: '#333', borderBottomWidth: 1, borderBottomColor: '#ddd', paddingVertical: 2, paddingHorizontal: 4 },
   divider: { height: 1, backgroundColor: '#e0e0e0', marginVertical: 12 },
   tableHeader: { flexDirection: 'row', borderBottomWidth: 2, borderBottomColor: '#333', paddingBottom: 6 },
   thCell: { fontSize: 12, fontFamily: FONT_FAMILY.urbanistBold, color: '#333', textAlign: 'center' },

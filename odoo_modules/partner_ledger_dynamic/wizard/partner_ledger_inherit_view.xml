@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_account_report_partner_ledger_inherit" model="ir.ui.view">
+        <field name="name">account.report.partner.ledger.inherit.dynamic</field>
+        <field name="model">account.report.partner.ledger</field>
+        <field name="inherit_id" ref="accounting_pdf_reports.account_report_partner_ledger_view"/>
+        <field name="arch" type="xml">
+
+            <!-- Add Period dropdown before date_from -->
+            <xpath expr="//field[@name='date_from']" position="before">
+                <field name="period"/>
+            </xpath>
+
+            <!-- Show date_from / date_to only when Custom period is selected -->
+            <xpath expr="//field[@name='date_from']" position="attributes">
+                <attribute name="invisible">period != 'custom'</attribute>
+            </xpath>
+            <xpath expr="//field[@name='date_to']" position="attributes">
+                <attribute name="invisible">period != 'custom'</attribute>
+            </xpath>
+
+            <!-- Add Company Scope section after the date group -->
+            <xpath expr="//field[@name='journal_ids']" position="before">
+                <field name="company_scope" widget="radio"/>
+                <field name="company_ids"
+                       widget="many2many_tags"
+                       invisible="company_scope != 'selected_companies'"
+                       options="{'no_create': True}"
+                       placeholder="Select companies..."/>
+            </xpath>
+
+            <!-- Add Generate Report button next to Print button -->
+            <xpath expr="//footer/button[@name='check_report']" position="after">
+                <button name="action_generate_report"
+                        string="Generate Report"
+                        type="object"
+                        class="btn-success"/>
+            </xpath>
+
+        </field>
+    </record>
+</odoo>
