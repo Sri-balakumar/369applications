@@ -5,7 +5,7 @@ import { NavigationHeader } from '@components/Header';
 import { Button } from '@components/common/Button';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo } from '@api/services/generalApi';
+import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo, fetchPartnerPhoneOdoo } from '@api/services/generalApi';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
@@ -14,6 +14,7 @@ import { useAuthStore } from '@stores/auth';
 import { showToastMessage } from '@components/Toast';
 import { INVOICE_LOGO_BASE64 } from '@constants/invoiceLogo';
 import { sendWhatsAppDocument } from '@api/services/whatsappApi';
+import { COUNTRIES, getMaxDigits, parsePhoneCountryCode, CountryCodePicker } from '@screens/Home/Options/WhatsApp/ContactsSheet';
 
 const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   const { invoiceId, orderId, orderData } = route?.params || {};
@@ -26,7 +27,9 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   const buildFromOrderData = (od) => ({
     id: invoiceId,
     name: od.name || '',
+    partnerId: od.partnerId || null,
     partnerName: od.partnerName || '-',
+    partnerPhone: od.partnerPhone || '',
     companyName: od.companyName || '-',
     invoiceDate: od.invoiceDate || '-',
     amountUntaxed: od.amountUntaxed || 0,
@@ -39,7 +42,9 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   const buildFromSaleOrder = (record) => ({
     id: invoiceId,
     name: record.name || '',
+    partnerId: Array.isArray(record.partner_id) ? record.partner_id[0] : null,
     partnerName: Array.isArray(record.partner_id) ? record.partner_id[1] : '-',
+    partnerPhone: '',
     companyName: Array.isArray(record.company_id) ? record.company_id[1] : '-',
     invoiceDate: record.date_order ? record.date_order.split(' ')[0] : '-',
     amountUntaxed: record.amount_untaxed || 0,
@@ -112,6 +117,25 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
     loadInvoice();
   }, [invoiceId, orderId]);
 
+  // Get partner phone — use from orderData first, then fetch from Odoo as fallback
+  const [partnerPhone, setPartnerPhone] = useState('');
+  useEffect(() => {
+    if (!invoice) return;
+    // Use phone from orderData if available
+    if (invoice.partnerPhone) {
+      console.log('[Invoice] Phone from orderData:', invoice.partnerPhone);
+      setPartnerPhone(invoice.partnerPhone);
+    }
+    // Also try to fetch from Odoo (may update with better data)
+    if (invoice.partnerId) {
+      console.log('[Invoice] Fetching phone for partnerId:', invoice.partnerId);
+      fetchPartnerPhoneOdoo(invoice.partnerId).then(phone => {
+        console.log('[Invoice] Fetched phone from Odoo:', phone);
+        if (phone) setPartnerPhone(phone);
+      }).catch(e => console.warn('[Invoice] Phone fetch error:', e?.message));
+    }
+  }, [invoice]);
+
   const cashierName = currentUser?.name || currentUser?.username || currentUser?.login || 'Admin';
 
   const handlePrint = async () => {
@@ -120,7 +144,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       const linesSummary = invoice.lines.map((l, i) =>
         `${i + 1}. ${l.productName}  Qty: ${l.quantity}  Price: ${l.priceUnit.toFixed(3)}  Total: ${l.subtotal.toFixed(3)}`
       ).join('\n');
-      const message = `INVOICE: ${invoice.name}\nDate: ${invoice.invoiceDate}\nCustomer: ${invoice.partnerName}\nCompany: ${invoice.companyName}\n\n--- Products ---\n${linesSummary}\n\nTotal: ${invoice.amountTotal.toFixed(3)} ${currency}\n\nCashier: ${cashierName}`;
+      const message = `INVOICE: ${invoice.name}\nDate: ${invoice.invoiceDate}\nCustomer: ${invoice.partnerName}${partnerPhone ? '\nPhone: ' + partnerPhone : ''}\nCompany: ${invoice.companyName}\n\n--- Products ---\n${linesSummary}\n\nTotal: ${invoice.amountTotal.toFixed(3)} ${currency}\n\nCashier: ${cashierName}`;
       await Share.share({ message, title: `Invoice ${invoice.name}` });
     } catch (err) {
       console.error('Share error:', err);
@@ -131,7 +155,9 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   const [downloading, setDownloading] = useState(false);
   const [sendingWA, setSendingWA] = useState(false);
   const [waPhone, setWaPhone] = useState('');
+  const [waCountryCode, setWaCountryCode] = useState('+968');
   const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [showCountryPicker, setShowCountryPicker] = useState(false);
   const handleDownloadPdf = async () => {
     if (!invoice) {
       showToastMessage('Invoice data not available');
@@ -180,6 +206,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
               <td style="text-align:right;"><strong>Company:</strong> ${invoice.companyName || '-'}</td>
             </tr>
             <tr><td><strong>Customer:</strong> ${invoice.partnerName || '-'}</td></tr>
+            ${partnerPhone ? `<tr><td><strong>Phone:</strong> ${partnerPhone}</td></tr>` : ''}
           </table>
           <hr/>
           <table class="products" style="margin:15px 0;">
@@ -252,13 +279,39 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
     }
   };
 
+  // Try to auto-fetch phone, if not found show modal
+  const handleWhatsAppTap = async () => {
+    if (!invoice) return;
+    setSendingWA(true);
+    try {
+      // Try to fetch partner phone from Odoo
+      const phone = invoice.partnerId ? await fetchPartnerPhoneOdoo(invoice.partnerId) : null;
+      if (phone && phone.trim()) {
+        // Phone found — send directly
+        await doSendWhatsApp(phone.trim());
+      } else {
+        // No phone — show modal for manual entry
+        setSendingWA(false);
+        setShowPhoneModal(true);
+      }
+    } catch (e) {
+      setSendingWA(false);
+      setShowPhoneModal(true);
+    }
+  };
+
   const handleSendWhatsApp = async () => {
     if (!waPhone.trim()) {
       showToastMessage('Enter phone number');
       return;
     }
     setShowPhoneModal(false);
+    const fullPhone = `${waCountryCode}${waPhone.trim()}`;
     setSendingWA(true);
+    await doSendWhatsApp(fullPhone);
+  };
+
+  const doSendWhatsApp = async (phone) => {
     try {
       const rowsHtml = (invoice.lines || []).map((line, idx) =>
         `<tr style="border-bottom:1px solid #eee;">
@@ -292,6 +345,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             <tr><td><strong>Date:</strong> ${invoice.invoiceDate || '-'}</td><td style="text-align:right;"><strong>Invoice:</strong> ${invoice.name || '-'}</td></tr>
             <tr><td><strong>Cashier:</strong> ${cashierName}</td><td style="text-align:right;"><strong>Company:</strong> ${invoice.companyName || '-'}</td></tr>
             <tr><td><strong>Customer:</strong> ${invoice.partnerName || '-'}</td></tr>
+            ${partnerPhone ? `<tr><td><strong>Phone:</strong> ${partnerPhone}</td></tr>` : ''}
           </table><hr/>
           <table class="products" style="margin:15px 0;">
             <thead><tr><th style="text-align:left;width:40%;">Product Name</th><th style="width:12%;">Qty</th><th style="text-align:right;width:16%;">Unit Price</th><th style="width:12%;">Disc</th><th style="text-align:right;width:20%;">Total</th></tr></thead>
@@ -312,7 +366,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
         encoding: FileSystem.EncodingType.Base64,
       });
       const fileName = `Invoice_${(invoice.name || 'INV').replace(/[^a-zA-Z0-9\-_]/g, '_')}.pdf`;
-      await sendWhatsAppDocument(waPhone.trim(), base64Data, fileName, `Invoice ${invoice.name || ''}`);
+      await sendWhatsAppDocument(phone, base64Data, fileName, `Invoice ${invoice.name || ''}`);
       showToastMessage('Invoice sent via WhatsApp!');
     } catch (err) {
       console.error('[SendWhatsApp] error:', err);
@@ -356,6 +410,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           </View>
           <Text style={s.infoText}>Cashier: {cashierName}</Text>
           <Text style={s.infoText}>Customer: {invoice.partnerName}</Text>
+          {partnerPhone ? <Text style={s.infoText}>Phone: {partnerPhone}</Text> : null}
           <Text style={s.infoText}>Company: {invoice.companyName}</Text>
 
           <View style={s.divider} />
@@ -421,26 +476,33 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           <Button
             backgroundColor="#25D366"
             title={sendingWA ? "Sending..." : "Send WhatsApp"}
-            onPress={() => { if (!invoice) return; setShowPhoneModal(true); }}
+            onPress={handleWhatsAppTap}
             loading={sendingWA}
           />
         </View>
 
-        {/* Phone Number Modal */}
+        {/* Phone Number Modal (shown only when customer has no phone) */}
         <Modal visible={showPhoneModal} transparent animationType="fade">
           <View style={s.modalOverlay}>
             <View style={s.modalBox}>
               <Text style={s.modalTitle}>Send Invoice via WhatsApp</Text>
               <Text style={s.modalLabel}>Customer Phone Number</Text>
-              <TextInput
-                style={s.modalInput}
-                placeholder="e.g. 96812345678"
-                placeholderTextColor="#999"
-                value={waPhone}
-                onChangeText={setWaPhone}
-                keyboardType="phone-pad"
-                autoFocus
-              />
+              <View style={s.modalPhoneRow}>
+                <TouchableOpacity style={s.modalCountryBtn} onPress={() => setShowCountryPicker(true)}>
+                  <Text style={s.modalCountryText}>{waCountryCode} ▼</Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={[s.modalInput, { flex: 1 }]}
+                  placeholder="Phone number"
+                  placeholderTextColor="#999"
+                  value={waPhone}
+                  onChangeText={(v) => setWaPhone(v.replace(/[^0-9]/g, ''))}
+                  keyboardType="phone-pad"
+                  maxLength={getMaxDigits(waCountryCode)}
+                  autoFocus
+                />
+              </View>
+              <Text style={s.modalHint}>{getMaxDigits(waCountryCode)} digits without country code</Text>
               <View style={s.modalBtnRow}>
                 <TouchableOpacity style={s.modalCancelBtn} onPress={() => setShowPhoneModal(false)}>
                   <Text style={s.modalCancelText}>Cancel</Text>
@@ -452,6 +514,12 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             </View>
           </View>
         </Modal>
+        <CountryCodePicker
+          visible={showCountryPicker}
+          onClose={() => setShowCountryPicker(false)}
+          onSelect={(dial) => setWaCountryCode(dial)}
+          selectedDial={waCountryCode}
+        />
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -500,6 +568,10 @@ const s = StyleSheet.create({
   modalCancelText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#6b7280' },
   modalSendBtn: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8, backgroundColor: '#25D366' },
   modalSendText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#fff' },
+  modalPhoneRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
+  modalCountryBtn: { backgroundColor: '#f9fafb', borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 10, paddingVertical: 12, justifyContent: 'center', alignItems: 'center', minWidth: 80 },
+  modalCountryText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#1f2937' },
+  modalHint: { fontSize: 11, color: '#25D366', fontStyle: 'italic', marginBottom: 16 },
 });
 
 export default SalesInvoiceReceiptScreen;

@@ -254,7 +254,9 @@ const CustomerDetails = ({ navigation, route }) => {
       // Build orderData from cart BEFORE clearing it
       const orderData = {
         name: '',
+        partnerId: details?.id || details?._id || null,
         partnerName: details?.name || '-',
+        partnerPhone: details?.phone || details?.mobile || details?.customer_mobile || '',
         companyName: currentUser?.company?.name || '-',
         invoiceDate: new Date().toISOString().split('T')[0],
         amountUntaxed: untaxedAmount,

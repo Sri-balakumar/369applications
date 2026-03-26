@@ -211,7 +211,9 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
 
   const buildOrderData = () => ({
     name: record?.name || '',
+    partnerId: Array.isArray(record?.partner_id) ? record.partner_id[0] : null,
     partnerName: Array.isArray(record?.partner_id) ? record.partner_id[1] : '-',
+    partnerPhone: '',
     companyName: Array.isArray(record?.company_id) ? record.company_id[1] : '-',
     invoiceDate: record?.date_order ? record.date_order.split(' ')[0] : '-',
     amountUntaxed: record?.amount_untaxed || 0,

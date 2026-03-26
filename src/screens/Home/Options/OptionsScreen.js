@@ -13,11 +13,13 @@ import { OverlayLoader } from '@components/Loader';
 import { ConfirmationModal } from '@components/Modal';
 import { useAuthStore } from '@stores/auth';
 import { post } from '@api/services/utils';
+import ContactsSheet from '@screens/Home/Options/WhatsApp/ContactsSheet';
 
 const OptionsScreen = ({ navigation }) => {
   const [isConfirmationModalVisible, setIsConfirmationModalVisible] = useState(false);
   const [loading, startLoading, stopLoading] = useLoader(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [showContacts, setShowContacts] = useState(false);
   const currentUser = useAuthStore(state => state.user);
 
   // Check if user is admin (works for both UAE admin and Odoo login)
@@ -63,6 +65,7 @@ const OptionsScreen = ({ navigation }) => {
     { title: 'Sales Return', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('QuickSalesReturnListScreen') },
     { title: 'Gross Profit', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('GrossProfitReportScreen') },
     { title: 'WhatsApp', image: require('@assets/icons/common/watsapp.png'), onPress: () => navigation.navigate('WhatsAppScreen') },
+    { title: 'Contacts', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => setShowContacts(true) },
   ];
 
   // Add Staff Tracking option for admin users, My Location for non-admin users
@@ -122,6 +125,8 @@ const OptionsScreen = ({ navigation }) => {
         />
         <OverlayLoader visible={loading || isLoading} />
       </RoundedContainer>
+
+      <ContactsSheet visible={showContacts} onClose={() => setShowContacts(false)} />
 
       <ConfirmationModal
         onCancel={() => setIsConfirmationModalVisible(false)}

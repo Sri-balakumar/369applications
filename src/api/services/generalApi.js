@@ -9763,6 +9763,7 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
     }
     return {
       id: invoice.id, name: invoice.name || '',
+      partnerId: Array.isArray(invoice.partner_id) ? invoice.partner_id[0] : null,
       partnerName: Array.isArray(invoice.partner_id) ? invoice.partner_id[1] : '',
       invoiceDate: invoice.invoice_date || '',
       amountUntaxed: invoice.amount_untaxed || 0, amountTax: invoice.amount_tax || 0,
@@ -9780,6 +9781,28 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
   } catch (error) {
     console.error('[fetchInvoiceDetailOdoo] error:', error?.message || error);
     throw error;
+  }
+};
+
+// Fetch partner phone number by partner ID
+export const fetchPartnerPhoneOdoo = async (partnerId) => {
+  try {
+    if (!partnerId) return null;
+    const headers = await getOdooAuthHeaders();
+    const resp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'res.partner', method: 'read',
+        args: [[partnerId]],
+        kwargs: { fields: ['phone', 'mobile'] },
+      },
+    }, { headers, timeout: 10000 });
+    if (resp.data.error) return null;
+    const partner = resp.data.result?.[0];
+    return partner?.phone || partner?.mobile || null;
+  } catch (e) {
+    console.warn('[fetchPartnerPhoneOdoo] error:', e?.message);
+    return null;
   }
 };
 

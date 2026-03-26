@@ -24,32 +24,44 @@ import {
   fetchWhatsAppMessages,
 } from '@api/services/whatsappApi';
 
+import ContactsSheet from './ContactsSheet';
+
 const TABS = ['Session', 'Send', 'History'];
 
 const WhatsAppScreen = ({ navigation }) => {
   const [activeTab, setActiveTab] = useState(0);
+  const [showContacts, setShowContacts] = useState(false);
 
   return (
     <SafeAreaView backgroundColor={COLORS.primaryThemeColor}>
       <NavigationHeader title="WhatsApp" onBackPress={() => navigation.goBack()} logo={false} />
       <RoundedContainer backgroundColor="#f5f5f5">
-        {/* Tab Bar */}
-        <View style={s.tabBar}>
-          {TABS.map((tab, i) => (
-            <TouchableOpacity
-              key={tab}
-              style={[s.tab, activeTab === i && s.tabActive]}
-              onPress={() => setActiveTab(i)}
-            >
-              <Text style={[s.tabText, activeTab === i && s.tabTextActive]}>{tab}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <View style={{ flex: 1 }}>
+          {/* Tab Bar */}
+          <View style={s.tabBar}>
+            {TABS.map((tab, i) => (
+              <TouchableOpacity
+                key={tab}
+                style={[s.tab, activeTab === i && s.tabActive]}
+                onPress={() => setActiveTab(i)}
+              >
+                <Text style={[s.tabText, activeTab === i && s.tabTextActive]}>{tab}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
 
-        {activeTab === 0 && <SessionTab />}
-        {activeTab === 1 && <SendTab />}
-        {activeTab === 2 && <HistoryTab />}
+          {activeTab === 0 && <SessionTab />}
+          {activeTab === 1 && <SendTab />}
+          {activeTab === 2 && <HistoryTab />}
+
+          {/* Floating Contacts Button */}
+          <TouchableOpacity style={s.fab} onPress={() => setShowContacts(true)} activeOpacity={0.8}>
+            <Text style={s.fabIcon}>👤</Text>
+          </TouchableOpacity>
+        </View>
       </RoundedContainer>
+
+      <ContactsSheet visible={showContacts} onClose={() => setShowContacts(false)} />
     </SafeAreaView>
   );
 };
@@ -640,6 +652,27 @@ const s = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     color: '#9ca3af',
+  },
+  // FAB
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#25D366',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    zIndex: 10,
+  },
+  fabIcon: {
+    fontSize: 26,
   },
   // Send
   label: {

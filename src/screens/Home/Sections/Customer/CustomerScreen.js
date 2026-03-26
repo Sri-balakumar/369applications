@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
@@ -13,8 +13,11 @@ import { TouchableOpacity, ActivityIndicator, View, StyleSheet, Platform } from 
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import CustomerAvatar from '@components/common/CustomerAvatar';
 import { MaterialIcons } from '@expo/vector-icons';
+import ContactsSheet from '@screens/Home/Options/WhatsApp/ContactsSheet';
 
 const CustomerScreen = ({ navigation, route }) => {
+  const [showContacts, setShowContacts] = useState(false);
+  const [editContactId, setEditContactId] = useState(null);
   const isFocused = useIsFocused();
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchCustomersOdoo);
 
@@ -69,6 +72,17 @@ const CustomerScreen = ({ navigation, route }) => {
             </View>
           ) : null}
         </View>
+        <TouchableOpacity
+          style={styles.editBtn}
+          onPress={(e) => {
+            e.stopPropagation && e.stopPropagation();
+            setEditContactId(item.id);
+            setShowContacts(true);
+          }}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <MaterialIcons name="edit" size={18} color={COLORS.primaryThemeColor} />
+        </TouchableOpacity>
         <MaterialIcons name="chevron-right" size={22} color="#ccc" />
       </TouchableOpacity>
     );
@@ -113,8 +127,14 @@ const CustomerScreen = ({ navigation, route }) => {
         onChangeText={handleSearchTextChange}
       />
       <RoundedContainer>
-        {renderCustomers()}
+        <View style={{ flex: 1 }}>
+          {renderCustomers()}
+          <TouchableOpacity style={styles.fab} onPress={() => { setEditContactId(null); setShowContacts(true); }} activeOpacity={0.8}>
+            <MaterialIcons name="person-add" size={26} color="#fff" />
+          </TouchableOpacity>
+        </View>
       </RoundedContainer>
+      <ContactsSheet visible={showContacts} onClose={() => setShowContacts(false)} initialView="form" initialContactId={editContactId} onSaved={() => fetchData({ searchText })} />
     </SafeAreaView>
   );
 };
@@ -151,6 +171,27 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistMedium,
     fontSize: 13,
     color: '#888',
+  },
+  editBtn: {
+    padding: 8,
+    marginRight: 4,
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: COLORS.primaryThemeColor,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    zIndex: 10,
   },
 });
 
