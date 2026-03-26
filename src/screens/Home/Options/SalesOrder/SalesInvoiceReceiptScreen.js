@@ -277,23 +277,12 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
     }
   };
 
-  // Try to auto-fetch phone, if not found show modal
   const handleWhatsAppTap = async () => {
     if (!invoice) return;
-    setSendingWA(true);
-    try {
-      // Try to fetch partner phone from Odoo
-      const phone = invoice.partnerId ? await fetchPartnerPhoneOdoo(invoice.partnerId) : null;
-      if (phone && phone.trim()) {
-        // Phone found — send directly
-        await doSendWhatsApp(phone.trim());
-      } else {
-        // No phone — show modal for manual entry
-        setSendingWA(false);
-        setShowPhoneModal(true);
-      }
-    } catch (e) {
-      setSendingWA(false);
+    if (partnerPhone && partnerPhone.trim()) {
+      setSendingWA(true);
+      await doSendWhatsApp(partnerPhone.trim());
+    } else {
       setShowPhoneModal(true);
     }
   };
@@ -408,17 +397,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           </View>
           <Text style={s.infoText}>Cashier: {cashierName}</Text>
           <Text style={s.infoText}>Customer: {invoice.partnerName}</Text>
-          <View style={s.phoneRow}>
-            <Text style={s.infoText}>Phone: </Text>
-            <TextInput
-              style={s.phoneInput}
-              value={partnerPhone}
-              onChangeText={setPartnerPhone}
-              placeholder="Enter phone"
-              placeholderTextColor="#bbb"
-              keyboardType="phone-pad"
-            />
-          </View>
+          {partnerPhone ? <Text style={s.infoText}>Phone: {partnerPhone}</Text> : null}
           <Text style={s.infoText}>Company: {invoice.companyName}</Text>
 
           <View style={s.divider} />
