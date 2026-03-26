@@ -1,45 +1,64 @@
-import React, { useEffect, useCallback } from 'react';
-import { View, TouchableOpacity } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { View, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { ProductsList } from '@components/Product';
-import { fetchProductsOdoo, fetchProductByBarcodeOdoo } from '@api/services/generalApi';
+import { fetchProductsOdoo, fetchProductByBarcodeOdoo, fetchPosCategoriesOdoo } from '@api/services/generalApi';
 import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
 import { OverlayLoader } from '@components/Loader';
 import { RoundedContainer, SafeAreaView, SearchContainer } from '@components/containers';
-import styles from './styles';
+import prodStyles from './styles';
 import { EmptyState } from '@components/common/empty';
 import useDataFetching from '@hooks/useDataFetching';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import { showToastMessage } from '@components/Toast';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { COLORS } from '@constants/theme';
+import { COLORS, FONT_FAMILY } from '@constants/theme';
+import Text from '@components/Text';
 
 const ProductsScreen = ({ navigation, route }) => {
   const { fromCustomerDetails } = route.params || {};
-  const posCategoryId = route?.params?.posCategoryId || '';
+  const initialPosCategoryId = route?.params?.posCategoryId || '';
   const categoryId = route?.params?.id || '';
   const isFocused = useIsFocused();
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchProductsOdoo);
 
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState(initialPosCategoryId);
+
+  // Load POS categories on mount
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const cats = await fetchPosCategoriesOdoo();
+        setCategories(cats || []);
+      } catch (e) { /* ignore */ }
+    };
+    loadCategories();
+  }, []);
+
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, categoryId, posCategoryId }),
+    (text) => fetchData({ searchText: text, categoryId, posCategoryId: selectedCategory }),
     500
   );
 
   useFocusEffect(
     useCallback(() => {
-      fetchData({ searchText, categoryId, posCategoryId });
-    }, [searchText, posCategoryId])
+      fetchData({ searchText, categoryId, posCategoryId: selectedCategory });
+    }, [searchText, selectedCategory])
   );
 
   useEffect(() => {
-    if (isFocused) fetchData({ searchText, categoryId, posCategoryId });
-  }, [isFocused, searchText, posCategoryId]);
+    if (isFocused) fetchData({ searchText, categoryId, posCategoryId: selectedCategory });
+  }, [isFocused, searchText, selectedCategory]);
+
+  const handleCategoryPress = (catId) => {
+    setSelectedCategory(catId);
+  };
 
   const handleLoadMore = () => {
-    fetchMoreData({ searchText, categoryId, posCategoryId });
+    fetchMoreData({ searchText, categoryId, posCategoryId: selectedCategory });
   };
 
   const handleScan = async (code) => {
@@ -57,7 +76,7 @@ const ProductsScreen = ({ navigation, route }) => {
 
   const renderItem = ({ item }) => {
     if (item.empty) {
-      return <View style={[styles.itemStyle, styles.itemInvisible]} />;
+      return <View style={[prodStyles.itemStyle, prodStyles.itemInvisible]} />;
     }
     return (
       <ProductsList
@@ -105,6 +124,28 @@ const ProductsScreen = ({ navigation, route }) => {
           </TouchableOpacity>
         }
       />
+      {/* POS Category Filter */}
+      {categories.length > 0 && (
+        <View style={s.categoryBar}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.categoryScroll}>
+            <TouchableOpacity
+              style={[s.categoryChip, !selectedCategory && s.categoryChipActive]}
+              onPress={() => handleCategoryPress('')}
+            >
+              <Text style={[s.categoryText, !selectedCategory && s.categoryTextActive]}>All</Text>
+            </TouchableOpacity>
+            {categories.map((cat) => (
+              <TouchableOpacity
+                key={cat._id}
+                style={[s.categoryChip, selectedCategory === cat._id && s.categoryChipActive]}
+                onPress={() => handleCategoryPress(cat._id)}
+              >
+                <Text style={[s.categoryText, selectedCategory === cat._id && s.categoryTextActive]}>{cat.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
       <RoundedContainer>
         {renderProducts()}
       </RoundedContainer>
@@ -112,5 +153,38 @@ const ProductsScreen = ({ navigation, route }) => {
     </SafeAreaView>
   );
 };
+
+const s = StyleSheet.create({
+  categoryBar: {
+    backgroundColor: '#fff',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  categoryScroll: {
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  categoryChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#f0f0f0',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  categoryChipActive: {
+    backgroundColor: COLORS.primaryThemeColor,
+    borderColor: COLORS.primaryThemeColor,
+  },
+  categoryText: {
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    color: '#555',
+  },
+  categoryTextActive: {
+    color: '#fff',
+  },
+});
 
 export default ProductsScreen;

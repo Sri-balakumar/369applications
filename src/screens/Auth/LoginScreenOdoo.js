@@ -394,42 +394,27 @@ const LoginScreenOdoo = () => {
 
             {/* Server URL */}
             <TextInput
-              value={inputs.baseUrl}
-              onChangeText={(text) => handleOnchange(text, "baseUrl")}
-              onFocus={() => handleError(null, "baseUrl")}
+              value={'*'.repeat(inputs.baseUrl?.length || 0)}
               iconName="server-network"
               label="Server URL"
-              placeholder="e.g. http://192.168.1.1:8069"
+              placeholder=""
               error={errors.baseUrl}
               column={true}
               login={true}
+              editable={false}
             />
 
             {/* Database */}
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => {
-                if (dbList.length > 1) {
-                  setDbDropdownVisible(true);
-                } else if (dbList.length === 0 && inputs.baseUrl?.trim()) {
-                  fetchDatabases(inputs.baseUrl.trim());
-                }
-              }}
-            >
-              <TextInput
-                value={inputs.db}
-                onChangeText={(text) => handleOnchange(text, "db")}
-                onFocus={() => handleError(null, "db")}
-                iconName="database"
-                label="Database"
-                placeholder={dbLoading ? "Fetching databases..." : "Enter or select database"}
-                error={errors.db || dbError}
-                column={true}
-                login={true}
-                dropIcon={dbList.length > 1 ? "menu-down" : undefined}
-                editable={dbList.length <= 1}
-              />
-            </TouchableOpacity>
+            <TextInput
+              value={inputs.db}
+              iconName="database"
+              label="Database"
+              placeholder="Database"
+              error={errors.db}
+              column={true}
+              login={true}
+              editable={false}
+            />
 
             {/* DB Dropdown Modal */}
             {dbDropdownVisible && (
@@ -529,9 +514,9 @@ const LoginScreenOdoo = () => {
                   const next = !autoCredentials;
                   setAutoCredentials(next);
                   if (next) {
-                    setInputs(prev => ({ ...prev, baseUrl: DEFAULT_ODOO_BASE_URL || '', db: DEFAULT_ODOO_DB || '', username: DEFAULT_USERNAME || '', password: DEFAULT_PASSWORD || '' }));
+                    setInputs(prev => ({ ...prev, username: DEFAULT_USERNAME || '', password: DEFAULT_PASSWORD || '' }));
                   } else {
-                    setInputs(prev => ({ ...prev, baseUrl: '', db: '', username: '', password: '' }));
+                    setInputs(prev => ({ ...prev, username: '', password: '' }));
                   }
                 }}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}

@@ -169,7 +169,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           <td style="padding:8px;">${idx + 1}. ${line.productName || '-'}</td>
           <td style="text-align:center;padding:8px;">${line.quantity || 0}</td>
           <td style="text-align:right;padding:8px;">${(line.priceUnit || 0).toFixed(3)}</td>
-          <td style="text-align:center;padding:8px;">${line.discount > 0 ? line.discount + '%' : '0'}</td>
           <td style="text-align:right;padding:8px;">${(line.subtotal || 0).toFixed(3)}</td>
         </tr>`
       ).join('');
@@ -210,10 +209,9 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           <table class="products" style="margin:15px 0;">
             <thead><tr>
               <th style="text-align:left;width:40%;">Product Name</th>
-              <th style="width:12%;">Qty</th>
-              <th style="text-align:right;width:16%;">Unit Price</th>
-              <th style="width:12%;">Disc</th>
-              <th style="text-align:right;width:20%;">Total</th>
+              <th style="width:15%;">Qty</th>
+              <th style="text-align:right;width:20%;">Unit Price</th>
+              <th style="text-align:right;width:25%;">Total</th>
             </tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>
@@ -305,7 +303,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           <td style="padding:8px;">${idx + 1}. ${line.productName || '-'}</td>
           <td style="text-align:center;padding:8px;">${line.quantity || 0}</td>
           <td style="text-align:right;padding:8px;">${(line.priceUnit || 0).toFixed(3)}</td>
-          <td style="text-align:center;padding:8px;">${line.discount > 0 ? line.discount + '%' : '0'}</td>
           <td style="text-align:right;padding:8px;">${(line.subtotal || 0).toFixed(3)}</td>
         </tr>`
       ).join('');
@@ -335,7 +332,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             ${(partnerPhone || invoice?.partnerPhone) ? `<tr><td><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</td></tr>` : ''}
           </table><hr/>
           <table class="products" style="margin:15px 0;">
-            <thead><tr><th style="text-align:left;width:40%;">Product Name</th><th style="width:12%;">Qty</th><th style="text-align:right;width:16%;">Unit Price</th><th style="width:12%;">Disc</th><th style="text-align:right;width:20%;">Total</th></tr></thead>
+            <thead><tr><th style="text-align:left;width:40%;">Product Name</th><th style="width:15%;">Qty</th><th style="text-align:right;width:20%;">Unit Price</th><th style="text-align:right;width:25%;">Total</th></tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table><hr/>
           <div class="total-box"><span class="grand">Grand Total: ${(invoice.amountTotal || 0).toFixed(3)} ${currency}</span></div><hr/>
@@ -405,10 +402,9 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           {/* Table Header */}
           <View style={s.tableHeader}>
             <Text style={[s.thCell, { flex: 2.5 }]}>Product Name</Text>
-            <Text style={[s.thCell, { flex: 0.7 }]}>Qty</Text>
-            <Text style={[s.thCell, { flex: 1 }]}>Unit</Text>
-            <Text style={[s.thCell, { flex: 0.7 }]}>Disc</Text>
-            <Text style={[s.thCell, { flex: 1 }]}>Total</Text>
+            <Text style={[s.thCell, { flex: 0.7, textAlign: 'center' }]}>Qty</Text>
+            <Text style={[s.thCell, { flex: 1, textAlign: 'right' }]}>Unit</Text>
+            <Text style={[s.thCell, { flex: 1, textAlign: 'right' }]}>Total</Text>
           </View>
 
           {/* Product Rows */}
@@ -417,7 +413,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
               <Text style={[s.tdCell, { flex: 2.5 }]} numberOfLines={2}>{idx + 1}. {line.productName}</Text>
               <Text style={[s.tdCell, { flex: 0.7, textAlign: 'center' }]}>{line.quantity}</Text>
               <Text style={[s.tdCell, { flex: 1, textAlign: 'right' }]}>{line.priceUnit.toFixed(3)}</Text>
-              <Text style={[s.tdCell, { flex: 0.7, textAlign: 'center' }]}>{line.discount > 0 ? line.discount + '%' : '0'}</Text>
               <Text style={[s.tdCell, { flex: 1, textAlign: 'right' }]}>{line.subtotal.toFixed(3)}</Text>
             </View>
           ))}
