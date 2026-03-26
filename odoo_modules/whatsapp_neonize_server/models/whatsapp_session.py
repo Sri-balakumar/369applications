@@ -22,12 +22,51 @@ _wa_locks = {}         # session_id -> threading.Lock
 
 
 def _ensure_session_dir():
-    """Create session storage directory inside the module's own folder."""
-    # Get the directory where this module is installed
+    """Create session storage directory.
+
+    Priority:
+    1. ODOO_WA_SESSION_DIR environment variable (set this on your server)
+    2. /var/lib/odoo/whatsapp_sessions  (standard Odoo data dir)
+    3. Module's own sessions/ folder (local dev fallback)
+    """
+    import os
+
+    # Allow override via env var — recommended for production servers
+    env_path = os.environ.get('ODOO_WA_SESSION_DIR')
+    if env_path:
+        os.makedirs(env_path, exist_ok=True)
+        return env_path
+
+    # Try standard Odoo data directory
+    standard_path = '/var/lib/odoo/whatsapp_sessions'
+    try:
+        os.makedirs(standard_path, exist_ok=True)
+        # Quick write-test
+        test_file = os.path.join(standard_path, '.write_test')
+        with open(test_file, 'w') as f:
+            f.write('ok')
+        os.remove(test_file)
+        return standard_path
+    except (PermissionError, OSError):
+        pass
+
+    # Fall back to module's own folder (works for local dev)
     module_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = os.path.join(module_dir, 'sessions')
-    os.makedirs(path, exist_ok=True)
-    return path
+    try:
+        os.makedirs(path, exist_ok=True)
+        return path
+    except (PermissionError, OSError):
+        pass
+
+    # Last resort: use /tmp (sessions won't survive reboot but at least it works)
+    tmp_path = '/tmp/odoo_whatsapp_sessions'
+    os.makedirs(tmp_path, exist_ok=True)
+    _logger.warning(
+        "WhatsApp sessions stored in /tmp — they will not survive a reboot. "
+        "Set ODOO_WA_SESSION_DIR env variable to a persistent writable path."
+    )
+    return tmp_path
 
 
 class WhatsAppSession(models.Model):
@@ -85,16 +124,23 @@ class WhatsAppSession(models.Model):
         try:
             from neonize.client import NewClient
             from neonize.events import ConnectedEv, MessageEv
-        except ImportError:
+        except ImportError as e:
             raise UserError(_(
                 "Neonize library not installed.\n\n"
-                "Please run: pip install neonize qrcode[pil] Pillow"
-            ))
+                "Please run on the server:\n"
+                "  pip install neonize qrcode[pil] Pillow\n\n"
+                "Error: %s"
+            ) % str(e))
 
         session_id = self.id
         db_name = self.env.cr.dbname
         session_dir = _ensure_session_dir()
         db_path = os.path.join(session_dir, f"{db_name}_session_{session_id}.db")
+
+        _logger.info(
+            "WhatsApp connect: session=%s, db_path=%s, dir_writable=%s",
+            session_id, db_path, os.access(session_dir, os.W_OK)
+        )
 
         # Stop existing client if running
         self._stop_client()

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Platform, ActivityIndicator, Share } from 'react-native';
+import { View, ScrollView, StyleSheet, Platform, ActivityIndicator, Share, TextInput, Modal, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { Button } from '@components/common/Button';
@@ -8,9 +8,12 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo } from '@api/services/generalApi';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import { useCurrencyStore } from '@stores/currency';
 import { useAuthStore } from '@stores/auth';
 import { showToastMessage } from '@components/Toast';
+import { INVOICE_LOGO_BASE64 } from '@constants/invoiceLogo';
+import { sendWhatsAppDocument } from '@api/services/whatsappApi';
 
 const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   const { invoiceId, orderId, orderData } = route?.params || {};
@@ -126,6 +129,9 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   };
 
   const [downloading, setDownloading] = useState(false);
+  const [sendingWA, setSendingWA] = useState(false);
+  const [waPhone, setWaPhone] = useState('');
+  const [showPhoneModal, setShowPhoneModal] = useState(false);
   const handleDownloadPdf = async () => {
     if (!invoice) {
       showToastMessage('Invoice data not available');
@@ -160,6 +166,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
         </style></head>
         <body>
           <div class="header">
+            <img src="${INVOICE_LOGO_BASE64}" style="width:120px;height:auto;margin-bottom:8px;" />
             <h2>${invoice.companyName || 'Company'}</h2>
           </div>
           <h3 style="text-align:center;color:#2e2a4f;">INVOICE</h3>
@@ -194,7 +201,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             <h4 style="color:#2e2a4f;">Payment Details</h4>
             <table style="width:50%;margin:0 auto;font-size:12px;">
               <tr><td style="color:#666;">Cash:</td><td style="text-align:right;font-weight:bold;">${(invoice.amountTotal || 0).toFixed(3)} ${currency}</td></tr>
-              <tr><td style="color:#666;">Change:</td><td style="text-align:right;font-weight:bold;">0</td></tr>
             </table>
           </div>
           <div class="footer">
@@ -207,16 +213,112 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       const { uri } = await Print.printToFileAsync({ html });
       console.log('[DownloadPDF] PDF created at:', uri);
 
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+      const sanitizedName = (invoice.name || 'Invoice').replace(/[^a-zA-Z0-9\-_]/g, '_');
+      const fileName = `Invoice_${sanitizedName}_${Date.now()}.pdf`;
+
+      if (Platform.OS === 'android') {
+        const SAF = FileSystem.StorageAccessFramework;
+        const permissions = await SAF.requestDirectoryPermissionsAsync();
+        if (permissions.granted) {
+          const base64Data = await FileSystem.readAsStringAsync(uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          const safUri = await SAF.createFileAsync(
+            permissions.directoryUri,
+            fileName,
+            'application/pdf'
+          );
+          await FileSystem.writeAsStringAsync(safUri, base64Data, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          showToastMessage('PDF saved: ' + fileName);
+        } else {
+          showToastMessage('Storage permission denied');
+        }
       } else {
-        showToastMessage('PDF saved successfully');
+        const destUri = FileSystem.documentDirectory + fileName;
+        await FileSystem.copyAsync({ from: uri, to: destUri });
+        await Sharing.shareAsync(destUri, {
+          mimeType: 'application/pdf',
+          UTI: 'com.adobe.pdf',
+        });
+        showToastMessage('PDF saved: ' + fileName);
       }
     } catch (err) {
       console.error('[DownloadPDF] error:', err);
       showToastMessage('Failed to generate PDF');
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleSendWhatsApp = async () => {
+    if (!waPhone.trim()) {
+      showToastMessage('Enter phone number');
+      return;
+    }
+    setShowPhoneModal(false);
+    setSendingWA(true);
+    try {
+      const rowsHtml = (invoice.lines || []).map((line, idx) =>
+        `<tr style="border-bottom:1px solid #eee;">
+          <td style="padding:8px;">${idx + 1}. ${line.productName || '-'}</td>
+          <td style="text-align:center;padding:8px;">${line.quantity || 0}</td>
+          <td style="text-align:right;padding:8px;">${(line.priceUnit || 0).toFixed(3)}</td>
+          <td style="text-align:center;padding:8px;">${line.discount > 0 ? line.discount + '%' : '0'}</td>
+          <td style="text-align:right;padding:8px;">${(line.subtotal || 0).toFixed(3)}</td>
+        </tr>`
+      ).join('');
+
+      const html = `
+        <html><head><meta charset="utf-8"/><style>
+          body { font-family: Arial, sans-serif; color: #333; padding: 20px; }
+          h2 { color: #2e2a4f; margin: 5px 0; }
+          table { width: 100%; border-collapse: collapse; }
+          .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 15px; }
+          .info td { font-size: 12px; padding: 2px 0; }
+          .products th { text-align: center; padding: 8px; border-bottom: 2px solid #333; background: #f5f5f5; font-size: 12px; }
+          .products td { font-size: 12px; }
+          .total-box { text-align: right; margin: 15px 0; padding: 10px; background: #f9f9f9; border-radius: 8px; }
+          .grand { font-size: 18px; font-weight: bold; color: #e85d04; }
+          .footer { text-align: center; margin-top: 30px; color: #999; font-size: 10px; border-top: 1px solid #ddd; padding-top: 15px; }
+        </style></head><body>
+          <div class="header">
+            <img src="${INVOICE_LOGO_BASE64}" style="width:120px;height:auto;margin-bottom:8px;" />
+            <h2>${invoice.companyName || 'Company'}</h2>
+          </div>
+          <h3 style="text-align:center;color:#2e2a4f;">INVOICE</h3>
+          <table class="info" style="margin-bottom:15px;">
+            <tr><td><strong>Date:</strong> ${invoice.invoiceDate || '-'}</td><td style="text-align:right;"><strong>Invoice:</strong> ${invoice.name || '-'}</td></tr>
+            <tr><td><strong>Cashier:</strong> ${cashierName}</td><td style="text-align:right;"><strong>Company:</strong> ${invoice.companyName || '-'}</td></tr>
+            <tr><td><strong>Customer:</strong> ${invoice.partnerName || '-'}</td></tr>
+          </table><hr/>
+          <table class="products" style="margin:15px 0;">
+            <thead><tr><th style="text-align:left;width:40%;">Product Name</th><th style="width:12%;">Qty</th><th style="text-align:right;width:16%;">Unit Price</th><th style="width:12%;">Disc</th><th style="text-align:right;width:20%;">Total</th></tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table><hr/>
+          <div class="total-box"><span class="grand">Grand Total: ${(invoice.amountTotal || 0).toFixed(3)} ${currency}</span></div><hr/>
+          <div style="text-align:center;margin:15px 0;">
+            <h4 style="color:#2e2a4f;">Payment Details</h4>
+            <table style="width:50%;margin:0 auto;font-size:12px;">
+              <tr><td style="color:#666;">Cash:</td><td style="text-align:right;font-weight:bold;">${(invoice.amountTotal || 0).toFixed(3)} ${currency}</td></tr>
+            </table>
+          </div>
+          <div class="footer"><p>Thank you for your business!</p><p>Generated from 369ai Biz Mobile App</p></div>
+        </body></html>`;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      const base64Data = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const fileName = `Invoice_${(invoice.name || 'INV').replace(/[^a-zA-Z0-9\-_]/g, '_')}.pdf`;
+      await sendWhatsAppDocument(waPhone.trim(), base64Data, fileName, `Invoice ${invoice.name || ''}`);
+      showToastMessage('Invoice sent via WhatsApp!');
+    } catch (err) {
+      console.error('[SendWhatsApp] error:', err);
+      showToastMessage('Failed to send: ' + err.message);
+    } finally {
+      setSendingWA(false);
     }
   };
 
@@ -295,10 +397,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             <Text style={s.paymentLabel}>Cash:</Text>
             <Text style={s.paymentValue}>{invoice.amountTotal.toFixed(3)} {currency}</Text>
           </View>
-          <View style={s.summaryRow}>
-            <Text style={s.paymentLabel}>Change:</Text>
-            <Text style={s.paymentValue}>0</Text>
-          </View>
         </View>
 
         {/* Print/Share Button */}
@@ -318,6 +416,42 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             loading={downloading}
           />
         </View>
+
+        <View style={{ marginTop: 10 }}>
+          <Button
+            backgroundColor="#25D366"
+            title={sendingWA ? "Sending..." : "Send WhatsApp"}
+            onPress={() => { if (!invoice) return; setShowPhoneModal(true); }}
+            loading={sendingWA}
+          />
+        </View>
+
+        {/* Phone Number Modal */}
+        <Modal visible={showPhoneModal} transparent animationType="fade">
+          <View style={s.modalOverlay}>
+            <View style={s.modalBox}>
+              <Text style={s.modalTitle}>Send Invoice via WhatsApp</Text>
+              <Text style={s.modalLabel}>Customer Phone Number</Text>
+              <TextInput
+                style={s.modalInput}
+                placeholder="e.g. 96812345678"
+                placeholderTextColor="#999"
+                value={waPhone}
+                onChangeText={setWaPhone}
+                keyboardType="phone-pad"
+                autoFocus
+              />
+              <View style={s.modalBtnRow}>
+                <TouchableOpacity style={s.modalCancelBtn} onPress={() => setShowPhoneModal(false)}>
+                  <Text style={s.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.modalSendBtn} onPress={handleSendWhatsApp}>
+                  <Text style={s.modalSendText}>Send</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -355,6 +489,17 @@ const s = StyleSheet.create({
   paymentLabel: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistMedium, color: '#555' },
   paymentValue: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistBold, color: '#333' },
   buttonContainer: { marginTop: 20 },
+  // WhatsApp phone modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  modalBox: { backgroundColor: '#fff', borderRadius: 14, padding: 24, width: '85%', maxWidth: 360 },
+  modalTitle: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: '#1f2937', marginBottom: 16, textAlign: 'center' },
+  modalLabel: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistMedium, color: '#555', marginBottom: 6 },
+  modalInput: { backgroundColor: '#f9fafb', borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: '#1f2937', marginBottom: 20 },
+  modalBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
+  modalCancelBtn: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8, backgroundColor: '#f3f4f6' },
+  modalCancelText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#6b7280' },
+  modalSendBtn: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8, backgroundColor: '#25D366' },
+  modalSendText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#fff' },
 });
 
 export default SalesInvoiceReceiptScreen;

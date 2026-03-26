@@ -62,6 +62,7 @@ const OptionsScreen = ({ navigation }) => {
     { title: 'Purchase Return', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('QuickPurchaseReturnListScreen') },
     { title: 'Sales Return', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('QuickSalesReturnListScreen') },
     { title: 'Gross Profit', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('GrossProfitReportScreen') },
+    { title: 'WhatsApp', image: require('@assets/icons/common/watsapp.png'), onPress: () => navigation.navigate('WhatsAppScreen') },
   ];
 
   // Add Staff Tracking option for admin users, My Location for non-admin users

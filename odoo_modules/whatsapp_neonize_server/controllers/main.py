@@ -21,6 +21,8 @@ class WhatsAppController(http.Controller):
         """
         Poll endpoint for QR code status.
         Returns current status and QR image if available.
+        Falls back to database when in-memory state is unavailable
+        (handles multi-worker Odoo deployments).
         """
         from odoo.addons.whatsapp_neonize.models.whatsapp_session import (
             _wa_status, _wa_qr_image,
@@ -30,17 +32,27 @@ class WhatsAppController(http.Controller):
         if not session.exists():
             return {'status': 'error', 'message': 'Session not found'}
 
-        mem_status = _wa_status.get(session_id, session.status)
+        # Prefer in-memory status; fall back to DB status
+        # (in-memory may be empty when a different worker handled the connect)
+        mem_status = _wa_status.get(session_id) or session.status
         result = {
             'status': mem_status,
             'session_id': session_id,
         }
 
         if mem_status == 'waiting_qr':
+            # Try in-memory QR first (same worker), then fall back to DB
             qr = _wa_qr_image.get(session_id)
             if qr:
                 result['qr_image'] = (
                     qr.decode('utf-8') if isinstance(qr, bytes) else qr
+                )
+            elif session.qr_image:
+                # DB fallback — critical for multi-worker servers
+                result['qr_image'] = (
+                    session.qr_image.decode('utf-8')
+                    if isinstance(session.qr_image, bytes)
+                    else session.qr_image
                 )
 
         return result
