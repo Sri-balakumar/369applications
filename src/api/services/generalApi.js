@@ -4022,8 +4022,16 @@ export const validateSaleOrderPickingsOdoo = async (orderId) => {
       return;
     }
 
-    // 3. For each picking, set move quantities and validate
+    // 3. For each picking: force-assign, set quantities, validate
     for (const picking of pickings) {
+      // Force-assign the picking (triggers pos_negative_stock override)
+      try {
+        await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'stock.picking', method: 'action_assign', args: [[picking.id]], kwargs: {} },
+        }, { headers, timeout: 15000 });
+      } catch (e) { console.warn('[validatePickings] action_assign warning:', e?.message); }
+
       if (picking.move_ids && picking.move_ids.length > 0) {
         // Read move quantities
         const movesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
@@ -4031,22 +4039,63 @@ export const validateSaleOrderPickingsOdoo = async (orderId) => {
           params: { model: 'stock.move', method: 'read', args: [picking.move_ids], kwargs: { fields: ['id', 'product_uom_qty'] } },
         }, { headers, timeout: 15000 });
 
-        // Set delivered quantity = ordered quantity for each move
+        // Set delivered quantity + picked flag for each move
         for (const move of (movesResp.data?.result || [])) {
           await axios.post(`${baseUrl}/web/dataset/call_kw`, {
             jsonrpc: '2.0', method: 'call',
-            params: { model: 'stock.move', method: 'write', args: [[move.id], { quantity: move.product_uom_qty }], kwargs: {} },
+            params: { model: 'stock.move', method: 'write', args: [[move.id], { quantity: move.product_uom_qty, picked: true }], kwargs: {} },
           }, { headers, timeout: 15000 });
         }
       }
 
-      // Validate the picking — this triggers _action_done() which updates stock.quant
-      await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      // Validate the picking
+      const validateResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0', method: 'call',
-        params: { model: 'stock.picking', method: 'button_validate', args: [[picking.id]], kwargs: {} },
+        params: {
+          model: 'stock.picking', method: 'button_validate', args: [[picking.id]],
+          kwargs: { context: { skip_backorder: true, skip_sms: true, skip_immediate: true } },
+        },
       }, { headers, timeout: 15000 });
 
-      console.log('[validatePickings] Validated picking', picking.id);
+      const validateResult = validateResp.data?.result;
+
+      // If button_validate returns a wizard action, process it
+      if (validateResult && typeof validateResult === 'object' && validateResult.res_model) {
+        const wizardModel = validateResult.res_model;
+        const wizardId = validateResult.res_id;
+        console.log('[validatePickings] Wizard returned:', wizardModel, 'id:', wizardId);
+
+        if (wizardModel === 'stock.backorder.confirmation' || wizardModel === 'stock.immediate.transfer') {
+          // Process the wizard to confirm validation
+          try {
+            const wizardCtx = validateResult.context || {};
+            if (wizardId) {
+              await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: wizardModel, method: 'process', args: [[wizardId]], kwargs: { context: wizardCtx } },
+              }, { headers, timeout: 15000 });
+            } else {
+              // No res_id — create wizard and process it
+              const createWizResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: wizardModel, method: 'create', args: [{}], kwargs: { context: wizardCtx } },
+              }, { headers, timeout: 15000 });
+              const newWizId = createWizResp.data?.result;
+              if (newWizId) {
+                await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                  jsonrpc: '2.0', method: 'call',
+                  params: { model: wizardModel, method: 'process', args: [[newWizId]], kwargs: { context: wizardCtx } },
+                }, { headers, timeout: 15000 });
+              }
+            }
+            console.log('[validatePickings] Wizard processed for picking', picking.id);
+          } catch (wizErr) {
+            console.warn('[validatePickings] Wizard processing failed:', wizErr?.message);
+          }
+        }
+      } else {
+        console.log('[validatePickings] Validated picking', picking.id);
+      }
     }
   } catch (error) {
     console.warn('[validatePickings] Error validating pickings for order', orderId, ':', error?.message);
@@ -4236,6 +4285,84 @@ export const createInvoiceFromQuotationOdoo = async (orderId, companyId = null) 
       }
     } catch (postErr) {
       console.warn('[createInvoice] Could not post:', postErr?.message);
+    }
+
+    // STEP 6: Force stock decrease — directly update stock.quant for each product
+    try {
+      console.log('[createInvoice] Step 6: Force stock decrease for SO', orderId);
+      // Read sale order lines
+      const soLinesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['order_line'] } },
+      }, { headers, timeout: 15000 });
+      const orderLineIds = soLinesResp.data?.result?.[0]?.order_line || [];
+
+      if (orderLineIds.length > 0) {
+        const linesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'sale.order.line', method: 'read', args: [orderLineIds], kwargs: { fields: ['product_id', 'product_uom_qty', 'qty_delivered'] } },
+        }, { headers, timeout: 15000 });
+        const lines = linesResp.data?.result || [];
+
+        for (const line of lines) {
+          const productId = Array.isArray(line.product_id) ? line.product_id[0] : line.product_id;
+          const qty = line.product_uom_qty || 0;
+          if (!productId || qty <= 0) continue;
+
+          // Check if picking already delivered this (qty_delivered > 0 means stock already decreased)
+          if (line.qty_delivered >= qty) {
+            console.log('[createInvoice] Stock already decreased for product', productId, '- qty_delivered:', line.qty_delivered);
+            continue;
+          }
+
+          // Search for existing stock.quant for this product in internal locations
+          const quantResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'stock.quant', method: 'search_read',
+              args: [[['product_id', '=', productId], ['location_id.usage', '=', 'internal']]],
+              kwargs: { fields: ['id', 'quantity', 'location_id'], limit: 1 },
+            },
+          }, { headers, timeout: 15000 });
+          const quants = quantResp.data?.result || [];
+
+          if (quants.length > 0) {
+            // Update existing quant — subtract qty
+            const quant = quants[0];
+            const newQty = (quant.quantity || 0) - qty;
+            await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+              jsonrpc: '2.0', method: 'call',
+              params: { model: 'stock.quant', method: 'write', args: [[quant.id], { quantity: newQty }], kwargs: {} },
+            }, { headers, timeout: 15000 });
+            console.log('[createInvoice] Stock decreased for product', productId, ':', quant.quantity, '->', newQty);
+          } else {
+            // No quant exists — find the default warehouse stock location and create negative quant
+            const locResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+              jsonrpc: '2.0', method: 'call',
+              params: {
+                model: 'stock.warehouse', method: 'search_read',
+                args: [[]], kwargs: { fields: ['lot_stock_id'], limit: 1 },
+              },
+            }, { headers, timeout: 15000 });
+            const locId = locResp.data?.result?.[0]?.lot_stock_id;
+            const locationId = Array.isArray(locId) ? locId[0] : locId;
+            if (locationId) {
+              await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                  model: 'stock.quant', method: 'create',
+                  args: [{ product_id: productId, location_id: locationId, quantity: -qty }],
+                  kwargs: {},
+                },
+              }, { headers, timeout: 15000 });
+              console.log('[createInvoice] Created negative quant for product', productId, ': -' + qty);
+            }
+          }
+        }
+      }
+    } catch (stockErr) {
+      console.warn('[createInvoice] Force stock decrease failed:', stockErr?.message);
+      // Don't block — invoice was already created
     }
 
     return { result: invoiceId };

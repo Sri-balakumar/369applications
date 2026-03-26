@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, ScrollView, FlatList, TextInput, TouchableOpacity,
-  StyleSheet, Image, ActivityIndicator, Platform, RefreshControl,
+  StyleSheet, Image, ActivityIndicator, Platform, RefreshControl, Alert,
 } from 'react-native';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
@@ -17,6 +17,7 @@ import {
   connectWhatsAppSession,
   disconnectWhatsAppSession,
   createWhatsAppSession,
+  deleteWhatsAppSession,
   refreshWhatsAppStatus,
   pollQrStatus,
   sendWhatsAppMessage,
@@ -211,6 +212,31 @@ const SessionTab = () => {
     }
   };
 
+  const handleDelete = (sessionId, sessionName, status) => {
+    const isConnected = status === 'connected';
+    const message = isConnected
+      ? `⚠️ This session is currently CONNECTED.\n\nAre you sure you want to delete "${sessionName}"? This will disconnect the active WhatsApp link.`
+      : `Are you sure you want to delete "${sessionName}"?`;
+    Alert.alert(
+      isConnected ? '⚠️ Delete Connected Session' : 'Delete Session',
+      message,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive', onPress: async () => {
+            try {
+              await deleteWhatsAppSession(sessionId);
+              showToastMessage('Session deleted');
+              loadSessions();
+            } catch (e) {
+              showToastMessage('Failed to delete: ' + e.message);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const getStepIndex = (status) => {
     if (status === 'connected') return 2;
     if (status === 'waiting_qr') return 1;
@@ -277,6 +303,12 @@ const SessionTab = () => {
                 <Text style={s.refreshBtnText}>
                   {refreshing ? 'Refreshing...' : 'Refresh Status'}
                 </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.actionBtn, s.deleteBtn]}
+                onPress={() => handleDelete(session.id, session.name || 'Session ' + session.id, session.status)}
+              >
+                <Text style={s.deleteBtnText}>🗑</Text>
               </TouchableOpacity>
               {session.status === 'connected' && (
                 <TouchableOpacity
@@ -602,6 +634,15 @@ const s = StyleSheet.create({
   },
   disconnectBtn: {
     backgroundColor: '#ef4444',
+  },
+  deleteBtn: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    paddingHorizontal: 10,
+  },
+  deleteBtnText: {
+    fontSize: 16,
   },
   actionBtnText: {
     color: '#fff',

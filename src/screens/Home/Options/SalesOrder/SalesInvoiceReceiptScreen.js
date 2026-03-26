@@ -441,16 +441,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           </View>
         </View>
 
-        {/* Print/Share Button */}
-        <View style={s.buttonContainer}>
-          <Button
-            backgroundColor="#333"
-            title="Print / Share Invoice"
-            onPress={handlePrint}
-          />
-        </View>
-
-        <View style={{ marginTop: 10 }}>
+        <View style={{ marginTop: 20 }}>
           <Button
             backgroundColor="#E85D04"
             title={downloading ? "Downloading..." : "Download PDF"}

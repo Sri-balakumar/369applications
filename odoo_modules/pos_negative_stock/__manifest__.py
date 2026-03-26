@@ -11,7 +11,7 @@
         Designed for Pharmacy Management where sales must not be blocked
         due to insufficient stock.
     """,
-    'depends': ['point_of_sale', 'stock'],
+    'depends': ['point_of_sale', 'stock', 'sale_stock'],
     'installable': True,
     'application': False,
     'auto_install': False,

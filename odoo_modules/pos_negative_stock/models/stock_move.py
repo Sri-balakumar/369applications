@@ -1,4 +1,27 @@
-from odoo import models, api
+from odoo import models, api, fields
+
+
+class ProductTemplate(models.Model):
+    _inherit = 'product.template'
+
+    # Default all new products to storable so stock is always tracked
+    type = fields.Selection(default='product')
+
+
+class SaleOrderLine(models.Model):
+    _inherit = 'sale.order.line'
+
+    def _action_launch_stock_rule(self, previous_product_uom_qty=False):
+        """Force consumable products to storable before stock rules run.
+
+        This ensures pickings are created for ALL products, not just storable ones.
+        Without this, consumable/service products skip stock moves entirely
+        and their qty_available stays at 0 forever.
+        """
+        for line in self:
+            if line.product_id and line.product_id.type in ('consu', 'service'):
+                line.product_id.sudo().write({'type': 'product'})
+        return super()._action_launch_stock_rule(previous_product_uom_qty)
 
 
 class StockMove(models.Model):

@@ -56,6 +56,11 @@ export const createWhatsAppSession = async (name) => {
   return odooRpc('whatsapp.session', 'create', [{ name }]);
 };
 
+// Delete a session
+export const deleteWhatsAppSession = async (sessionId) => {
+  return odooRpc('whatsapp.session', 'unlink', [[sessionId]]);
+};
+
 // Poll QR code status — reads session record directly via standard RPC (most reliable)
 export const pollQrStatus = async (sessionId) => {
   try {
