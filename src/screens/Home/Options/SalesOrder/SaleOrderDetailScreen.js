@@ -207,6 +207,26 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     }
   };
 
+  const buildOrderData = () => ({
+    name: record?.name || '',
+    partnerName: Array.isArray(record?.partner_id) ? record.partner_id[1] : '-',
+    companyName: Array.isArray(record?.company_id) ? record.company_id[1] : '-',
+    invoiceDate: record?.date_order ? record.date_order.split(' ')[0] : '-',
+    amountUntaxed: record?.amount_untaxed || 0,
+    amountTax: record?.amount_tax || 0,
+    amountTotal: record?.amount_total || 0,
+    lines: (record?.order_lines_detail || [])
+      .filter(l => !(l.name || '').toLowerCase().includes('down payment'))
+      .map(l => ({
+        id: l.id,
+        productName: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || '-'),
+        quantity: l.product_uom_qty || 0,
+        priceUnit: l.price_unit || 0,
+        discount: l.discount || 0,
+        subtotal: l.price_subtotal || 0,
+      })),
+  });
+
   const handleCreateInvoice = async () => {
     setInvoicing(true);
     try {
@@ -216,7 +236,9 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
       if (invoiceId) {
         setCreatedInvoiceId(invoiceId);
         await fetchDetail(false);
-        navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderName: record?.name || '' });
+        const od = buildOrderData();
+        console.log('[Invoice] Passing orderData with', od.lines.length, 'lines:', JSON.stringify(od.lines));
+        navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId, orderData: od });
       } else {
         await fetchDetail(false);
         Alert.alert('Invoice Created', 'Invoice created successfully.');
@@ -231,7 +253,9 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const handleViewInvoice = () => {
     const invoiceId = createdInvoiceId || (record?.invoice_ids?.length > 0 ? record.invoice_ids[record.invoice_ids.length - 1] : null);
     if (invoiceId) {
-      navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderName: record?.name || '' });
+      const od = buildOrderData();
+      console.log('[Invoice] View - Passing orderData with', od.lines.length, 'lines');
+      navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId, orderData: od });
     }
   };
 

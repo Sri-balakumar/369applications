@@ -5,29 +5,101 @@ import { NavigationHeader } from '@components/Header';
 import { Button } from '@components/common/Button';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchInvoiceDetailOdoo } from '@api/services/generalApi';
+import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo } from '@api/services/generalApi';
 import { useCurrencyStore } from '@stores/currency';
 import { useAuthStore } from '@stores/auth';
 import { showToastMessage } from '@components/Toast';
 
 const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
-  const { invoiceId } = route?.params || {};
+  const { invoiceId, orderId, orderData } = route?.params || {};
   const currency = useCurrencyStore((state) => state.currency) || 'OMR';
   const currentUser = useAuthStore(state => state.user);
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Helper: build invoice object from sale order data
+  const buildFromOrderData = (od) => ({
+    id: invoiceId,
+    name: od.name || '',
+    partnerName: od.partnerName || '-',
+    companyName: od.companyName || '-',
+    invoiceDate: od.invoiceDate || '-',
+    amountUntaxed: od.amountUntaxed || 0,
+    amountTax: od.amountTax || 0,
+    amountTotal: od.amountTotal || 0,
+    lines: od.lines || [],
+  });
+
+  // Helper: build invoice object from raw sale order record
+  const buildFromSaleOrder = (record) => ({
+    id: invoiceId,
+    name: record.name || '',
+    partnerName: Array.isArray(record.partner_id) ? record.partner_id[1] : '-',
+    companyName: Array.isArray(record.company_id) ? record.company_id[1] : '-',
+    invoiceDate: record.date_order ? record.date_order.split(' ')[0] : '-',
+    amountUntaxed: record.amount_untaxed || 0,
+    amountTax: record.amount_tax || 0,
+    amountTotal: record.amount_total || 0,
+    lines: (record.order_lines_detail || [])
+      .filter(l => !(l.name || '').toLowerCase().includes('down payment'))
+      .map(l => ({
+        id: l.id,
+        productName: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || '-'),
+        quantity: l.product_uom_qty || 0,
+        priceUnit: l.price_unit || 0,
+        discount: l.discount || 0,
+        subtotal: l.price_subtotal || 0,
+      })),
+  });
+
   useEffect(() => {
-    if (invoiceId) {
-      fetchInvoiceDetailOdoo(invoiceId).then(data => {
-        setInvoice(data);
-      }).catch(err => {
-        console.error('Failed to fetch invoice:', err);
-      }).finally(() => setLoading(false));
-    } else {
+    const loadInvoice = async () => {
+      // TIER 1: Use orderData passed from navigation
+      if (orderData && orderData.lines && orderData.lines.length > 0) {
+        console.log('[Invoice] TIER 1: Using orderData from navigation -', orderData.lines.length, 'lines');
+        setInvoice(buildFromOrderData(orderData));
+        setLoading(false);
+        return;
+      }
+      console.log('[Invoice] TIER 1 skipped: orderData has', orderData?.lines?.length || 0, 'lines');
+
+      // TIER 2: Fetch invoice from Odoo
+      if (invoiceId) {
+        try {
+          const data = await fetchInvoiceDetailOdoo(invoiceId);
+          console.log('[Invoice] TIER 2: Fetched invoice from Odoo -', data?.lines?.length || 0, 'lines');
+          if (data && data.lines && data.lines.length > 0) {
+            setInvoice(data);
+            setLoading(false);
+            return;
+          }
+        } catch (err) {
+          console.error('[Invoice] TIER 2 failed:', err?.message);
+        }
+      }
+
+      // TIER 3: Fetch sale order directly and use its lines
+      if (orderId) {
+        try {
+          console.log('[Invoice] TIER 3: Fetching sale order', orderId, 'directly');
+          const soRecord = await fetchSaleOrderDetailOdoo(orderId);
+          if (soRecord && soRecord.order_lines_detail && soRecord.order_lines_detail.length > 0) {
+            console.log('[Invoice] TIER 3: Got', soRecord.order_lines_detail.length, 'lines from sale order');
+            setInvoice(buildFromSaleOrder(soRecord));
+            setLoading(false);
+            return;
+          }
+        } catch (err) {
+          console.error('[Invoice] TIER 3 failed:', err?.message);
+        }
+      }
+
+      console.warn('[Invoice] All tiers failed - no product data available');
       setLoading(false);
-    }
-  }, [invoiceId]);
+    };
+
+    loadInvoice();
+  }, [invoiceId, orderId]);
 
   const cashierName = currentUser?.name || currentUser?.username || currentUser?.login || 'Admin';
 

@@ -9617,27 +9617,15 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
       const linesResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
         jsonrpc: '2.0', method: 'call',
         params: {
-          model: 'account.move.line', method: 'search_read',
-          args: [[['move_id', '=', invoiceId], ['display_type', '=', 'product']]],
-          kwargs: { fields: ['id', 'product_id', 'name', 'quantity', 'price_unit', 'discount', 'price_subtotal', 'price_total'], limit: 200 },
+          model: 'account.move.line', method: 'read',
+          args: [invoice.invoice_line_ids],
+          kwargs: { fields: ['id', 'product_id', 'name', 'quantity', 'price_unit', 'discount', 'price_subtotal', 'price_total', 'display_type'] },
         },
       }, { headers, timeout: 15000 });
       if (!linesResp.data.error) {
-        lines = linesResp.data.result || [];
-      }
-      // Fallback: if no product lines found, try filtering by exclude_from_invoice_tab
-      if (lines.length === 0) {
-        const fallbackResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
-          jsonrpc: '2.0', method: 'call',
-          params: {
-            model: 'account.move.line', method: 'search_read',
-            args: [[['move_id', '=', invoiceId], ['exclude_from_invoice_tab', '=', false]]],
-            kwargs: { fields: ['id', 'product_id', 'name', 'quantity', 'price_unit', 'discount', 'price_subtotal', 'price_total'], limit: 200 },
-          },
-        }, { headers, timeout: 15000 });
-        if (!fallbackResp.data.error) {
-          lines = (fallbackResp.data.result || []).filter(l => l.quantity > 0);
-        }
+        lines = (linesResp.data.result || []).filter(l =>
+          l.product_id && (!l.display_type || l.display_type === 'product')
+        );
       }
     }
     return {
