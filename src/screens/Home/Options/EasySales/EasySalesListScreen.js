@@ -74,7 +74,7 @@ const EasySalesListScreen = ({ navigation }) => {
         </View>
 
         <View style={styles.row}>
-          <Text style={styles.subContent}>{item.date || item.create_date?.split(' ')[0] || '-'}</Text>
+          <Text style={styles.subContent}>{(item.date || item.create_date?.split(' ')[0] || '').split('-').reverse().join('-') || '-'}</Text>
         </View>
       </TouchableOpacity>
     );

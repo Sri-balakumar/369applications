@@ -78,7 +78,8 @@ const EasySalesDetailScreen = ({ navigation, route }) => {
   })();
   const currencyName = Array.isArray(record.currency_id) ? record.currency_id[1] : (record.currency || currency || '-');
   const customerRef = record.client_order_ref || record.customer_ref || record.reference || '';
-  const dateStr = record.date || record.date_order || record.create_date?.split(' ')[0] || '-';
+  const rawDate = record.date || record.date_order || record.create_date?.split(' ')[0] || '';
+  const dateStr = rawDate ? rawDate.split('-').reverse().join('-') : '-';
 
   // Find order lines
   const lineFieldKey = Object.keys(record).find(k =>

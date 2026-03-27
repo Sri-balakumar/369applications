@@ -122,8 +122,8 @@ const InvoiceDetailsScreen = ({ navigation, route }) => {
         <DetailField label="Invoice Number" value={invoice.name || '-'} />
         <DetailField label="Type" value={formatMoveType(invoice.move_type)} />
         <DetailField label="Customer" value={invoice.partner_name || '-'} />
-        <DetailField label="Invoice Date" value={invoice.invoice_date || '-'} />
-        <DetailField label="Due Date" value={invoice.invoice_date_due || '-'} />
+        <DetailField label="Invoice Date" value={invoice.invoice_date ? invoice.invoice_date.split('-').reverse().join('-') : '-'} />
+        <DetailField label="Due Date" value={invoice.invoice_date_due ? invoice.invoice_date_due.split('-').reverse().join('-') : '-'} />
         <DetailField label="Reference" value={invoice.ref || '-'} />
         <DetailField label="Status" value={formatState(invoice.state)} />
         <DetailField label="Payment Status" value={formatPaymentState(invoice.payment_state)} />

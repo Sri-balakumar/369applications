@@ -78,9 +78,9 @@ const CreditApplicationsScreen = ({ navigation }) => {
         </View>
 
         <View style={styles.row}>
-          <Text style={styles.subContent}>Submitted: {item.submission_date ? item.submission_date.split(' ')[0] : '-'}</Text>
+          <Text style={styles.subContent}>Submitted: {item.submission_date ? item.submission_date.split(' ')[0].split('-').reverse().join('-') : '-'}</Text>
           {item.credit_expiry_date ? (
-            <Text style={styles.subContent}>Expires: {item.credit_expiry_date}</Text>
+            <Text style={styles.subContent}>Expires: {item.credit_expiry_date.split('-').reverse().join('-')}</Text>
           ) : null}
         </View>
 

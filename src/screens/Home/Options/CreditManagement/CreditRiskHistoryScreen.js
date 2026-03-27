@@ -83,7 +83,7 @@ const CreditRiskHistoryScreen = ({ navigation }) => {
         {/* Date */}
         <View style={styles.row}>
           <Text style={styles.label}>Date</Text>
-          <Text style={styles.dateText}>{item.change_date ? item.change_date.split(' ')[0] : '-'}</Text>
+          <Text style={styles.dateText}>{item.change_date ? item.change_date.split(' ')[0].split('-').reverse().join('-') : '-'}</Text>
         </View>
 
         {/* Reason */}

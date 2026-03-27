@@ -12,6 +12,51 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchSaleOrdersOdoo, searchInvoicesByOriginOdoo } from '@api/services/generalApi';
 import { useCurrencyStore } from '@stores/currency';
 import { MaterialIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const INV_COUNTER_KEY = 'inv_counter_s';
+const INV_MAP_KEY = 'inv_map_s';
+const INV_START = 10003;
+
+const INV_RESET_KEY = 'inv_reset_s10003';
+
+// Assign S numbers to orders, sorted by ID ascending so older orders get lower numbers
+const assignSNumbers = async (ids) => {
+  // One-time reset to start fresh from S10003
+  const resetDone = await AsyncStorage.getItem(INV_RESET_KEY);
+  if (!resetDone) {
+    await AsyncStorage.removeItem(INV_MAP_KEY);
+    await AsyncStorage.setItem(INV_COUNTER_KEY, String(INV_START));
+    await AsyncStorage.setItem(INV_RESET_KEY, 'done');
+  }
+  const mapRaw = await AsyncStorage.getItem(INV_MAP_KEY);
+  const map = mapRaw ? JSON.parse(mapRaw) : {};
+  // Find highest existing S number to prevent duplicates
+  let maxUsed = INV_START - 1;
+  for (const val of Object.values(map)) {
+    const num = parseInt(String(val).replace('S', ''), 10);
+    if (!isNaN(num) && num > maxUsed) maxUsed = num;
+  }
+  const counterRaw = await AsyncStorage.getItem(INV_COUNTER_KEY);
+  const storedCounter = counterRaw ? parseInt(counterRaw, 10) : INV_START;
+  let counter = Math.max(maxUsed + 1, storedCounter);
+  let changed = false;
+  // Sort ascending so older orders get lower S numbers
+  const sortedIds = [...ids].sort((a, b) => a - b);
+  for (const id of sortedIds) {
+    const key = String(id);
+    if (!map[key]) {
+      map[key] = `S${counter}`;
+      counter++;
+      changed = true;
+    }
+  }
+  if (changed) {
+    await AsyncStorage.setItem(INV_MAP_KEY, JSON.stringify(map));
+    await AsyncStorage.setItem(INV_COUNTER_KEY, String(counter));
+  }
+  return map;
+};
 
 const STATE_LABELS = {
   draft: 'QUOTATION',
@@ -49,6 +94,7 @@ const SaleOrderListScreen = ({ navigation }) => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState('all');
+  const [invMap, setInvMap] = useState({});
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -64,6 +110,12 @@ const SaleOrderListScreen = ({ navigation }) => {
         }
       }
       setData(records || []);
+      // Assign S numbers (source of truth - orders get numbers here)
+      const ids = (records || []).map(r => r.id);
+      if (ids.length > 0) {
+        const map = await assignSNumbers(ids);
+        setInvMap(map);
+      }
     } catch (err) {
       console.error('[SaleOrderList] error:', err);
       setData([]);
@@ -97,7 +149,8 @@ const SaleOrderListScreen = ({ navigation }) => {
     const stateLabel = STATE_LABELS[state] || state.toUpperCase();
     const partnerName = Array.isArray(item.partner_id) ? item.partner_id[1] : (item.partner_name || '-');
     const amount = item.amount_total || 0;
-    const dateStr = item.date_order ? item.date_order.split(' ')[0] : '-';
+    const rawDate = item.date_order ? item.date_order.split(' ')[0] : '';
+    const dateStr = rawDate ? rawDate.split('-').reverse().join('-') : '-';
     const invoiceStatus = item.invoice_status || '';
     const hasInvoice = invoiceStatus === 'invoiced' || (item.invoice_ids && item.invoice_ids.length > 0);
 
@@ -108,7 +161,7 @@ const SaleOrderListScreen = ({ navigation }) => {
         onPress={() => navigation.navigate('SaleOrderDetailScreen', { orderId: item.id })}
       >
         <View style={styles.row}>
-          <Text style={styles.head} numberOfLines={1}>{item.name || `SO-${item.id}`}</Text>
+          <Text style={styles.head} numberOfLines={1}>{invMap[item.id] || item.name || `SO-${item.id}`}</Text>
           <View style={{ flexDirection: 'row', gap: 6 }}>
             {state === 'sale' && !hasInvoice && invoiceStatus === 'to_invoice' && (
               <View style={[styles.badge, { backgroundColor: '#FF5722' }]}>

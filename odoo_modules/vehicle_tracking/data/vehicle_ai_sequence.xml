@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        
+        <!-- Fraud Report Sequence -->
+        <record id="seq_vehicle_ai_fraud_report" model="ir.sequence">
+            <field name="name">Vehicle AI Fraud Report</field>
+            <field name="code">vehicle.ai.fraud.report</field>
+            <field name="prefix">FRAUD-</field>
+            <field name="padding">4</field>
+        </record>
+
+    </data>
+</odoo>

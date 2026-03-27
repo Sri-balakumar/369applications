@@ -1,0 +1,10 @@
+<odoo>
+    <record id="seq_vehicle_tracking" model="ir.sequence">
+        <field name="name">Vehicle Tracking Sequence</field>
+        <field name="code">vehicle.tracking.seq</field>
+        <field name="prefix">VT-</field>
+        <field name="padding">4</field>
+        <field name="number_next">1</field>
+        <field name="implementation">standard</field>
+    </record>
+</odoo>

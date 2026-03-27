@@ -258,7 +258,7 @@ const CustomerDetails = ({ navigation, route }) => {
         partnerName: details?.name || '-',
         partnerPhone: details?.phone || details?.mobile || details?.customer_mobile || '',
         companyName: currentUser?.company?.name || '-',
-        invoiceDate: new Date().toISOString().split('T')[0],
+        invoiceDate: new Date().toISOString().split('T')[0].split('-').reverse().join('-'),
         amountUntaxed: untaxedAmount,
         amountTax: taxAmount,
         amountTotal: totalAmount,

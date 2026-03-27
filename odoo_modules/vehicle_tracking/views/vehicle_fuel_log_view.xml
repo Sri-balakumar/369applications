@@ -1,0 +1,42 @@
+<odoo>
+    <record id="view_vehicle_fuel_log_form_popup" model="ir.ui.view">
+        <field name="name">vehicle.fuel.log.form.popup</field>
+        <field name="model">vehicle.fuel.log</field>
+        <field name="arch" type="xml">
+            <form string="Fuel Entry">
+                <group>
+                    <field name="vehicle_tracking_id" readonly="1"/>
+                    <field name="vehicle_id" readonly="1"/>
+                    <field name="driver_id" readonly="1"/>
+                </group>
+
+                <group>
+                    <field name="amount"/>
+                    <field name="fuel_level"/>
+                </group>
+
+                <group>
+                    <field name="odometer"/>
+                    <field name="upload_path"/>
+                    
+                </group>
+
+                <group>
+                    <field name="gps_lat"/>
+                    <field name="gps_long"/>
+                </group>
+
+                <group>
+                    <field name="odometer_image"
+                           filename="odometer_image_filename"
+                           widget="binary"/>
+                </group>
+
+                <footer>
+                    <button string="Save" type="object" name="action_save_fuel_log" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

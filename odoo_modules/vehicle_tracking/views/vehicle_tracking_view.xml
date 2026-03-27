@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <!-- FORM VIEW -->
+  <record id="view_vehicle_tracking_form" model="ir.ui.view">
+    <field name="name">vehicle.tracking.form</field>
+    <field name="model">vehicle.tracking</field>
+    <field name="arch" type="xml">
+      <form string="Vehicle Tracking">
+        <header>
+          <button name="action_custom_save" string="Save" type="object" class="btn-primary"/>
+
+          <button name="action_discard_custom"
+                  string="Discard"
+                  type="object"
+                  class="btn-secondary"/>
+
+          <button name="action_validate" string="Validate" type="object" class="btn-primary"
+                  modifiers="{'invisible': [['state','!=','draft']]}"/>
+        </header>
+          <field name="state" widget="statusbar" statusbar_visible="draft,validated"/>
+          
+
+        <sheet>
+          <group>
+            <group>
+              <field name="date"/>
+              <field name="vehicle_id"/>
+              <field name="driver_id"/>
+              <field name="number_plate"/>
+            </group>
+            <group>
+              <field name="company_id" readonly="1"/>
+              <field name="tank_capacity" readonly="1"/>
+            </group>
+          </group>
+
+          <separator string="Tracking Details" colspan="2"/>
+
+          <group>
+            <group>
+              <field name="source_id" placeholder="Select Source Location"/>
+              <field name="start_km"/>
+              <field name="end_km"/>
+              <field name="km_travelled" readonly="1"/>
+              <field name="purpose_of_visit_id"/>
+            </group>
+
+            <group>
+              <field name="destination_id" placeholder="Select Destination Location"/>
+              <field name="start_time"/>
+              <field name="end_time"/>
+              <field name="duration" readonly="1"/>
+              <field name="invoice_number"/>
+
+              <field name="invoice_message"
+                  readonly="1"
+                  class="oe_inline"/>
+
+              <field name="amount"/>
+              <field name="estimated_time"/>
+            </group>
+          </group>
+          <separator string="Vehicle Checklist" colspan="2"/>
+          <group col="2">
+            <field name="coolant_water"/>
+            <field name="oil_checking"/>
+            <field name="tyre_checking"/>
+            <field name="battery_checking"/>
+            <field name="daily_checks"/>
+            <field name="fuel_checking"/> 
+            <field name="fuel_status"/> 
+            <button name="action_add_fuel_log"
+                    type="object"
+                    string="+ Add Fuel"
+                    class="btn btn-primary oe_highlight"/>
+            <separator string="Fuel List" colspan="2"/>
+            <field name="fuel_log_ids" readonly="1">
+              <list>
+                  <field name="amount"/>
+                  <field name="fuel_level"/>
+                  <field name="odometer"/>
+                  <field name="create_date"/>
+                  <field name="driver_id"/>
+              </list>
+           </field>
+
+
+          </group>
+         
+          <separator string="Invoice Details" colspan="2"/>
+          <field name="invoice_line_ids">
+            <list editable="bottom">
+                <field name="name"/>
+                <field name="invoice_number"/>
+            </list>
+          </field>
+          <separator string="Other Info" colspan="2"/>
+          <group col="2">
+            <group>
+              <field name="start_trip"/>
+              <field name="end_trip"/>
+
+              <field name="trip_cancel"/>
+            
+            
+              <field name="start_latitude"/>
+              <field name="start_longitude"/>
+              <field name="end_latitude"/>
+              <field name="end_longitude"/>
+            </group>
+          </group>
+          <separator string="Attachment Details" colspan="2"/>
+          <group>
+            <field name="image_url"/>
+          </group>
+          <separator string="Remarks" colspan="2"/>
+          <group>
+            <field name="remarks" nolabel="1" placeholder="Enter remarks here..."/>
+          </group>
+
+          <group>
+            <group>
+              <div class="o_form_label">Created by</div>
+              <div></div>
+              <div class="o_form_label">Created on</div>
+              <div></div>
+              <div class="o_form_label">Module Type</div>
+              <div>Vehicle Tracking</div>
+            </group>
+          </group>
+
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <!-- LIST VIEW -->
+  <record id="view_vehicle_tracking_list" model="ir.ui.view">
+    <field name="name">vehicle.tracking.list</field>
+    <field name="model">vehicle.tracking</field>
+    <field name="arch" type="xml">
+      <list string="Vehicle Tracking">
+        <field name="ref"/>
+        <field name="date"/>
+        <field name="vehicle_id"/>
+        <field name="driver_id"/>
+        <field name="number_plate"/>
+        <field name="source_id"/>
+        <field name="destination_id"/>
+        <field name="start_km"/>
+        <field name="end_km"/>
+        <field name="km_travelled" sum="km_travelled"/>
+        <field name="end_time"/>
+        <field name="trip_cancel"/>
+        <field name="duration" sum="duration"/>
+        <field name="amount"/>
+        <field name="state"/>
+
+      </list>
+    </field>
+  </record>
+</odoo>

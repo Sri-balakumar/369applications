@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Inherit Fuel Log Form to add AI fields -->
+    <record id="view_vehicle_fuel_log_form_ai" model="ir.ui.view">
+        <field name="name">vehicle.fuel.log.form.ai</field>
+        <field name="model">vehicle.fuel.log</field>
+        <field name="inherit_id" ref="vehicle_tracking.view_vehicle_fuel_log_form_popup"/>
+        <field name="arch" type="xml">
+            <xpath expr="//group[last()]" position="after">
+                <separator string="AI Verification"/>
+                <group>
+                    <group>
+                        <field name="ai_status" widget="badge" readonly="1"/>
+                        <field name="ai_verified" readonly="1"/>
+                    </group>
+                    <group>
+                        <field name="tank_capacity" readonly="1"/>
+                        <field name="ocr_amount" readonly="1"/>
+                        <field name="ocr_litres" readonly="1"/>
+                    </group>
+                </group>
+                <group>
+                    <field name="ai_issues" readonly="1" nolabel="1"/>
+                </group>
+            </xpath>
+            <xpath expr="//footer" position="inside">
+                <button name="action_verify_with_ai" 
+                        string="Verify with AI" 
+                        type="object" 
+                        class="btn-secondary"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Fuel Log List View -->
+    <record id="view_vehicle_fuel_log_list" model="ir.ui.view">
+        <field name="name">vehicle.fuel.log.list</field>
+        <field name="model">vehicle.fuel.log</field>
+        <field name="arch" type="xml">
+            <list string="Fuel Logs">
+                <field name="name"/>
+                <field name="vehicle_id"/>
+                <field name="driver_id"/>
+                <field name="amount"/>
+                <field name="fuel_level"/>
+                <field name="tank_capacity"/>
+                <field name="ai_status" widget="badge"/>
+                <field name="exceeds_tank"/>
+                <field name="create_date"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Fraud Report Form View -->
+    <record id="view_vehicle_ai_fraud_report_form" model="ir.ui.view">
+        <field name="name">vehicle.ai.fraud.report.form</field>
+        <field name="model">vehicle.ai.fraud.report</field>
+        <field name="arch" type="xml">
+            <form string="Fraud Report">
+                <header>
+                    <field name="status" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group string="Fuel Entry">
+                            <field name="fuel_log_id"/>
+                            <field name="driver_id"/>
+                            <field name="vehicle_id"/>
+                        </group>
+                        <group string="Tank Check">
+                            <field name="tank_capacity"/>
+                            <field name="exceeds_tank"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Entered Values">
+                            <field name="entered_amount"/>
+                            <field name="entered_litres"/>
+                        </group>
+                        <group string="OCR Results">
+                            <field name="ocr_amount"/>
+                            <field name="ocr_litres"/>
+                        </group>
+                    </group>
+                    <group string="Issues">
+                        <field name="issues" nolabel="1" readonly="1"/>
+                    </group>
+                    <group string="Notes">
+                        <field name="notes" nolabel="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Fraud Report List View -->
+    <record id="view_vehicle_ai_fraud_report_list" model="ir.ui.view">
+        <field name="name">vehicle.ai.fraud.report.list</field>
+        <field name="model">vehicle.ai.fraud.report</field>
+        <field name="arch" type="xml">
+            <list string="Fraud Reports">
+                <field name="name"/>
+                <field name="driver_id"/>
+                <field name="vehicle_id"/>
+                <field name="entered_amount"/>
+                <field name="ocr_amount"/>
+                <field name="entered_litres"/>
+                <field name="ocr_litres"/>
+                <field name="exceeds_tank"/>
+                <field name="status" widget="badge"/>
+                <field name="create_date"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Actions -->
+    <record id="action_vehicle_ai_fraud_report" model="ir.actions.act_window">
+        <field name="name">Fraud Reports</field>
+        <field name="res_model">vehicle.ai.fraud.report</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="action_all_fuel_logs" model="ir.actions.act_window">
+        <field name="name">All Fuel Entries</field>
+        <field name="res_model">vehicle.fuel.log</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="action_fuel_logs_fraud" model="ir.actions.act_window">
+        <field name="name">Suspicious Fuel Entries</field>
+        <field name="res_model">vehicle.fuel.log</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('ai_status', '=', 'fraud')]</field>
+    </record>
+
+    <!-- Menu Items -->
+    <menuitem id="menu_vehicle_ai_root"
+              name="AI Fraud Detection"
+              parent="vehicle_tracking.menu_vehicle_tracking_root"
+              sequence="50"/>
+
+    <menuitem id="menu_vehicle_ai_fraud_reports"
+              name="Fraud Reports"
+              parent="menu_vehicle_ai_root"
+              action="action_vehicle_ai_fraud_report"
+              sequence="10"/>
+
+    <menuitem id="menu_vehicle_ai_all_fuel"
+              name="All Fuel Entries"
+              parent="menu_vehicle_ai_root"
+              action="action_all_fuel_logs"
+              sequence="20"/>
+
+    <menuitem id="menu_vehicle_ai_suspicious_entries"
+              name="Suspicious Entries"
+              parent="menu_vehicle_ai_root"
+              action="action_fuel_logs_fraud"
+              sequence="30"/>
+
+</odoo>

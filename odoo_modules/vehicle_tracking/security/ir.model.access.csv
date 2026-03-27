@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_vehicle_tracking_user,access_vehicle_tracking_user,model_vehicle_tracking,vehicle_tracking.group_vehicle_tracking_user,1,1,1,1
+access_vehicle_tracking_employee,access_vehicle_tracking_employee,model_vehicle_tracking,base.group_user,1,1,1,1
+access_vehicle_tracking_invoice_user,access_vehicle_tracking_invoice_user,model_vehicle_tracking_invoice,base.group_user,1,1,1,1
+access_vehicle_fuel_log,access_vehicle_fuel_log,model_vehicle_fuel_log,base.group_user,1,1,1,1
+access_vehicle_ai_fraud_report,access_vehicle_ai_fraud_report,model_vehicle_ai_fraud_report,base.group_user,1,1,1,1

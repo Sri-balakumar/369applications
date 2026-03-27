@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- Minimal, valid SEARCH VIEW -->
+  <record id="view_vehicle_tracking_search" model="ir.ui.view">
+    <field name="name">vehicle.tracking.search</field>
+    <field name="model">vehicle.tracking</field>
+    <field name="arch" type="xml">
+      <search string="Search Vehicle Tracking">
+        <!-- Keep it minimal first; we can add more fields/filters after install -->
+        <field name="vehicle_id"/>
+        <field name="driver_id"/>
+        <field name="state"/>
+        <filter name="filter_validated" string="Validated" domain="[('state','=','validated')]"/>
+        <filter name="filter_draft" string="Draft" domain="[('state','=','draft')]"/>
+      </search>
+    </field>
+  </record>
+
+  <!-- WINDOW ACTION -->
+  <record id="action_vehicle_tracking" model="ir.actions.act_window">
+    <field name="name">Vehicle Tracking</field>
+    <field name="res_model">vehicle.tracking</field>
+    <field name="view_mode">list,form</field>
+    <field name="search_view_id" ref="vehicle_tracking.view_vehicle_tracking_search"/>
+    <field name="help" type="html">
+      <p>Create and track vehicle trips here.</p>
+    </field>
+  </record>
+
+</odoo>

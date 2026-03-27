@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <!-- Top-level menu, visible to all internal users -->
+  <menuitem
+      id="menu_vehicle_tracking_root"
+      name="Vehicle Tracking"
+      sequence="10"
+      action="vehicle_tracking.action_vehicle_tracking"
+      groups="base.group_user"/>
+</odoo>

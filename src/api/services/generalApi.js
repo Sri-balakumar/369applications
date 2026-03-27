@@ -9947,7 +9947,7 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
       partnerId,
       partnerName: Array.isArray(invoice.partner_id) ? invoice.partner_id[1] : '',
       partnerPhone,
-      invoiceDate: invoice.invoice_date || '',
+      invoiceDate: invoice.invoice_date ? invoice.invoice_date.split('-').reverse().join('-') : '',
       amountUntaxed: invoice.amount_untaxed || 0, amountTax: invoice.amount_tax || 0,
       amountTotal: invoice.amount_total || 0, amountResidual: invoice.amount_residual || 0,
       state: invoice.state || '', paymentState: invoice.payment_state || '',

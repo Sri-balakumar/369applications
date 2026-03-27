@@ -215,7 +215,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     partnerName: Array.isArray(record?.partner_id) ? record.partner_id[1] : '-',
     partnerPhone: record?.partner_phone || '',
     companyName: Array.isArray(record?.company_id) ? record.company_id[1] : '-',
-    invoiceDate: record?.date_order ? record.date_order.split(' ')[0] : '-',
+    invoiceDate: record?.date_order ? record.date_order.split(' ')[0].split('-').reverse().join('-') : '-',
     amountUntaxed: record?.amount_untaxed || 0,
     amountTax: record?.amount_tax || 0,
     amountTotal: record?.amount_total || 0,
@@ -304,7 +304,8 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const companyName = Array.isArray(record.company_id) ? record.company_id[1] : '-';
   const currencyName = Array.isArray(record.currency_id) ? record.currency_id[1] : '-';
   const customerRef = record.client_order_ref || '';
-  const dateStr = record.date_order ? record.date_order.split(' ')[0] : '-';
+  const rawDate = record.date_order ? record.date_order.split(' ')[0] : '';
+  const dateStr = rawDate ? rawDate.split('-').reverse().join('-') : '-';
   const invoiceStatus = record.invoice_status || '';
   const invoiceCount = record.invoice_ids?.length || 0;
 

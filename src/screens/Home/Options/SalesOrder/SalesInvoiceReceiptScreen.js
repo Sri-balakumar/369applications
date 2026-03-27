@@ -15,6 +15,17 @@ import { showToastMessage } from '@components/Toast';
 import { INVOICE_LOGO_BASE64 } from '@constants/invoiceLogo';
 import { sendWhatsAppDocument } from '@api/services/whatsappApi';
 import { COUNTRIES, getMaxDigits, parsePhoneCountryCode, CountryCodePicker } from '@screens/Home/Options/WhatsApp/ContactsSheet';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const INV_MAP_KEY = 'inv_map_s';
+
+// Read-only: look up S number assigned by sales order list
+const getSNumberFromMap = async (id) => {
+  if (!id) return null;
+  const mapRaw = await AsyncStorage.getItem(INV_MAP_KEY);
+  const map = mapRaw ? JSON.parse(mapRaw) : {};
+  return map[String(id)] || null;
+};
 
 const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   const { invoiceId, orderId, orderData } = route?.params || {};
@@ -46,7 +57,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
     partnerName: Array.isArray(record.partner_id) ? record.partner_id[1] : '-',
     partnerPhone: '',
     companyName: Array.isArray(record.company_id) ? record.company_id[1] : '-',
-    invoiceDate: record.date_order ? record.date_order.split(' ')[0] : '-',
+    invoiceDate: record.date_order ? record.date_order.split(' ')[0].split('-').reverse().join('-') : '-',
     amountUntaxed: record.amount_untaxed || 0,
     amountTax: record.amount_tax || 0,
     amountTotal: record.amount_total || 0,
@@ -106,6 +117,9 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       }
 
       if (invoiceData) {
+        // Read S number from sales order list (source of truth)
+        const sNum = await getSNumberFromMap(orderId) || await getSNumberFromMap(invoiceId) || await getSNumberFromMap(invoiceData.id);
+        if (sNum) invoiceData.name = sNum;
         setInvoice(invoiceData);
 
         // Get phone from passed data first
