@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="seq_easy_sales" model="ir.sequence">
+        <field name="name">Easy Sales</field>
+        <field name="code">easy.sales</field>
+        <field name="prefix">ES/%(year)s/</field>
+        <field name="padding">5</field>
+        <field name="company_id" ref="base.main_company"/>
+    </record>
+
+    <record id="easy_sales_form_view" model="ir.ui.view">
+        <field name="name">easy.sales.form</field>
+        <field name="model">easy.sales</field>
+        <field name="arch" type="xml">
+            <form string="Easy Sales">
+                <header>
+                    <button name="action_confirm" string="Confirm Sale" type="object" class="btn-primary" invisible="state != 'draft'"/>
+                    <button name="action_cancel" string="Cancel" type="object" invisible="state != 'draft'"/>
+                    <button name="action_draft" string="Set to Draft" type="object" invisible="state != 'cancelled'"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,done"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_sale_order" type="object" class="oe_stat_button" icon="fa-shopping-cart" invisible="not sale_order_id">
+                            <span class="o_stat_text">Sale Order</span>
+                        </button>
+                        <button name="action_view_delivery" type="object" class="oe_stat_button" icon="fa-truck" invisible="not picking_id">
+                            <span class="o_stat_text">Delivery</span>
+                        </button>
+                        <button name="action_view_invoice" type="object" class="oe_stat_button" icon="fa-file-text-o" invisible="not invoice_id">
+                            <span class="o_stat_text">Invoice</span>
+                        </button>
+                        <button name="action_view_payments" type="object" class="oe_stat_button" icon="fa-money" invisible="not payment_ids">
+                            <field name="payment_ids" widget="statinfo" string="Payments"/>
+                        </button>
+                    </div>
+                    <widget name="web_ribbon" title="Paid" bg_color="text-bg-success" invisible="payment_state != 'paid' or state != 'done'"/>
+                    <widget name="web_ribbon" title="Partial" bg_color="text-bg-warning" invisible="payment_state != 'partial' or state != 'done'"/>
+                    <widget name="web_ribbon" title="Fully Invoiced" bg_color="text-bg-info" invisible="payment_state != 'invoiced' or state != 'done'"/>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="partner_id" readonly="state != 'draft'" placeholder="Select Customer first..."/>
+                            <field name="date" readonly="state != 'draft'"/>
+                            <field name="reference" placeholder="Customer Reference" readonly="state != 'draft'"/>
+                        </group>
+                        <group>
+                            <field name="quick_payment_method_id" readonly="state != 'draft'" options="{'no_create': True}" placeholder="Select Payment Method..."/>
+                            <field name="is_credit_payment" invisible="1"/>
+                            <field name="payment_term_id" readonly="state != 'draft'"
+                                   invisible="not is_credit_payment"
+                                   options="{'no_create': True}" placeholder="e.g. Immediate, 15 Days, 30 Days..."/>
+                            <field name="warehouse_id" readonly="state != 'draft'"/>
+                            <field name="pricelist_id" readonly="state != 'draft'" groups="product.group_product_pricelist"/>
+                            <field name="currency_id" groups="base.group_multi_currency" readonly="state != 'draft'"/>
+                            <field name="company_id" invisible="1"/>
+                        </group>
+                    </group>
+                    <!-- Alert: Select customer and payment method first -->
+                    <div class="alert alert-warning text-center" role="alert"
+                         invisible="partner_id and quick_payment_method_id">
+                        <strong>Please select a Customer and Payment Method above to proceed.</strong>
+                    </div>
+                    <notebook invisible="not partner_id or not quick_payment_method_id">
+                        <page string="Products" name="products">
+                            <field name="line_ids" readonly="state != 'draft'" widget="section_and_note_one2many">
+                                <list editable="bottom">
+                                    <control>
+                                        <create name="add_product_control" string="Add a product"/>
+                                        <create name="add_section_control" string="Add a section" context="{'default_display_type': 'line_section'}"/>
+                                        <create name="add_note_control" string="Add a note" context="{'default_display_type': 'line_note'}"/>
+                                    </control>
+                                    <field name="display_type" column_invisible="1"/>
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="product_id" invisible="display_type" required="not display_type"/>
+                                    <field name="name" widget="section_and_note_text"/>
+                                    <field name="description" optional="hide" invisible="display_type"/>
+                                    <field name="quantity" invisible="display_type"/>
+                                    <field name="uom_id" groups="uom.group_uom" invisible="display_type"/>
+                                    <field name="price_unit" invisible="display_type"/>
+                                    <field name="tax_ids" widget="many2many_tags" optional="show" invisible="display_type"/>
+                                    <field name="subtotal" invisible="display_type"/>
+                                    <field name="tax_amount" optional="hide" invisible="display_type"/>
+                                    <field name="total" invisible="display_type"/>
+                                    <field name="currency_id" column_invisible="1"/>
+                                </list>
+                            </field>
+                            <group class="oe_subtotal_footer oe_right">
+                                <field name="amount_untaxed"/>
+                                <field name="amount_tax"/>
+                                <div class="oe_subtotal_footer_separator oe_inline">
+                                    <label for="amount_total"/>
+                                </div>
+                                <field name="amount_total" nolabel="1" class="oe_subtotal_footer_separator"/>
+                            </group>
+                            <div class="oe_clear"/>
+                        </page>
+                        <page string="Payments" name="payments">
+                            <group>
+                                <group>
+                                    <field name="auto_validate_invoice" readonly="state != 'draft'"/>
+                                    <field name="auto_register_payment" readonly="state != 'draft'"/>
+                                </group>
+                                <group>
+                                    <field name="payment_state" widget="badge" decoration-danger="payment_state == 'not_paid'" decoration-warning="payment_state == 'partial'" decoration-success="payment_state in ('paid', 'over_paid')" decoration-info="payment_state == 'invoiced'"/>
+                                </group>
+                            </group>
+                            <field name="payment_line_ids" readonly="state != 'draft'">
+                                <list editable="bottom">
+                                    <field name="payment_method_id" options="{'no_create': True}"/>
+                                    <field name="journal_type" optional="show"/>
+                                    <field name="amount"/>
+                                    <field name="note" optional="show"/>
+                                    <field name="currency_id" column_invisible="1"/>
+                                    <field name="company_id" column_invisible="1"/>
+                                </list>
+                            </field>
+                            <group class="oe_subtotal_footer oe_right">
+                                <field name="amount_total" string="Order Total"/>
+                                <field name="amount_paid"/>
+                                <div class="oe_subtotal_footer_separator oe_inline">
+                                    <label for="amount_due"/>
+                                </div>
+                                <field name="amount_due" nolabel="1" class="oe_subtotal_footer_separator" decoration-danger="amount_due > 0" decoration-success="amount_due == 0"/>
+                            </group>
+                            <div class="oe_clear"/>
+                        </page>
+                    </notebook>
+                    <field name="sale_order_id" invisible="1"/>
+                    <field name="picking_id" invisible="1"/>
+                    <field name="invoice_id" invisible="1"/>
+                    <field name="is_paid" invisible="1"/>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="easy_sales_list_view" model="ir.ui.view">
+        <field name="name">easy.sales.list</field>
+        <field name="model">easy.sales</field>
+        <field name="arch" type="xml">
+            <list string="Easy Sales" decoration-info="state == 'draft'" decoration-muted="state == 'cancelled'">
+                <field name="name"/>
+                <field name="date"/>
+                <field name="partner_id"/>
+                <field name="reference" optional="show"/>
+                <field name="amount_total" sum="Total"/>
+                <field name="payment_state" widget="badge" decoration-danger="payment_state == 'not_paid'" decoration-warning="payment_state == 'partial'" decoration-success="payment_state in ('paid', 'over_paid')" decoration-info="payment_state == 'invoiced'" optional="show"/>
+                <field name="state" widget="badge" decoration-info="state == 'draft'" decoration-success="state == 'done'" decoration-danger="state == 'cancelled'"/>
+                <field name="currency_id" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="easy_sales_search_view" model="ir.ui.view">
+        <field name="name">easy.sales.search</field>
+        <field name="model">easy.sales</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="partner_id"/>
+                <field name="reference"/>
+                <field name="date"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="easy_sales_action" model="ir.actions.act_window">
+        <field name="name">Easy Sales</field>
+        <field name="res_model">easy.sales</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="easy_sales_search_view"/>
+        <field name="context">{&apos;search_default_draft&apos;: 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Create your first easy sale</p>
+            <p>Quick and easy sales entry - just add products, select payment method, confirm, and everything is done!</p>
+        </field>
+    </record>
+
+</odoo>

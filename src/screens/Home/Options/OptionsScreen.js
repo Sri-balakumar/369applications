@@ -65,6 +65,7 @@ const OptionsScreen = ({ navigation }) => {
     { title: 'Sales Return', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('QuickSalesReturnListScreen') },
     { title: 'Gross Profit', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('GrossProfitReportScreen') },
     { title: 'Partner Ledger', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('PartnerLedgerScreen') },
+    { title: 'Credit Management', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('CreditManagementScreen') },
     { title: 'WhatsApp', image: require('@assets/icons/common/watsapp.png'), onPress: () => navigation.navigate('WhatsAppScreen') },
     { title: 'Contacts', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => setShowContacts(true) },
   ];

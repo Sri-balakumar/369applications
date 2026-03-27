@@ -97,6 +97,8 @@ const ProfileScreen = ({ navigation }) => {
         <View style={styles.logoutBtn}>
           <Button paddingHorizontal={50} title={'LOGOUT'} onPress={() => setIsVisible(true)} />
         </View>
+
+        <Text style={styles.poweredText}>Powered by 369ai | v1.0.0</Text>
       </View>
 
       <LogoutModal
@@ -179,6 +181,12 @@ const styles = StyleSheet.create({
   },
   logoutBtn: {
     marginTop: 24,
+  },
+  poweredText: {
+    color: '#aaa',
+    fontSize: 11,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 20,
   },
 });
 

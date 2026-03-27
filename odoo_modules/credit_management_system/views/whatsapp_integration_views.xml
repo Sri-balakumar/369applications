@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_whatsapp_integration_form" model="ir.ui.view">
+        <field name="name">whatsapp.integration.form</field>
+        <field name="model">whatsapp.integration</field>
+        <field name="arch" type="xml">
+            <form string="WhatsApp Integration">
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="test_connection" 
+                                type="object" 
+                                class="oe_stat_button" 
+                                icon="fa-plug"
+                                string="Test Connection"/>
+                        <button name="action_test_approval_link" 
+                                type="object" 
+                                class="oe_stat_button" 
+                                icon="fa-comment"
+                                string="Test Reply System"
+                                invisible="not is_active"/>
+                    </div>
+                    
+                    <group>
+                        <group string="Basic Settings">
+                            <field name="name"/>
+                            <field name="is_active" widget="boolean_toggle"/>
+                        </group>
+                        <group string="Admin Configuration">
+                            <field name="admin_phone" placeholder="919944080209"/>
+                        </group>
+                    </group>
+                    
+                    <notebook>
+                        <page string="How It Works" name="help">
+                            <group>
+                                <div style="padding: 15px;">
+                                    <h3>💬 WhatsApp Credit Approval (Neonize)</h3>
+                                    
+                                    <h4 style="margin-top: 20px; color: #667eea;">📱 How to Use:</h4>
+                                    <div class="alert alert-success" style="margin: 10px 0;">
+                                        <ol style="line-height: 2;">
+                                            <li><strong>WhatsApp Message Received</strong> - Admin gets notification with order details</li>
+                                            <li><strong>Read Order Information</strong> - Review customer, amount, credit status</li>
+                                            <li><strong>Reply with Pattern</strong>:
+                                                <ul style="margin-top: 10px;">
+                                                    <li>Type <code>1-S00038</code> to <strong>APPROVE ✅</strong> order S00038</li>
+                                                    <li>Type <code>2-S00038</code> to <strong>REJECT ❌</strong> order S00038</li>
+                                                </ul>
+                                            </li>
+                                            <li><strong>Cron Processing</strong> - Cron checks incoming messages every minute</li>
+                                            <li><strong>Confirmation</strong> - Receive success message in WhatsApp</li>
+                                        </ol>
+                                    </div>
+                                    
+                                    <h4 style="margin-top: 20px; color: #667eea;">📋 Prerequisites:</h4>
+                                    <div class="alert alert-info" style="margin: 10px 0;">
+                                        <ul style="line-height: 1.8; margin-bottom: 0;">
+                                            <li>✅ <strong>WhatsApp Neonize</strong> module installed and session connected</li>
+                                            <li>✅ <strong>QR Code scanned</strong> in WhatsApp → Sessions</li>
+                                            <li>✅ <strong>Admin phone number</strong> set above</li>
+                                        </ul>
+                                    </div>
+                                    
+                                    <h4 style="margin-top: 20px; color: #667eea;">🧪 Testing:</h4>
+                                    <div class="alert alert-primary" style="margin: 10px 0;">
+                                        <p><strong>Step 1:</strong> Click <strong>"Test Connection"</strong> button above</p>
+                                        <p><strong>Step 2:</strong> Click <strong>"Test Reply System"</strong> button</p>
+                                        <p><strong>Step 3:</strong> Check WhatsApp, you'll receive test message</p>
+                                        <p><strong>Step 4:</strong> Create real order exceeding credit limit and test</p>
+                                        <p style="margin-bottom: 0;"><strong>Step 5:</strong> Reply with <code>1-ORDERNUM</code> and wait up to 1 minute for cron</p>
+                                    </div>
+                                </div>
+                            </group>
+                        </page>
+                        
+                        <page string="Troubleshooting" name="troubleshooting">
+                            <group>
+                                <div style="padding: 15px;">
+                                    <h3>🔧 Common Issues &amp; Solutions</h3>
+                                    
+                                    <div class="alert alert-warning" style="margin-top: 15px;">
+                                        <h5><strong>Issue:</strong> No WhatsApp message received</h5>
+                                        <ul>
+                                            <li>Check WhatsApp Neonize session is connected (WhatsApp → Sessions)</li>
+                                            <li>Verify admin phone number is set correctly</li>
+                                            <li>Check Odoo server logs for errors</li>
+                                        </ul>
+                                    </div>
+                                    
+                                    <div class="alert alert-warning" style="margin-top: 15px;">
+                                        <h5><strong>Issue:</strong> Reply not processing</h5>
+                                        <ul>
+                                            <li>Wait up to 1 minute for the cron job to run</li>
+                                            <li>Check reply format: <code>1-S00038</code> (no spaces, dash required)</li>
+                                            <li>Verify the cron job is active: Settings → Technical → Scheduled Actions</li>
+                                            <li>Check <code>whatsapp.message</code> records for incoming messages</li>
+                                        </ul>
+                                    </div>
+                                    
+                                    <div class="alert alert-info" style="margin-top: 15px;">
+                                        <h5><strong>Manual Cron Trigger:</strong></h5>
+                                        <p style="margin-bottom: 0;">Settings → Technical → Scheduled Actions → "Credit: Process WhatsApp Approval Replies" → Run Manually</p>
+                                    </div>
+                                </div>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_whatsapp_integration_list" model="ir.ui.view">
+        <field name="name">whatsapp.integration.list</field>
+        <field name="model">whatsapp.integration</field>
+        <field name="arch" type="xml">
+            <list string="WhatsApp Integrations">
+                <field name="name"/>
+                <field name="is_active" widget="boolean_toggle"/>
+                <field name="admin_phone"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_whatsapp_integration" model="ir.actions.act_window">
+        <field name="name">WhatsApp Integration</field>
+        <field name="res_model">whatsapp.integration</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Configure WhatsApp Integration
+            </p>
+            <p>
+                Set up WhatsApp with simple reply system (1-ORDER / 2-ORDER) for credit approvals.
+                Uses WhatsApp Neonize - no Node.js required!
+            </p>
+        </field>
+    </record>
+
+    <menuitem 
+        id="menu_whatsapp_integration" 
+        name="WhatsApp Integration" 
+        parent="sale.sale_menu_root" 
+        action="action_whatsapp_integration" 
+        sequence="10"/>
+</odoo>

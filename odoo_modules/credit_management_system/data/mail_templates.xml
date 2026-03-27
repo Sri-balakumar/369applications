@@ -1,0 +1,550 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="0">
+
+        <!-- ============================================================ -->
+        <!-- SALE ORDER: Credit Approval Request to Admin -->
+        <!-- ============================================================ -->
+        <record id="mail_template_credit_approval_request" model="mail.template">
+            <field name="name">Credit Approval Request</field>
+            <field name="model_id" ref="sale.model_sale_order"/>
+            <field name="subject">Credit Approval Required: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.company_id.email or object.user_id.email or 'noreply@example.com') }}</field>
+            <field name="email_to"/>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#ff9800; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#ff9800; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Action Required</p>
+                <h2 style="margin:0 0 24px 0; font-size:22px; color:#222;">Credit Approval Required</h2>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:150px;">Order</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Customer</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.partner_id.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Order Amount</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="format_amount(object.amount_total, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Order Date</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_datetime(object.date_order, tz=user.tz or 'UTC') if object.date_order else 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Current Due</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_amount(object.partner_id.total_due or 0, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Credit Limit</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_amount(object.partner_id.custom_credit_limit or 0, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#e53935; font-size:13px; font-weight:bold;">Exceeds By</td>
+                        <td style="padding:10px 0; color:#e53935; font-size:14px; font-weight:bold;"><t t-out="format_amount((object.partner_id.total_due or 0) + (object.amount_total or 0) - (object.partner_id.custom_credit_limit or 0), object.currency_id)"/></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:28px 36px 32px 36px; text-align:center;">
+                <p style="margin:0 0 18px 0; font-size:13px; color:#888;">Open the order in Odoo to approve or reject:</p>
+                <table border="0" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                    <tr>
+                        <td style="padding-right:10px;"><a t-attf-href="#{object.get_base_url()}/credit/email/approve?order_id=#{object.id}&amp;token=#{object.email_approval_token}&amp;db=#{object.env.cr.dbname}" style="display:inline-block; padding:13px 36px; background-color:#43a047; color:#ffffff; text-decoration:none; border-radius:5px; font-weight:bold; font-size:15px;">APPROVE</a></td>
+                        <td><a t-attf-href="#{object.get_base_url()}/credit/email/reject?order_id=#{object.id}&amp;token=#{object.email_approval_token}&amp;db=#{object.env.cr.dbname}" style="display:inline-block; padding:13px 36px; background-color:#e53935; color:#ffffff; text-decoration:none; border-radius:5px; font-weight:bold; font-size:15px;">REJECT</a></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.company_id.name or ''"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- ============================================================ -->
+        <!-- SALE ORDER: Credit Approved Confirmation -->
+        <!-- ============================================================ -->
+        <record id="mail_template_credit_approved" model="mail.template">
+            <field name="name">Credit Approved Notification</field>
+            <field name="model_id" ref="sale.model_sale_order"/>
+            <field name="subject">Credit Approved: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.company_id.email or object.user_id.email or 'noreply@example.com') }}</field>
+            <field name="email_to"/>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#43a047; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#43a047; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Approved</p>
+                <h2 style="margin:0 0 24px 0; font-size:22px; color:#222;">Order Approved</h2>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:150px;">Order</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Customer</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.partner_id.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Amount</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="format_amount(object.amount_total, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Approved By</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.credit_approved_by.name or 'Administrator'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Approved On</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_datetime(object.credit_approval_date, tz=user.tz or 'UTC') if object.credit_approval_date else 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#888; font-size:13px;">Status</td>
+                        <td style="padding:10px 0; color:#43a047; font-size:14px; font-weight:bold;">CONFIRMED</td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px 28px 36px;">
+                <p style="margin:0; font-size:13px; color:#888;">The order has been confirmed and is now being processed.</p>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.company_id.name or ''"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- ============================================================ -->
+        <!-- SALE ORDER: Credit Rejected Confirmation -->
+        <!-- ============================================================ -->
+        <record id="mail_template_credit_rejected" model="mail.template">
+            <field name="name">Credit Rejected Notification</field>
+            <field name="model_id" ref="sale.model_sale_order"/>
+            <field name="subject">Credit Rejected: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.company_id.email or object.user_id.email or 'noreply@example.com') }}</field>
+            <field name="email_to"/>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#e53935; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#e53935; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Rejected</p>
+                <h2 style="margin:0 0 24px 0; font-size:22px; color:#222;">Order Rejected</h2>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:150px;">Order</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Customer</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.partner_id.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Amount</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="format_amount(object.amount_total, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Rejected By</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.credit_approved_by.name or 'Administrator'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#888; font-size:13px;">Rejected On</td>
+                        <td style="padding:10px 0; color:#222; font-size:14px;"><t t-out="format_datetime(object.credit_approval_date, tz=user.tz or 'UTC') if object.credit_approval_date else 'N/A'"/></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px 28px 36px;">
+                <p style="margin:0; font-size:13px; color:#888;">The order remains in draft status due to credit limit concerns.</p>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.company_id.name or ''"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- ============================================================ -->
+        <!-- CREDIT FACILITY: Application Submitted (to Managers) -->
+        <!-- ============================================================ -->
+        <record id="mail_template_credit_facility_submitted" model="mail.template">
+            <field name="name">Credit Facility: Application Submitted</field>
+            <field name="model_id" ref="model_credit_facility"/>
+            <field name="subject">Credit Facility Approval Required: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.partner_id.company_id.email or 'noreply@example.com') }}</field>
+            <field name="email_to">{{ ctx.get('manager_emails', '') }}</field>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#1565C0; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#1565C0; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Action Required</p>
+                <h2 style="margin:0 0 6px 0; font-size:22px; color:#222;">Credit Facility Application</h2>
+                <p style="margin:0 0 24px 0; font-size:13px; color:#888;">New application submitted — requires your review</p>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:160px;">Application Ref</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Customer</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.partner_id.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Company</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.company_name or 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Trade License No</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.trade_license_no or 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">License Expiry</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_date(object.license_expiry_date) if object.license_expiry_date else 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Phone</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.phone_number or 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Email</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.email or 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Submitted On</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_datetime(object.submission_date, tz=user.tz or 'UTC') if object.submission_date else 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#888; font-size:13px;">Requested Credit Limit</td>
+                        <td style="padding:10px 0; color:#222; font-size:16px; font-weight:bold;"><t t-out="format_amount(object.credit_limit or 0, object.currency_id)"/></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:28px 36px 32px 36px; text-align:center;">
+                <p style="margin:0 0 18px 0; font-size:13px; color:#888;">Click a button below to approve or reject this application:</p>
+                <table border="0" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                    <tr>
+                        <td style="padding-right:10px;"><a t-attf-href="#{object.get_base_url()}/credit-facility/email/approve?facility_id=#{object.id}&amp;token=#{object.email_approval_token}&amp;db=#{object.env.cr.dbname}" style="display:inline-block; padding:13px 36px; background-color:#43a047; color:#ffffff; text-decoration:none; border-radius:5px; font-weight:bold; font-size:15px;">APPROVE</a></td>
+                        <td><a t-attf-href="#{object.get_base_url()}/credit-facility/email/reject?facility_id=#{object.id}&amp;token=#{object.email_approval_token}&amp;db=#{object.env.cr.dbname}" style="display:inline-block; padding:13px 36px; background-color:#e53935; color:#ffffff; text-decoration:none; border-radius:5px; font-weight:bold; font-size:15px;">REJECT</a></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.partner_id.company_id.name or 'Your Company'"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- ============================================================ -->
+        <!-- CREDIT FACILITY: Application Approved -->
+        <!-- ============================================================ -->
+        <record id="mail_template_credit_facility_approved" model="mail.template">
+            <field name="name">Credit Facility: Application Approved</field>
+            <field name="model_id" ref="model_credit_facility"/>
+            <field name="subject">Credit Facility Approved: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.partner_id.company_id.email or 'noreply@example.com') }}</field>
+            <field name="email_to">{{ object.partner_id.email or '' }}</field>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#43a047; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#43a047; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Approved</p>
+                <h2 style="margin:0 0 6px 0; font-size:22px; color:#222;">Credit Facility Approved</h2>
+                <p style="margin:0 0 24px 0; font-size:13px; color:#888;">Dear <t t-out="object.partner_id.name or ''"/>, your credit facility application has been approved.</p>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:160px;">Application Ref</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Credit Limit</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:16px; font-weight:bold;"><t t-out="format_amount(object.credit_limit or 0, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Approved By</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.approved_by.name or 'Manager'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#888; font-size:13px;">Approved On</td>
+                        <td style="padding:10px 0; color:#222; font-size:14px;"><t t-out="format_datetime(object.approval_date, tz=user.tz or 'UTC') if object.approval_date else 'N/A'"/></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px 28px 36px;">
+                <p style="margin:0; font-size:13px; color:#888;">You can now place orders up to your approved credit limit. Thank you for your business.</p>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.partner_id.company_id.name or 'Your Company'"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- ============================================================ -->
+        <!-- CREDIT FACILITY: Application Rejected -->
+        <!-- ============================================================ -->
+        <record id="mail_template_credit_facility_rejected" model="mail.template">
+            <field name="name">Credit Facility: Application Rejected</field>
+            <field name="model_id" ref="model_credit_facility"/>
+            <field name="subject">Credit Facility Rejected: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.partner_id.company_id.email or 'noreply@example.com') }}</field>
+            <field name="email_to">{{ object.partner_id.email or '' }}</field>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#e53935; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#e53935; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Rejected</p>
+                <h2 style="margin:0 0 6px 0; font-size:22px; color:#222;">Credit Facility Rejected</h2>
+                <p style="margin:0 0 24px 0; font-size:13px; color:#888;">Dear <t t-out="object.partner_id.name or ''"/>, we regret to inform you that your application has been rejected.</p>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:160px;">Application Ref</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Requested Limit</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_amount(object.credit_limit or 0, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Reason</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#e53935; font-size:14px;"><t t-out="object.rejection_reason or 'No reason provided'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#888; font-size:13px;">Rejected By</td>
+                        <td style="padding:10px 0; color:#222; font-size:14px;"><t t-out="object.approved_by.name or 'Manager'"/></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px 28px 36px;">
+                <p style="margin:0; font-size:13px; color:#888;">If you have questions, please contact your account manager.</p>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.partner_id.company_id.name or 'Your Company'"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- ============================================================ -->
+        <!-- EASY SALES: Credit Approval Request to Admin -->
+        <!-- ============================================================ -->
+        <record id="mail_template_easy_sale_credit_approval_request" model="mail.template">
+            <field name="name">Easy Sale: Credit Approval Request</field>
+            <field name="model_id" ref="easy_sales.model_easy_sales"/>
+            <field name="subject">Credit Approval Required: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.env.company.email or 'noreply@example.com') }}</field>
+            <field name="email_to"/>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#ff9800; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#ff9800; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Action Required</p>
+                <h2 style="margin:0 0 24px 0; font-size:22px; color:#222;">Easy Sale Credit Approval Required</h2>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:150px;">Easy Sale</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Customer</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.partner_id.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Sale Amount</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="format_amount(object.amount_total, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Current Due</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_amount(object.partner_id.total_due or 0, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Credit Limit</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_amount(object.partner_id.custom_credit_limit or 0, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#e53935; font-size:13px; font-weight:bold;">Exceeds By</td>
+                        <td style="padding:10px 0; color:#e53935; font-size:14px; font-weight:bold;"><t t-out="format_amount(max(0, (object.partner_id.total_due or 0) - (object.partner_id.custom_credit_limit or 0)), object.currency_id)"/></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:28px 36px 32px 36px; text-align:center;">
+                <p style="margin:0 0 18px 0; font-size:13px; color:#888;">Click a button below to approve or reject this easy sale:</p>
+                <table border="0" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                    <tr>
+                        <td style="padding-right:10px;"><a t-attf-href="#{object.get_base_url()}/easy-sale/email/approve?sale_id=#{object.id}&amp;token=#{object.email_approval_token}&amp;db=#{object.env.cr.dbname}" style="display:inline-block; padding:13px 36px; background-color:#43a047; color:#ffffff; text-decoration:none; border-radius:5px; font-weight:bold; font-size:15px;">APPROVE</a></td>
+                        <td><a t-attf-href="#{object.get_base_url()}/easy-sale/email/reject?sale_id=#{object.id}&amp;token=#{object.email_approval_token}&amp;db=#{object.env.cr.dbname}" style="display:inline-block; padding:13px 36px; background-color:#e53935; color:#ffffff; text-decoration:none; border-radius:5px; font-weight:bold; font-size:15px;">REJECT</a></td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.env.company.name or ''"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- ============================================================ -->
+        <!-- EASY SALES: Credit Approved Notification -->
+        <!-- ============================================================ -->
+        <record id="mail_template_easy_sale_credit_approved" model="mail.template">
+            <field name="name">Easy Sale: Credit Approved Notification</field>
+            <field name="model_id" ref="easy_sales.model_easy_sales"/>
+            <field name="subject">Credit Approved: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.env.company.email or 'noreply@example.com') }}</field>
+            <field name="email_to"/>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#43a047; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#43a047; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Approved</p>
+                <h2 style="margin:0 0 24px 0; font-size:22px; color:#222;">Easy Sale Approved</h2>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:150px;">Easy Sale</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Customer</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.partner_id.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Amount</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="format_amount(object.amount_total, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Approved By</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.credit_approved_by.name or 'Administrator'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Approved On</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="format_datetime(object.credit_approval_date, tz=user.tz or 'UTC') if object.credit_approval_date else 'N/A'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#888; font-size:13px;">Status</td>
+                        <td style="padding:10px 0; color:#43a047; font-size:14px; font-weight:bold;">CONFIRMED</td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px 28px 36px;">
+                <p style="margin:0; font-size:13px; color:#888;">The easy sale has been confirmed and is now being processed.</p>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.env.company.name or ''"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- ============================================================ -->
+        <!-- EASY SALES: Credit Rejected Notification -->
+        <!-- ============================================================ -->
+        <record id="mail_template_easy_sale_credit_rejected" model="mail.template">
+            <field name="name">Easy Sale: Credit Rejected Notification</field>
+            <field name="model_id" ref="easy_sales.model_easy_sales"/>
+            <field name="subject">Credit Rejected: {{ object.name }} - {{ object.partner_id.name }}</field>
+            <field name="email_from">{{ (object.env.company.email or 'noreply@example.com') }}</field>
+            <field name="email_to"/>
+            <field name="body_html" type="html">
+<div style="font-family: Arial, sans-serif; background: #f6f6f6; padding: 30px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr><td align="center">
+        <table border="0" cellpadding="0" cellspacing="0" width="560" style="background:#ffffff; border-radius:8px; overflow:hidden;">
+            <tr><td style="height:5px; background-color:#e53935; font-size:1px; line-height:1px;">&#160;</td></tr>
+            <tr><td style="padding:32px 36px 8px 36px;">
+                <p style="margin:0 0 4px 0; font-size:11px; color:#e53935; font-weight:bold; letter-spacing:1px; text-transform:uppercase;">Rejected</p>
+                <h2 style="margin:0 0 24px 0; font-size:22px; color:#222;">Easy Sale Rejected</h2>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px; width:150px;">Easy Sale</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="object.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Customer</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.partner_id.name or ''"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Amount</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px; font-weight:bold;"><t t-out="format_amount(object.amount_total, object.currency_id)"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#888; font-size:13px;">Rejected By</td>
+                        <td style="padding:10px 0; border-bottom:1px solid #f0f0f0; color:#222; font-size:14px;"><t t-out="object.credit_approved_by.name or 'Administrator'"/></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:10px 0; color:#888; font-size:13px;">Status</td>
+                        <td style="padding:10px 0; color:#e53935; font-size:14px; font-weight:bold;">REJECTED</td>
+                    </tr>
+                </table>
+            </td></tr>
+            <tr><td style="padding:16px 36px 28px 36px;">
+                <p style="margin:0; font-size:13px; color:#888;">The easy sale remains in draft status. Please contact your administrator for further information.</p>
+            </td></tr>
+            <tr><td style="padding:16px 36px; border-top:1px solid #f0f0f0; text-align:center;">
+                <p style="margin:0; color:#bbb; font-size:11px;">Automated message from <t t-out="object.env.company.name or ''"/></p>
+            </td></tr>
+        </table>
+        </td></tr>
+    </table>
+</div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+    </data>
+</odoo>

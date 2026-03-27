@@ -1,0 +1,12 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_credit_facility_wizard_user,credit.facility.wizard.user,model_credit_facility_wizard,sales_team.group_sale_salesman,1,1,1,1
+access_credit_facility_wizard_manager,credit.facility.wizard.manager,model_credit_facility_wizard,sales_team.group_sale_manager,1,1,1,1
+access_sale_order_credit_approval_wizard_user,sale.order.credit.approval.wizard.user,model_sale_order_credit_approval_wizard,sales_team.group_sale_salesman,1,1,1,1
+access_sale_order_credit_approval_wizard_manager,sale.order.credit.approval.wizard.manager,model_sale_order_credit_approval_wizard,sales_team.group_sale_manager,1,1,1,1
+access_easy_sales_credit_approval_wizard_user,easy.sales.credit.approval.wizard.user,model_easy_sales_credit_approval_wizard,base.group_user,1,1,1,1
+access_whatsapp_integration_user,whatsapp.integration.user,model_whatsapp_integration,base.group_user,1,1,1,0
+access_whatsapp_integration_manager,whatsapp.integration.manager,model_whatsapp_integration,base.group_system,1,1,1,1
+access_credit_facility,access_credit_facility,model_credit_facility,base.group_user,1,1,1,1
+access_whatsapp_integration_admin,whatsapp.integration.admin,model_whatsapp_integration,credit_management_system.group_sale_order_administrator,1,1,1,1
+access_risk_score_history_user,risk.score.history.user,model_risk_score_history,base.group_user,1,0,0,0
+access_risk_score_history_manager,risk.score.history.manager,model_risk_score_history,sales_team.group_sale_manager,1,1,1,1

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Risk Score History List View -->
+    <record id="view_risk_score_history_list" model="ir.ui.view">
+        <field name="name">risk.score.history.list</field>
+        <field name="model">risk.score.history</field>
+        <field name="arch" type="xml">
+            <list string="Risk Score History" default_order="change_date desc">
+                <field name="partner_id"/>
+                <field name="old_risk_level" widget="badge" string="Old Risk Score"
+                       decoration-success="old_risk_level == 'low'"
+                       decoration-warning="old_risk_level == 'medium'"
+                       decoration-danger="old_risk_level == 'high'"/>
+                <field name="new_risk_level" widget="badge" string="New Risk Score"
+                       decoration-success="new_risk_level == 'low'"
+                       decoration-warning="new_risk_level == 'medium'"
+                       decoration-danger="new_risk_level == 'high'"/>
+                <field name="old_risk_score" string="Old Score %"/>
+                <field name="new_risk_score" string="New Score %"/>
+                <field name="change_date"/>
+                <field name="reason"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Risk Score History Search View -->
+    <record id="view_risk_score_history_search" model="ir.ui.view">
+        <field name="name">risk.score.history.search</field>
+        <field name="model">risk.score.history</field>
+        <field name="arch" type="xml">
+            <search string="Risk History">
+                <field name="partner_id"/>
+                <field name="new_risk_level"/>
+                <filter name="group_customer" string="Customer" context="{'group_by': 'partner_id'}"/>
+                <filter name="group_level" string="Risk Level" context="{'group_by': 'new_risk_level'}"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- Risk Score History Action -->
+    <record id="action_risk_score_history" model="ir.actions.act_window">
+        <field name="name">Risk History</field>
+        <field name="res_model">risk.score.history</field>
+        <field name="view_mode">list</field>
+        <field name="search_view_id" ref="view_risk_score_history_search"/>
+        <field name="context">{'search_default_group_customer': 1}</field>
+    </record>
+
+
+</odoo>

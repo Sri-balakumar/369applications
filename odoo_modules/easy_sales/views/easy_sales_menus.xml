@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <menuitem id="easy_sales_menu_root"
+              name="Easy Sales"
+              sequence="46"
+              web_icon="easy_sales,static/description/icon.png"
+              groups="sales_team.group_sale_salesman"/>
+
+    <menuitem id="easy_sales_menu_sales"
+              name="Sales"
+              parent="easy_sales_menu_root"
+              sequence="10"/>
+
+    <menuitem id="easy_sales_menu_action"
+              name="Sales Entry"
+              parent="easy_sales_menu_sales"
+              action="easy_sales_action"
+              sequence="10"/>
+
+    <!-- Configuration Menu -->
+    <menuitem id="easy_sales_menu_config"
+              name="Configuration"
+              parent="easy_sales_menu_root"
+              sequence="99"
+              groups="sales_team.group_sale_manager"/>
+
+    <menuitem id="easy_sales_menu_payment_methods"
+              name="Payment Methods"
+              parent="easy_sales_menu_config"
+              action="easy_sales_payment_method_action"
+              sequence="10"/>
+
+    <!-- Quick access from standard Sales module -->
+    <menuitem id="easy_sales_menu_in_sale"
+              name="Quick Sale"
+              parent="sale.sale_menu_root"
+              action="easy_sales_action"
+              sequence="5"/>
+
+</odoo>

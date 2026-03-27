@@ -1,0 +1,9 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_easy_sales_user,easy.sales.user,model_easy_sales,sales_team.group_sale_salesman,1,1,1,0
+access_easy_sales_manager,easy.sales.manager,model_easy_sales,sales_team.group_sale_manager,1,1,1,1
+access_easy_sales_line_user,easy.sales.line.user,model_easy_sales_line,sales_team.group_sale_salesman,1,1,1,0
+access_easy_sales_line_manager,easy.sales.line.manager,model_easy_sales_line,sales_team.group_sale_manager,1,1,1,1
+access_easy_sales_payment_method_user,easy.sales.payment.method.user,model_easy_sales_payment_method,sales_team.group_sale_salesman,1,0,0,0
+access_easy_sales_payment_method_manager,easy.sales.payment.method.manager,model_easy_sales_payment_method,sales_team.group_sale_manager,1,1,1,1
+access_easy_sales_payment_line_user,easy.sales.payment.line.user,model_easy_sales_payment_line,sales_team.group_sale_salesman,1,1,1,1
+access_easy_sales_payment_line_manager,easy.sales.payment.line.manager,model_easy_sales_payment_line,sales_team.group_sale_manager,1,1,1,1

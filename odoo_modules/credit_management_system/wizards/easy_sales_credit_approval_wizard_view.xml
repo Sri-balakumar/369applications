@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_easy_sales_credit_approval_wizard" model="ir.ui.view">
+        <field name="name">easy.sales.credit.approval.wizard.form</field>
+        <field name="model">easy.sales.credit.approval.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Credit Limit Approval Required">
+                <group>
+                    <group>
+                        <field name="sale_id" readonly="1"/>
+                        <field name="partner_id" readonly="1"/>
+                        <field name="currency_id" invisible="1"/>
+                    </group>
+                    <group>
+                        <field name="sale_amount" readonly="1" widget="monetary"/>
+                        <field name="current_credit_limit" readonly="1" widget="monetary"/>
+                        <field name="current_due" readonly="1" widget="monetary"/>
+                        <field name="exceeds_by" readonly="1" widget="monetary" string="Exceeds By"/>
+                        <field name="risk_score" readonly="1" string="Risk Score (%)"/>
+                        <field name="risk_level" readonly="1" widget="badge" string="Risk Level"
+                               decoration-success="risk_level == 'low'"
+                               decoration-warning="risk_level == 'medium'"
+                               decoration-danger="risk_level == 'high'"/>
+                    </group>
+                </group>
+
+                <div class="alert alert-warning" role="alert">
+                    <strong>⚠️ Credit Limit Exceeded - Approval Required!</strong>
+                    <p>This easy sale exceeds the customer's credit limit.</p>
+                    <ul>
+                        <li>A WhatsApp and Email approval request has been sent to the administrator.</li>
+                        <li>If you <strong>APPROVE</strong> now, the sale will be confirmed immediately as a one-time override.</li>
+                        <li>If you <strong>REJECT</strong>, the sale stays in draft and cannot be confirmed.</li>
+                    </ul>
+                </div>
+
+                <footer>
+                    <button name="action_approve" string="✅ Approve &amp; Confirm Sale"
+                            type="object" class="btn-success"/>
+                    <button name="action_reject" string="❌ Reject Sale"
+                            type="object" class="btn-danger"/>
+                    <button string="Close (Wait for Admin)" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

@@ -17,6 +17,11 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import Text from '@components/Text';
 
+const ODOO_COLORS = [
+  '#FFFFFF', '#F06050', '#F4A460', '#F7CD1F', '#6CC1ED', '#814968',
+  '#EB7E7F', '#2C8397', '#475577', '#D6145F', '#30C381', '#9365B8',
+];
+
 const ProductsScreen = ({ navigation, route }) => {
   const { fromCustomerDetails } = route.params || {};
   const initialPosCategoryId = route?.params?.posCategoryId || '';
@@ -134,15 +139,29 @@ const ProductsScreen = ({ navigation, route }) => {
             >
               <Text style={[s.categoryText, !selectedCategory && s.categoryTextActive]}>All</Text>
             </TouchableOpacity>
-            {categories.map((cat) => (
-              <TouchableOpacity
-                key={cat._id}
-                style={[s.categoryChip, selectedCategory === cat._id && s.categoryChipActive]}
-                onPress={() => handleCategoryPress(cat._id)}
-              >
-                <Text style={[s.categoryText, selectedCategory === cat._id && s.categoryTextActive]}>{cat.name}</Text>
-              </TouchableOpacity>
-            ))}
+            {categories.map((cat) => {
+              const isActive = selectedCategory === cat._id;
+              const catColor = ODOO_COLORS[cat.color] || null;
+              const hasColor = cat.color > 0 && catColor;
+              return (
+                <TouchableOpacity
+                  key={cat._id}
+                  style={[
+                    s.categoryChip,
+                    hasColor && { backgroundColor: catColor, borderColor: catColor },
+                    isActive && !hasColor && s.categoryChipActive,
+                    isActive && hasColor && { borderColor: '#333', borderWidth: 2.5 },
+                  ]}
+                  onPress={() => handleCategoryPress(cat._id)}
+                >
+                  <Text style={[
+                    s.categoryText,
+                    hasColor && { color: '#fff' },
+                    isActive && s.categoryTextActive,
+                  ]}>{cat.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         </View>
       )}

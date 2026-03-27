@@ -9802,7 +9802,7 @@ export const fetchPurchaseTaxesOdoo = async () => {
   }
 };
 
-export const createProductOdoo = async ({ name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, taxesId, supplierTaxesId, image, descriptionSale }) => {
+export const createProductOdoo = async ({ name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, taxesId, supplierTaxesId, image, descriptionSale, onHandQty }) => {
   try {
     const headers = await getOdooAuthHeaders();
     const vals = {
@@ -9827,7 +9827,43 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
       params: { model: 'product.product', method: 'create', args: [vals], kwargs: {} },
     }, { headers, timeout: 30000 });
     if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create product');
-    return response.data.result;
+    const productId = response.data.result;
+
+    // Set initial on-hand stock quantity if provided
+    if (onHandQty && parseFloat(onHandQty) > 0 && productId) {
+      try {
+        // Get default stock location (WH/Stock)
+        const locResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'stock.warehouse', method: 'search_read', args: [[]], kwargs: { fields: ['lot_stock_id'], limit: 1 } },
+        }, { headers, timeout: 10000 });
+        const locationId = locResp.data?.result?.[0]?.lot_stock_id?.[0] || 8; // fallback to 8 (common default)
+
+        // Create stock quant with inventory_quantity
+        const quantResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: {
+            model: 'stock.quant', method: 'create',
+            args: [{ product_id: productId, location_id: locationId, inventory_quantity: parseFloat(onHandQty) }],
+            kwargs: {},
+          },
+        }, { headers, timeout: 10000 });
+        const quantId = quantResp.data?.result;
+
+        // Apply inventory to confirm the quantity
+        if (quantId) {
+          await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'stock.quant', method: 'action_apply_inventory', args: [[quantId]], kwargs: {} },
+          }, { headers, timeout: 10000 });
+        }
+        console.log('[createProductOdoo] Stock set:', onHandQty, 'for product:', productId);
+      } catch (stockErr) {
+        console.warn('[createProductOdoo] Stock update failed (product still created):', stockErr?.message);
+      }
+    }
+
+    return productId;
   } catch (error) {
     console.error('[createProductOdoo] error:', error?.message || error);
     throw error;
@@ -10249,6 +10285,371 @@ export const fetchPartnerLedgerLinesOdoo = async (reportId, partnerName) => {
     }));
   } catch (error) {
     console.error('[fetchPartnerLedgerLinesOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// ---- Credit Management APIs ----
+
+// Fetch credit facility applications from Odoo (All Applications)
+export const fetchCreditApplicationsOdoo = async ({ searchText = '', offset = 0, limit = 100, state = '' } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    let domain = [];
+    if (searchText) {
+      domain.push('|', ['name', 'ilike', searchText], ['partner_id.name', 'ilike', searchText]);
+    }
+    if (state) {
+      domain.push(['state', '=', state]);
+    }
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'credit.facility',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'partner_id', 'credit_limit', 'state', 'submission_date', 'credit_issue_date', 'credit_expiry_date', 'company_name', 'phone_number', 'email', 'use_credit_facility', 'currency_id', 'approved_by', 'approval_date', 'rejection_reason'],
+            offset,
+            limit,
+            order: 'submission_date desc, id desc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to fetch credit applications');
+    }
+    return (response.data.result || []).map(app => ({
+      id: app.id,
+      name: app.name || '',
+      partner_id: Array.isArray(app.partner_id) ? app.partner_id[0] : app.partner_id,
+      partner_name: Array.isArray(app.partner_id) ? app.partner_id[1] : '',
+      credit_limit: app.credit_limit || 0,
+      state: app.state || 'draft',
+      submission_date: app.submission_date || '',
+      credit_issue_date: app.credit_issue_date || '',
+      credit_expiry_date: app.credit_expiry_date || '',
+      company_name: app.company_name || '',
+      phone_number: app.phone_number || '',
+      email: app.email || '',
+      use_credit_facility: app.use_credit_facility || '',
+      currency: Array.isArray(app.currency_id) ? app.currency_id[1] : '',
+      approved_by: Array.isArray(app.approved_by) ? app.approved_by[1] : '',
+      approval_date: app.approval_date || '',
+      rejection_reason: app.rejection_reason || '',
+    }));
+  } catch (error) {
+    console.error('[fetchCreditApplicationsOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch credit exceeded customers (Credit Exceeded Dashboard)
+export const fetchCreditExceededOdoo = async ({ searchText = '', offset = 0, limit = 100 } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    // Query res.partner with custom_credit_limit > 0 (matches Odoo dashboard domain)
+    let domain = [['customer_rank', '>', 0], ['custom_credit_limit', '>', 0]];
+    if (searchText) {
+      domain.push(['name', 'ilike', searchText]);
+    }
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.partner',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'custom_credit_limit', 'total_due', 'available_credit', 'risk_score', 'risk_level', 'is_credit_hold', 'phone', 'email', 'country_id'],
+            offset,
+            limit,
+            order: 'risk_score desc, id desc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to fetch credit exceeded data');
+    }
+    return (response.data.result || []).map(p => ({
+      id: p.id,
+      name: p.name || '',
+      custom_credit_limit: p.custom_credit_limit || 0,
+      total_due: p.total_due || 0,
+      available_credit: p.available_credit || 0,
+      risk_score: p.risk_score || 0,
+      risk_level: p.risk_level || 'low',
+      is_credit_hold: p.is_credit_hold || false,
+      phone: p.phone || '',
+      email: p.email || '',
+      country: Array.isArray(p.country_id) ? p.country_id[1] : '',
+    }));
+  } catch (error) {
+    console.error('[fetchCreditExceededOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch credit risk history records from Odoo
+export const fetchCreditRiskHistoryOdoo = async ({ searchText = '', offset = 0, limit = 100 } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    let domain = [];
+    if (searchText) {
+      domain.push(['partner_id.name', 'ilike', searchText]);
+    }
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'risk.score.history',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'partner_id', 'old_risk_score', 'new_risk_score', 'old_risk_level', 'new_risk_level', 'change_date', 'reason'],
+            offset,
+            limit,
+            order: 'change_date desc, id desc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to fetch risk history');
+    }
+    return (response.data.result || []).map(r => ({
+      id: r.id,
+      partner_id: Array.isArray(r.partner_id) ? r.partner_id[0] : (r.partner_id || null),
+      partner_name: Array.isArray(r.partner_id) ? r.partner_id[1] : '',
+      old_risk_score: r.old_risk_score || 0,
+      new_risk_score: r.new_risk_score || 0,
+      old_risk_level: r.old_risk_level || '',
+      new_risk_level: r.new_risk_level || '',
+      change_date: r.change_date || '',
+      reason: r.reason || '',
+    }));
+  } catch (error) {
+    console.error('[fetchCreditRiskHistoryOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Create a new credit facility application in Odoo
+export const createCreditFacilityOdoo = async (data = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const vals = {};
+    if (data.partner_id) vals.partner_id = data.partner_id;
+    if (data.credit_limit) vals.credit_limit = parseFloat(data.credit_limit) || 0;
+    if (data.use_credit_facility) vals.use_credit_facility = data.use_credit_facility;
+    if (data.company_name) vals.company_name = data.company_name;
+    if (data.company_address) vals.company_address = data.company_address;
+    if (data.phone_number) vals.phone_number = data.phone_number;
+    if (data.email) vals.email = data.email;
+    if (data.fax) vals.fax = data.fax;
+    if (data.trade_license_no) vals.trade_license_no = data.trade_license_no;
+    if (data.po_box) vals.po_box = data.po_box;
+    if (data.license_issue_date) vals.license_issue_date = data.license_issue_date;
+    if (data.license_expiry_date) vals.license_expiry_date = data.license_expiry_date;
+    if (data.credit_issue_date) vals.credit_issue_date = data.credit_issue_date;
+    if (data.credit_expiry_date) vals.credit_expiry_date = data.credit_expiry_date;
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'credit.facility',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to create credit facility');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('[createCreditFacilityOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Submit a credit facility application for approval
+export const submitCreditFacilityOdoo = async (facilityId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'credit.facility',
+          method: 'action_submit',
+          args: [[facilityId]],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to submit credit facility');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('[submitCreditFacilityOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch customers with credit-related fields from Odoo
+export const fetchCustomerCreditsOdoo = async ({ searchText = '', offset = 0, limit = 100 } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    let domain = [['customer_rank', '>', 0]];
+    if (searchText) {
+      domain = ['&', ['customer_rank', '>', 0], ['name', 'ilike', searchText]];
+    }
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.partner',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'credit_limit', 'credit', 'debit', 'phone', 'email'],
+            offset,
+            limit,
+            order: 'name asc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to fetch customer credits');
+    }
+    return (response.data.result || []).map(p => ({
+      id: p.id,
+      name: p.name || '',
+      credit_limit: p.credit_limit || 0,
+      credit: p.credit || 0,
+      debit: p.debit || 0,
+      phone: p.phone || '',
+      email: p.email || '',
+    }));
+  } catch (error) {
+    console.error('[fetchCustomerCreditsOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch posted customer invoices/refunds for a specific partner
+export const fetchCustomerCreditInvoicesOdoo = async (partnerId, { offset = 0, limit = 20 } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const domain = [
+      ['partner_id', '=', partnerId],
+      ['move_type', 'in', ['out_invoice', 'out_refund']],
+      ['state', '=', 'posted'],
+    ];
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.move',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'date', 'invoice_date', 'move_type', 'amount_total', 'amount_residual', 'state', 'payment_state'],
+            offset,
+            limit,
+            order: 'date desc, id desc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to fetch invoices');
+    }
+    return (response.data.result || []).map(inv => ({
+      id: inv.id,
+      name: inv.name || '',
+      date: inv.date || inv.invoice_date || '',
+      move_type: inv.move_type || '',
+      amount_total: inv.amount_total || 0,
+      amount_residual: inv.amount_residual || 0,
+      state: inv.state || '',
+      payment_state: inv.payment_state || '',
+    }));
+  } catch (error) {
+    console.error('[fetchCustomerCreditInvoicesOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch unreconciled receivable lines for aging analysis
+export const fetchCreditAgingOdoo = async ({ limit = 500 } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const domain = [
+      ['partner_id.customer_rank', '>', 0],
+      ['account_type', '=', 'asset_receivable'],
+      ['reconciled', '=', false],
+      ['amount_residual', '>', 0],
+    ];
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.move.line',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'partner_id', 'date_maturity', 'date', 'amount_residual'],
+            limit,
+            order: 'date_maturity asc',
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 30000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to fetch aging data');
+    }
+    return (response.data.result || []).map(l => ({
+      id: l.id,
+      partner_id: Array.isArray(l.partner_id) ? l.partner_id[0] : l.partner_id,
+      partner_name: Array.isArray(l.partner_id) ? l.partner_id[1] : '',
+      date_maturity: l.date_maturity || l.date || '',
+      amount_residual: l.amount_residual || 0,
+    }));
+  } catch (error) {
+    console.error('[fetchCreditAgingOdoo] error:', error?.message || error);
     throw error;
   }
 };

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- Sequence for Easy Sales -->
+        <record id="seq_easy_sales" model="ir.sequence">
+            <field name="name">Easy Sales</field>
+            <field name="code">easy.sales</field>
+            <field name="prefix">ES/%(year)s/</field>
+            <field name="padding">5</field>
+            <field name="company_id" eval="False"/>
+        </record>
+
+        <!-- Payment methods are created via post_init_hook in __init__.py -->
+
+    </data>
+</odoo>

@@ -1,6 +1,7 @@
 import { View, StyleSheet, Dimensions, Image } from 'react-native'
-import React, { useState, useEffect } from 'react'
+import React, { useState, useCallback } from 'react'
 import Carousel, { Pagination } from 'react-native-snap-carousel';
+import { useFocusEffect } from '@react-navigation/native';
 import { fetchAppBannersOdoo } from '@api/services/generalApi';
 import { COLORS } from '@constants/theme';
 
@@ -18,7 +19,7 @@ const CarouselPagination = () => {
     const [activeSlide, setActiveSlide] = useState(0);
     const [data, setData] = useState(FALLBACK_DATA);
 
-    useEffect(() => {
+    useFocusEffect(useCallback(() => {
         fetchAppBannersOdoo().then(banners => {
             if (banners && banners.length > 0) {
                 setData(banners.map(b => ({
@@ -27,7 +28,7 @@ const CarouselPagination = () => {
                 })));
             }
         }).catch(() => {});
-    }, []);
+    }, []));
 
     const sliderWidth = screenWidth - 24;
 

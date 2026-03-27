@@ -57,6 +57,7 @@ const ProductCreationForm = ({ navigation }) => {
   const [salesTax, setSalesTax] = useState(null);
   const [purchaseTax, setPurchaseTax] = useState(null);
   const [description, setDescription] = useState('');
+  const [onHandQty, setOnHandQty] = useState('');
   const [imageUri, setImageUri] = useState(null);
   const [imageBase64, setImageBase64] = useState(null);
 
@@ -287,6 +288,7 @@ const ProductCreationForm = ({ navigation }) => {
         supplierTaxesId: purchaseTax ? [purchaseTax.id] : undefined,
         image: imageBase64 || undefined,
         descriptionSale: description || undefined,
+        onHandQty: onHandQty || undefined,
       });
       showToastMessage('Product created successfully');
       navigation.goBack();
@@ -324,6 +326,7 @@ const ProductCreationForm = ({ navigation }) => {
         {/* Optional Fields */}
         <FormInput label="Sales Price" placeholder="0.000" value={salesPrice} onChangeText={setSalesPrice} keyboardType="numeric" />
         <FormInput label="Cost" placeholder="0.000" value={cost} onChangeText={setCost} keyboardType="numeric" />
+        <FormInput label="On Hand Quantity" placeholder="0" value={onHandQty} onChangeText={setOnHandQty} keyboardType="numeric" />
         <FormInput label="Barcode" placeholder="Enter barcode" value={barcode} onChangeText={setBarcode}
           onScanPress={() => navigation.navigate('Scanner', {
             onScan: async (scannedBarcode) => { setBarcode(scannedBarcode); navigation.goBack(); }

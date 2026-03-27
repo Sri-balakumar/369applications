@@ -77,6 +77,7 @@ import { MobileRepairDashboard, MobileRepairScreen, MobileRepairForm, MobileRepa
 import { BannerManagementScreen } from '@screens/Home/Options/BannerManagement';
 import { GrossProfitReportScreen } from '@screens/Home/Options/GrossProfitReport';
 import { PartnerLedgerScreen } from '@screens/Home/Options/PartnerLedger';
+import { CreditManagementScreen, CreditApplicationsScreen, CreditExceededScreen, CreditRiskHistoryScreen, CreditFacilityForm } from '@screens/Home/Options/CreditManagement';
 import { WhatsAppScreen } from '@screens/Home/Options/WhatsApp';
 import { ProductCreationForm } from '@screens/Home/Options/ProductCreation';
 
@@ -405,6 +406,14 @@ const StackNavigator = () => {
       {/* Gross Profit Report */}
       <Stack.Screen name="GrossProfitReportScreen" component={GrossProfitReportScreen} options={{ headerShown: false }} />
       <Stack.Screen name="PartnerLedgerScreen" component={PartnerLedgerScreen} options={{ headerShown: false }} />
+
+      {/* Credit Management */}
+      <Stack.Screen name="CreditManagementScreen" component={CreditManagementScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="CreditApplicationsScreen" component={CreditApplicationsScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="CreditExceededScreen" component={CreditExceededScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="CreditRiskHistoryScreen" component={CreditRiskHistoryScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="CreditFacilityForm" component={CreditFacilityForm} options={{ headerShown: false }} />
+
       <Stack.Screen name="WhatsAppScreen" component={WhatsAppScreen} options={{ headerShown: false }} />
 
       {/* Inventory Screen */}

@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_order_form_credit_limit" model="ir.ui.view">
+        <field name="name">sale.order.form.credit.limit</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_order_form"/>
+        <field name="arch" type="xml">
+
+            <xpath expr="//header" position="before">
+                
+                <!-- CREDIT HOLD ALERT (Red) - Only when customer is on credit hold -->
+                <div class="alert alert-danger text-center"
+                     role="alert"
+                     style="margin-bottom: 0px; font-size: 16px; font-weight: bold;"
+                     invisible="not customer_on_credit_hold"
+                     groups="sales_team.group_sale_salesman">
+                    <h3 style="margin: 10px 0;">CUSTOMER ON CREDIT HOLD - ORDER CANNOT BE CONFIRMED</h3>
+                    <p style="margin: 10px 0;">
+                        Customer <strong><field name="partner_id" readonly="1" class="oe_inline"/></strong> is <strong>BLOCKED</strong> from making new purchases.
+                    </p>
+                    <p style="margin: 10px 0; font-size: 14px;">
+                        <strong>Risk Score:</strong> <field name="customer_risk_score" readonly="1" class="oe_inline"/>% (HIGH RISK)
+                    </p>
+                    <p style="margin: 10px 0; font-size: 14px;">
+                        This order cannot be confirmed until the customer is released from credit hold by an authorized manager.
+                    </p>
+                </div>
+
+                <!-- PENDING APPROVAL ALERT (Yellow) -->
+                <div class="alert alert-warning"
+                     role="alert"
+                     invisible="credit_approval_status != 'pending' or customer_on_credit_hold"
+                     groups="sales_team.group_sale_salesman">
+                    <strong>Pending Credit Approval</strong>
+                    <p>This order is waiting for credit limit approval.</p>
+                </div>
+
+                <!-- APPROVED ALERT (Green) -->
+                <div class="alert alert-success"
+                     role="alert"
+                     invisible="credit_approval_status != 'approved' or customer_on_credit_hold"
+                     groups="sales_team.group_sale_salesman">
+                    <strong>Credit Approved</strong>
+                    <p>Approved by <field name="credit_approved_by" readonly="1"/> on <field name="credit_approval_date" readonly="1"/></p>
+                </div>
+
+                <!-- REJECTED ALERT (Red) -->
+                <div class="alert alert-danger"
+                     role="alert"
+                     invisible="credit_approval_status != 'rejected' or customer_on_credit_hold"
+                     groups="sales_team.group_sale_salesman">
+                    <strong>Credit Rejected</strong>
+                    <p>This order was rejected due to credit limit exceeded.</p>
+                </div>
+
+                <!-- CREDIT LIMIT EXCEEDED ALERT (Red) - Only when limit is exceeded -->
+                <div class="alert alert-danger"
+                     role="alert"
+                     invisible="not credit_limit_exceeded or credit_approval_status == 'approved' or customer_on_credit_hold"
+                     groups="sales_team.group_sale_salesman">
+                    <strong>Credit Limit Exceeded</strong>
+                    <p>This order exceeds the customer's available credit. Approval required to proceed.</p>
+                    <hr/>
+                    <ul>
+                        <li><strong>Credit Limit:</strong> <field name="customer_credit_limit" widget="monetary" class="oe_inline" readonly="1"/></li>
+                        <li><strong>Current Due:</strong> <field name="customer_total_due" widget="monetary" class="oe_inline" readonly="1"/></li>
+                        <li><strong>Available Credit:</strong> <field name="customer_available_credit" widget="monetary" class="oe_inline" readonly="1"/></li>
+                        <li><strong>Risk Score:</strong> <field name="customer_risk_score" class="oe_inline" readonly="1" options="{'precision': 2}"/>%</li>
+                    </ul>
+                </div>
+
+                <!-- RISK LEVEL ALERTS - Show based on risk level (only when NOT on credit hold and NOT exceeded) -->
+                
+                <!-- LOW RISK (Green) -->
+                <div class="alert alert-success"
+                     role="alert"
+                     invisible="customer_risk_level != 'low' or customer_on_credit_hold or credit_limit_exceeded"
+                     groups="sales_team.group_sale_salesman">
+                    <strong>Low Risk Customer</strong>
+                    <p style="margin: 5px 0;">
+                        <strong>Risk Score:</strong> <field name="customer_risk_score" readonly="1" class="oe_inline" options="{'precision': 2}"/>% | 
+                        <strong>Credit Limit:</strong> <field name="customer_credit_limit" widget="monetary" class="oe_inline" readonly="1"/> | 
+                        <strong>Available:</strong> <field name="customer_available_credit" widget="monetary" class="oe_inline" readonly="1"/>
+                    </p>
+                </div>
+
+                <!-- MEDIUM RISK (Yellow) -->
+                <div class="alert alert-warning"
+                     role="alert"
+                     invisible="customer_risk_level != 'medium' or customer_on_credit_hold or credit_limit_exceeded"
+                     groups="sales_team.group_sale_salesman">
+                    <strong>Medium Risk Customer</strong>
+                    <p style="margin: 5px 0;">
+                        <strong>Risk Score:</strong> <field name="customer_risk_score" readonly="1" class="oe_inline" options="{'precision': 2}"/>% | 
+                        <strong>Credit Limit:</strong> <field name="customer_credit_limit" widget="monetary" class="oe_inline" readonly="1"/> | 
+                        <strong>Available:</strong> <field name="customer_available_credit" widget="monetary" class="oe_inline" readonly="1"/>
+                    </p>
+                </div>
+
+                <!-- HIGH RISK (Red) - But NOT on hold and NOT exceeded -->
+                <div class="alert alert-danger"
+                     role="alert"
+                     invisible="customer_risk_level != 'high' or customer_on_credit_hold or credit_limit_exceeded"
+                     groups="sales_team.group_sale_salesman">
+                    <strong>High Risk Customer</strong>
+                    <p style="margin: 5px 0;">
+                        <strong>Risk Score:</strong> <field name="customer_risk_score" readonly="1" class="oe_inline" options="{'precision': 2}"/>% | 
+                        <strong>Credit Limit:</strong> <field name="customer_credit_limit" widget="monetary" class="oe_inline" readonly="1"/> | 
+                        <strong>Available:</strong> <field name="customer_available_credit" widget="monetary" class="oe_inline" readonly="1"/>
+                    </p>
+                </div>
+
+                <!-- NO CREDIT LIMIT SET (Info/Blue) -->
+                <div class="alert alert-info"
+                     role="alert"
+                     invisible="customer_credit_limit != 0 or customer_on_credit_hold"
+                     groups="sales_team.group_sale_salesman">
+                    <strong>No Credit Limit Set</strong>
+                    <p style="margin: 5px 0;">This customer does not have a credit limit configured. Orders will proceed without credit checks.</p>
+                </div>
+
+            </xpath>
+
+            <xpath expr="//field[@name='partner_id']" position="after">
+                <group string="Customer Credit Information" groups="sales_team.group_sale_salesman">
+                    <group>
+                        <field name="customer_on_credit_hold" invisible="1"/>
+                        <field name="credit_limit_exceeded" invisible="1"/>
+                        <field name="credit_approval_status" invisible="1"/>
+                        <field name="customer_credit_limit" readonly="1" widget="monetary"/>
+                        <field name="customer_total_due" readonly="1" widget="monetary"/>
+                        <field name="customer_available_credit" readonly="1" widget="monetary"/>
+                    </group>
+                    
+                    <group string="Risk Assessment" col="2">
+                        <label for="customer_risk_score" string="Risk Score (%)"/>
+                        <div>
+                            <field name="customer_risk_score" readonly="1" class="oe_inline" nolabel="1" options="{'precision': 2}"/>%
+                        </div>
+                        <field name="customer_risk_level" readonly="1" widget="badge" string="Risk Level" 
+                               decoration-success="customer_risk_level == 'low'"
+                               decoration-warning="customer_risk_level == 'medium'"
+                               decoration-danger="customer_risk_level == 'high'"/>
+                    </group>
+                </group>
+            </xpath>
+
+        </field>
+    </record>
+
+    <record id="view_order_tree_credit_limit" model="ir.ui.view">
+        <field name="name">sale.order.tree.credit.limit</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_order_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//list" position="attributes">
+                <attribute name="decoration-danger">customer_on_credit_hold == True or credit_limit_exceeded == True</attribute>
+                <attribute name="decoration-warning">credit_approval_status == 'pending'</attribute>
+            </xpath>
+            <xpath expr="//field[@name='amount_total']" position="after">
+                <field name="customer_on_credit_hold" column_invisible="1"/>
+                <field name="credit_limit_exceeded" column_invisible="1"/>
+                <field name="credit_approval_status" optional="hide"/>
+                <field name="customer_available_credit" optional="hide" widget="monetary" groups="sales_team.group_sale_salesman"/>
+                <field name="customer_risk_level" optional="hide" widget="badge" groups="sales_team.group_sale_salesman"
+                       decoration-success="customer_risk_level == 'low'"
+                       decoration-warning="customer_risk_level == 'medium'"
+                       decoration-danger="customer_risk_level == 'high'"/>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

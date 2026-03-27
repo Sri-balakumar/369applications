@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="0">
+        <!-- Sale Order Administrator Group -->
+        <record id="group_sale_order_administrator" model="res.groups">
+            <field name="name">Sale Order Administrator</field>
+            <field name="comment">Users who can approve/reject credit limit overrides via email and WhatsApp. These users will receive credit approval request emails and WhatsApp notifications.</field>
+            <field name="implied_ids" eval="[(4, ref('sales_team.group_sale_manager'))]"/>
+        </record>
+    </data>
+</odoo>

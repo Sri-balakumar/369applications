@@ -541,6 +541,8 @@ const LoginScreenOdoo = () => {
               <Button title="Login" onPress={validate} />
             </View>
 
+            <Text style={styles.poweredText}>Powered by 369ai | v1.0.0</Text>
+
           </View>
         </View>
       </RoundedScrollContainer>
@@ -571,6 +573,14 @@ const styles = StyleSheet.create({
     color: COLORS.grey,
     marginLeft: 180,
     marginTop: 15,
+  },
+  poweredText: {
+    color: '#aaa',
+    fontSize: 11,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    textAlign: 'center',
+    marginTop: 16,
+    marginBottom: 10,
   },
 });
 

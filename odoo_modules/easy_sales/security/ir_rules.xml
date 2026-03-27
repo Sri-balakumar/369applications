@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <!-- Easy Sales: restrict records to the user's allowed companies -->
+        <record id="easy_sales_company_rule" model="ir.rule">
+            <field name="name">Easy Sales: Multi-company</field>
+            <field name="model_id" ref="model_easy_sales"/>
+            <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        </record>
+
+        <!-- Easy Sales Payment Method: restrict to the user's allowed companies -->
+        <record id="easy_sales_payment_method_company_rule" model="ir.rule">
+            <field name="name">Easy Sales Payment Method: Multi-company</field>
+            <field name="model_id" ref="model_easy_sales_payment_method"/>
+            <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        </record>
+
+    </data>
+</odoo>

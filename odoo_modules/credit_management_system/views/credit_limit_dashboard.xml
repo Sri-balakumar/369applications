@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ==============================
+         CREDIT LIMIT EXCEEDED DASHBOARD
+         ============================== -->
+    
+    <!-- List View for Credit Exceeded Partners -->
+    <record id="view_credit_exceeded_partners_list" model="ir.ui.view">
+        <field name="name">credit.exceeded.partners.list</field>
+        <field name="model">res.partner</field>
+        <field name="arch" type="xml">
+            <list string="Credit Limit Exceeded Customers" 
+                  decoration-danger="risk_level == 'high'" 
+                  decoration-warning="risk_level == 'medium'"
+                  decoration-info="risk_level == 'low'"
+                  create="false"
+                  edit="false">
+                <field name="name" string="Customer Name"/>
+                <field name="custom_credit_limit" widget="monetary" string="Credit Limit"/>
+                <field name="total_due" widget="monetary" string="Current Due"/>
+                <field name="available_credit" widget="monetary" string="Available Credit" 
+                       decoration-danger="available_credit &lt; 0"/>
+                <field name="risk_score" string="Risk Score %"/>
+                <field name="risk_level" widget="badge" string="Risk Level"
+                       decoration-success="risk_level == 'low'"
+                       decoration-warning="risk_level == 'medium'"
+                       decoration-danger="risk_level == 'high'"/>
+                <field name="currency_id" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Kanban View for Credit Exceeded Partners -->
+    <record id="view_credit_exceeded_partners_kanban" model="ir.ui.view">
+        <field name="name">credit.exceeded.partners.kanban</field>
+        <field name="model">res.partner</field>
+        <field name="arch" type="xml">
+            <kanban string="Credit Limit Exceeded" create="false" edit="false">
+                <field name="name"/>
+                <field name="custom_credit_limit"/>
+                <field name="total_due"/>
+                <field name="available_credit"/>
+                <field name="risk_score"/>
+                <field name="risk_level"/>
+                <field name="currency_id"/>
+                <templates>
+                    <t t-name="kanban-card" class="row g-0">
+                        <aside class="col-3">
+                            <field name="risk_level" widget="badge" 
+                                   decoration-success="risk_level == 'low'"
+                                   decoration-warning="risk_level == 'medium'"
+                                   decoration-danger="risk_level == 'high'"/>
+                        </aside>
+                        <main class="col-9">
+                            <field name="name" class="fw-bold fs-5"/>
+                            <div class="text-muted">
+                                <div>
+                                    <i class="fa fa-money"/> Credit Limit: 
+                                    <field name="custom_credit_limit" widget="monetary"/>
+                                </div>
+                                <div>
+                                    <i class="fa fa-exclamation-triangle"/> Current Due: 
+                                    <field name="total_due" widget="monetary"/>
+                                </div>
+                                <div>
+                                    <i class="fa fa-check-circle"/> Available: 
+                                    <field name="available_credit" widget="monetary"/>
+                                </div>
+                                <div>
+                                    <i class="fa fa-percent"/> Risk Score: 
+                                    <field name="risk_score"/>%
+                                </div>
+                            </div>
+                        </main>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <!-- Search View -->
+    <record id="view_credit_exceeded_partners_search" model="ir.ui.view">
+        <field name="name">credit.exceeded.partners.search</field>
+        <field name="model">res.partner</field>
+        <field name="arch" type="xml">
+            <search string="Credit Exceeded Customers">
+                <field name="name" string="Customer" filter_domain="[('name', 'ilike', self)]"/>
+                <field name="custom_credit_limit" string="Credit Limit"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action for Credit Exceeded Dashboard -->
+    <record id="action_credit_exceeded_dashboard" model="ir.actions.act_window">
+        <field name="name">Credit Limit Exceeded</field>
+        <field name="res_model">res.partner</field>
+        <field name="view_mode">list,kanban,form</field>
+        <field name="domain">[('custom_credit_limit', '>', 0)]</field>
+        <field name="context">{}</field>
+        <field name="search_view_id" ref="view_credit_exceeded_partners_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                ✅ Great! No customers with credit limits set
+            </p>
+            <p>
+                This dashboard shows customers and their credit status.
+                <br/>
+                <ul>
+                    <li><strong>Low Risk:</strong> 0-30% credit utilization</li>
+                    <li><strong>Medium Risk:</strong> 31-70% credit utilization</li>
+                    <li><strong>High Risk:</strong> 71%+ credit utilization</li>
+                </ul>
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu Item under Sales -->
+    <menuitem id="menu_credit_exceeded_dashboard"
+              name="Credit Exceeded Dashboard"
+              parent="sale.sale_menu_root"
+              action="action_credit_exceeded_dashboard"
+              sequence="10"
+              groups="sales_team.group_sale_salesman"/>
+
+</odoo>

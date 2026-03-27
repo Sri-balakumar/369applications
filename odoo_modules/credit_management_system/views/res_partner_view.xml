@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ==============================
+         1. PARTNER FORM VIEW
+         ============================== -->
+    <record id="view_partner_form_credit_limit" model="ir.ui.view">
+        <field name="name">res.partner.form.credit.limit</field>
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_form"/>
+        <field name="arch" type="xml">
+
+            <!-- Add Credit Facility Setup Button in the status bar area -->
+            <xpath expr="//form/sheet" position="before">
+                <header>
+                    <button name="action_setup_credit_facility" 
+                            string="Setup Credit Facility" 
+                            type="object" 
+                            class="btn-primary"
+                            invisible="not (customer_rank > 0) or parent_id"
+                            groups="sales_team.group_sale_salesman"/>
+                </header>
+            </xpath>
+
+            <!-- Add buttons in the button box -->
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_view_credit_facilities"
+                        type="object"
+                        class="oe_stat_button"
+                        icon="fa-file-text-o"
+                        invisible="credit_facility_count == 0">
+                    <field name="credit_facility_count" widget="statinfo" string="Credit Applications"/>
+                </button>
+                <button name="action_view_risk_history"
+                        type="object"
+                        class="oe_stat_button"
+                        icon="fa-history"
+                        invisible="risk_history_count == 0">
+                    <field name="risk_history_count" widget="statinfo" string="Risk History"/>
+                </button>
+            </xpath>
+
+            <!-- Add Credit Hold Banner at the top -->
+            <xpath expr="//sheet" position="before">
+                <div class="alert alert-danger text-center" 
+                     role="alert" 
+                     style="margin-bottom: 0px; font-size: 16px; font-weight: bold;"
+                     invisible="not is_credit_hold">
+                    <h3 style="margin: 10px 0;">CUSTOMER ON CREDIT HOLD - BLOCKED FROM NEW PURCHASES</h3>
+                    <p style="margin: 10px 0;">
+                        This customer is <strong>BLOCKED</strong> and cannot create or confirm any sales orders.
+                    </p>
+                    <div style="margin: 15px 0;">
+                        <button name="action_release_credit_hold" 
+                                string="Release Credit Hold" 
+                                type="object" 
+                                class="btn btn-success btn-lg"
+                                groups="sales_team.group_sale_manager"/>
+                    </div>
+                </div>
+            </xpath>
+
+            <!-- Insert inside Sales & Purchase page -->
+            <xpath expr="//page[@name='sales_purchases']" position="inside">
+
+                <group string="Credit Information">
+                    <field name="custom_credit_limit"/>
+                    <field name="available_credit" readonly="1"/>
+                    <field name="total_due" readonly="1"/>
+                    <field name="credit_facility_asked" invisible="1"/>
+                    
+                    <group string="Risk Assessment">
+                        <field name="risk_score" widget="float" string="Risk Score %" options="{'precision': 2}"/>
+                        <field name="risk_level" widget="selection_badge" 
+                               options="{'classes': {'low': 'bg-success', 'medium': 'bg-warning', 'high': 'bg-danger'}}"/>
+                    </group>
+                </group>
+
+                <!-- Credit Hold Information -->
+                <group string="Credit Hold Status" invisible="not is_credit_hold">
+                    <field name="is_credit_hold" readonly="1" widget="boolean"/>
+                    <field name="credit_hold_date" readonly="1"/>
+                    <field name="credit_hold_reason" readonly="1" widget="text" nolabel="1" colspan="2"/>
+                </group>
+
+                <!-- Trade License Information -->
+                <group string="Trade License Information" 
+                       invisible="not trade_license_no">
+                    <group>
+                        <field name="trade_license_no" readonly="1"/>
+                        <field name="license_issue_date" readonly="1"/>
+                        <field name="license_expiry_date" readonly="1"/>
+                    </group>
+                    <group/>
+                </group>
+
+                <!-- Risk Score History (inline) -->
+                <group string="Risk Score History" invisible="risk_history_count == 0">
+                    <field name="risk_history_ids" nolabel="1" colspan="2" readonly="1">
+                        <list>
+                            <field name="change_date"/>
+                            <field name="old_risk_level" widget="badge"
+                                   decoration-success="old_risk_level == 'low'"
+                                   decoration-warning="old_risk_level == 'medium'"
+                                   decoration-danger="old_risk_level == 'high'"/>
+                            <field name="new_risk_level" widget="badge"
+                                   decoration-success="new_risk_level == 'low'"
+                                   decoration-warning="new_risk_level == 'medium'"
+                                   decoration-danger="new_risk_level == 'high'"/>
+                            <field name="old_risk_score"/>
+                            <field name="new_risk_score"/>
+                            <field name="reason"/>
+                        </list>
+                    </field>
+                </group>
+
+            </xpath>
+
+        </field>
+    </record>
+
+
+    <!-- ==============================
+         2. PARTNER LIST VIEW
+         ============================== -->
+    <record id="view_partner_tree_credit_limit" model="ir.ui.view">
+        <field name="name">res.partner.tree.credit.limit</field>
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_tree"/>
+        <field name="arch" type="xml">
+
+            <xpath expr="//list" position="attributes">
+                <attribute name="decoration-danger">is_credit_hold == True</attribute>
+                <attribute name="decoration-warning">risk_level == 'high' and not is_credit_hold</attribute>
+            </xpath>
+
+            <xpath expr="//list" position="inside">
+                <field name="is_credit_hold" optional="show" widget="boolean" string="On Hold"/>
+                <field name="custom_credit_limit" optional="hide"/>
+                <field name="available_credit" optional="hide"/>
+                <field name="total_due" optional="hide"/>
+                <field name="risk_score" optional="hide" widget="float" string="Risk Score %" options="{'precision': 2}"/>
+                <field name="risk_level" optional="show" widget="badge" string="Risk Score"
+                       decoration-success="risk_level == 'low'"
+                       decoration-warning="risk_level == 'medium'"
+                       decoration-danger="risk_level == 'high'"/>
+                <field name="trade_license_no" optional="hide"/>
+            </xpath>
+
+        </field>
+    </record>
+
+
+    <!-- ==============================
+         3. PARTNER KANBAN VIEW - Risk Badge
+         ============================== -->
+    <record id="view_partner_kanban_credit_badge" model="ir.ui.view">
+        <field name="name">res.partner.kanban.credit.badge</field>
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.res_partner_kanban_view"/>
+        <field name="arch" type="xml">
+
+            <!-- Add fields to kanban for access -->
+            <field name="email" position="after">
+                <field name="risk_level"/>
+                <field name="is_credit_hold"/>
+                <field name="custom_credit_limit"/>
+            </field>
+
+            <!-- Add risk badge after email in kanban card -->
+            <xpath expr="//field[@name='email']/.." position="inside">
+                <span t-if="record.risk_level.raw_value == 'low' and record.custom_credit_limit.raw_value > 0" 
+                      class="badge rounded-pill text-bg-success">Low Risk</span>
+                <span t-if="record.risk_level.raw_value == 'medium'" 
+                      class="badge rounded-pill text-bg-warning">Medium Risk</span>
+                <span t-if="record.risk_level.raw_value == 'high'" 
+                      class="badge rounded-pill text-bg-danger">High Risk</span>
+                <span t-if="record.is_credit_hold.raw_value" 
+                      class="badge rounded-pill text-bg-dark ms-1">On Hold</span>
+            </xpath>
+
+        </field>
+    </record>
+
+</odoo>

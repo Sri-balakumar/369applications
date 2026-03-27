@@ -153,7 +153,7 @@ const HomeScreen = ({ navigation }) => {
 
         {/* Version above tab bar */}
         <View style={styles.versionContainer}>
-          <Text style={styles.versionText}>Version 1.0.0</Text>
+          <Text style={styles.poweredText}>Powered by 369ai | v1.0.0</Text>
         </View>
 
         <OverlayLoader visible={detailLoading} />
@@ -192,8 +192,8 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: 'center',
   },
-  versionText: {
-    color: '#bbb',
+  poweredText: {
+    color: '#aaa',
     fontSize: 11,
     fontFamily: FONT_FAMILY.urbanistMedium,
   },

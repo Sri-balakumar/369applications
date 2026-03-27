@@ -1,0 +1,346 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Credit Facility List View -->
+    <record id="view_credit_facility_tree" model="ir.ui.view">
+        <field name="name">credit.facility.tree</field>
+        <field name="model">credit.facility</field>
+        <field name="arch" type="xml">
+            <list string="Credit Facility Applications" 
+                  decoration-success="state == 'approved'" 
+                  decoration-danger="state == 'rejected'" 
+                  decoration-info="state == 'submitted'">
+                <field name="partner_id"/>
+                <field name="company_name"/>
+                <field name="trade_license_no"/>
+                <field name="credit_limit" widget="monetary"/>
+                <field name="currency_id" invisible="1"/>
+                <field name="submission_date"/>
+                <field name="state" widget="badge" 
+                       decoration-success="state == 'approved'" 
+                       decoration-danger="state == 'rejected'" 
+                       decoration-info="state == 'submitted'"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Credit Facility Form View -->
+    <record id="view_credit_facility_form" model="ir.ui.view">
+        <field name="name">credit.facility.form</field>
+        <field name="model">credit.facility</field>
+        <field name="arch" type="xml">
+            <form string="Credit Facility Application">
+                <header>
+                    <button name="action_submit" string="Submit for Approval" type="object"
+                            class="btn-primary"
+                            invisible="state != 'draft'"
+                            groups="sales_team.group_sale_salesman"/>
+                    <button name="action_approve" string="Approve" type="object"
+                            class="btn-primary"
+                            invisible="state != 'submitted'"
+                            groups="sales_team.group_sale_manager"/>
+                    <button name="action_reject" string="Reject" type="object"
+                            class="btn-danger"
+                            invisible="state != 'submitted'"
+                            groups="sales_team.group_sale_manager"/>
+                    <button name="action_reset_to_draft" string="Reset to Draft" type="object"
+                            class="btn-secondary"
+                            invisible="state not in ('approved', 'rejected')"
+                            groups="sales_team.group_sale_manager"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved,rejected"/>
+                </header>
+                
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="toggle_active" type="object" class="oe_stat_button" icon="fa-archive">
+                            <field name="active" widget="boolean_button" options="{'terminology': 'archive'}"/>
+                        </button>
+                    </div>
+
+                    <!-- Header Banner -->
+                    <div class="alert alert-info text-center" role="alert" style="margin-bottom: 20px;">
+                        <h3 style="margin: 10px 0;">💳 Credit Facility Application</h3>
+                        <p style="margin: 10px 0; font-size: 14px;">
+                            Complete credit facility details for customer
+                        </p>
+                    </div>
+
+                    <group>
+                        <group>
+                            <field name="partner_id" options="{'no_create': True}"/>
+                            <field name="use_credit_facility"/>
+                            <field name="submission_date"/>
+                        </group>
+                        <group>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="credit_limit" widget="monetary"/>
+                            <field name="approved_by" invisible="state not in ('approved', 'rejected')" readonly="1"/>
+                            <field name="approval_date" invisible="state not in ('approved', 'rejected')" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <!-- Rejection Reason (visible only when rejecting or rejected) -->
+                    <group string="Rejection Reason" invisible="state != 'rejected'">
+                        <field name="rejection_reason" nolabel="1" colspan="2" placeholder="Enter reason for rejection..."/>
+                    </group>
+                    <!-- Rejection reason input when state is submitted (for manager to fill before rejecting) -->
+                    <group string="Rejection Reason (fill before rejecting)" invisible="state != 'submitted'" groups="sales_team.group_sale_manager">
+                        <field name="rejection_reason" nolabel="1" colspan="2" placeholder="Enter reason if you want to reject..."/>
+                    </group>
+
+                    <notebook>
+                        <!-- TAB 1: COMPANY INFORMATION -->
+                        <page string="Company Information" name="company_info">
+                            <group>
+                                <group>
+                                    <field name="company_name"/>
+                                    <field name="company_address"/>
+                                    <field name="fax"/>
+                                    <field name="phone_number"/>
+                                    <field name="trade_license_no"/>
+                                    <field name="po_box"/>
+                                </group>
+                                <group>
+                                    <field name="email"/>
+                                    <field name="license_issue_date"/>
+                                    <field name="license_expiry_date"/>
+                                    <field name="credit_issue_date"/>
+                                    <field name="credit_expiry_date"/>
+                                </group>
+                            </group>
+
+                            <separator string="Branch Details"/>
+                            <group>
+                                <group>
+                                    <field name="branch_mobile_no"/>
+                                    <field name="branch_tele"/>
+                                    <field name="branch_fax"/>
+                                </group>
+                                <group/>
+                            </group>
+                        </page>
+
+                        <!-- TAB 2: BUSINESS &amp; PROPRIETORS -->
+                        <page string="Business &amp; Proprietors" name="business_info">
+                            <group>
+                                <group>
+                                    <field name="local_sponsor"/>
+                                    <field name="occupation"/>
+                                </group>
+                                <group/>
+                            </group>
+
+                            <separator string="Proprietors/Stakeholders/Shareholders"/>
+                            <group>
+                                <group string="Proprietor 1">
+                                    <field name="proprietor_name_1"/>
+                                    <field name="proprietor_nationality_1"/>
+                                    <field name="proprietor_holding_1"/>
+                                </group>
+                                <group string="Proprietor 2">
+                                    <field name="proprietor_name_2"/>
+                                    <field name="proprietor_nationality_2"/>
+                                    <field name="proprietor_holding_2"/>
+                                </group>
+                            </group>
+                            <group>
+                                <group string="Proprietor 3">
+                                    <field name="proprietor_name_3"/>
+                                    <field name="proprietor_nationality_3"/>
+                                    <field name="proprietor_holding_3"/>
+                                </group>
+                                <group/>
+                            </group>
+                        </page>
+
+                        <!-- TAB 3: SIGNATORIES -->
+                        <page string="Authorized Signatories" name="signatories">
+                            <group>
+                                <group string="Signatory 1">
+                                    <field name="signatory_name_1"/>
+                                    <field name="signatory_nationality_1"/>
+                                    <field name="signatory_signature_1" widget="image" options="{'size': [150, 150]}"/>
+                                </group>
+                                <group string="Signatory 2">
+                                    <field name="signatory_name_2"/>
+                                    <field name="signatory_nationality_2"/>
+                                    <field name="signatory_signature_2" widget="image" options="{'size': [150, 150]}"/>
+                                </group>
+                            </group>
+                            <group>
+                                <group string="Signatory 3">
+                                    <field name="signatory_name_3"/>
+                                    <field name="signatory_nationality_3"/>
+                                    <field name="signatory_signature_3" widget="image" options="{'size': [150, 150]}"/>
+                                </group>
+                                <group/>
+                            </group>
+                        </page>
+
+                        <!-- TAB 4: CONTACTS -->
+                        <page string="Contacts" name="contacts">
+                            <separator string="Purchasing Contacts"/>
+                            <group>
+                                <group string="Contact 1">
+                                    <field name="purchasing_name_1"/>
+                                    <field name="purchasing_title_1"/>
+                                    <field name="purchasing_tele_1"/>
+                                    <field name="purchasing_fax_1"/>
+                                    <field name="purchasing_email_1"/>
+                                    <field name="purchasing_signature_1" widget="image" options="{'size': [150, 150]}"/>
+                                </group>
+                                <group string="Contact 2">
+                                    <field name="purchasing_name_2"/>
+                                    <field name="purchasing_title_2"/>
+                                    <field name="purchasing_tele_2"/>
+                                    <field name="purchasing_fax_2"/>
+                                    <field name="purchasing_email_2"/>
+                                    <field name="purchasing_signature_2" widget="image" options="{'size': [150, 150]}"/>
+                                </group>
+                            </group>
+
+                            <separator string="Accounts Contact"/>
+                            <group>
+                                <group>
+                                    <field name="accounts_name"/>
+                                    <field name="accounts_tele"/>
+                                    <field name="accounts_fax"/>
+                                    <field name="accounts_email"/>
+                                </group>
+                                <group>
+                                    <field name="date_business_started"/>
+                                    <field name="any_other_business"/>
+                                    <field name="business_description"/>
+                                    <field name="accounts_signature" widget="image" options="{'size': [150, 150]}"/>
+                                </group>
+                            </group>
+                        </page>
+
+                        <!-- TAB 5: FINANCIAL INFO -->
+                        <page string="Financial Information" name="financial">
+                            <separator string="Present Yearly Sales Volume"/>
+                            <group>
+                                <group>
+                                    <field name="sales_volume" widget="monetary"/>
+                                    <field name="sales_days"/>
+                                </group>
+                                <group/>
+                            </group>
+
+                            <separator string="Bank Details"/>
+                            <group>
+                                <group string="Bank 1">
+                                    <field name="bank_name_1"/>
+                                    <field name="bank_account_1"/>
+                                    <field name="bank_branch_1"/>
+                                    <field name="bank_country_1"/>
+                                    <field name="bank_tele_1"/>
+                                    <field name="bank_fax_1"/>
+                                </group>
+                                <group string="Bank 2">
+                                    <field name="bank_name_2"/>
+                                    <field name="bank_account_2"/>
+                                    <field name="bank_branch_2"/>
+                                    <field name="bank_country_2"/>
+                                    <field name="bank_tele_2"/>
+                                    <field name="bank_fax_2"/>
+                                </group>
+                            </group>
+                        </page>
+
+                        <!-- TAB 6: DOCUMENTS -->
+                        <page string="Uploaded Documents" name="documents">
+                            <group>
+                                <group>
+                                    <field name="trade_license_file" widget="image" options="{'size': [200, 200]}"/>
+                                    <field name="tax_registration_file" widget="image" options="{'size': [200, 200]}"/>
+                                    <field name="nationality_id_file" widget="image" options="{'size': [200, 200]}"/>
+                                </group>
+                                <group>
+                                    <field name="passport_copy_file" widget="image" options="{'size': [200, 200]}"/>
+                                    <field name="credit_application_file" widget="image" options="{'size': [200, 200]}"/>
+                                </group>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="activity_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <!-- Credit Facility Action -->
+    <record id="action_credit_facility" model="ir.actions.act_window">
+        <field name="name">Credit Facility Applications</field>
+        <field name="res_model">credit.facility</field>
+        <field name="view_mode">list,form</field>
+        <field name="path">credit-facility</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first Credit Facility Application
+            </p>
+            <p>
+                Credit facility applications submitted by customers will appear here.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu Item -->
+    <menuitem id="menu_credit_facility_root"
+              name="Credit Facilities"
+              parent="sale.sale_menu_root"
+              sequence="50"/>
+
+    <menuitem id="menu_credit_facility"
+              name="All Applications"
+              parent="menu_credit_facility_root"
+              action="action_credit_facility"
+              sequence="10"/>
+
+    <menuitem id="menu_risk_history"
+              name="Risk History"
+              parent="menu_credit_facility_root"
+              action="action_risk_score_history"
+              sequence="40"/>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- Credit Management menus mirrored under the Easy Sales app           -->
+    <!-- No logic changed — menu entries only.                               -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <menuitem id="easy_sales_credit_menu_root"
+              name="Credit Management"
+              parent="easy_sales.easy_sales_menu_root"
+              sequence="50"/>
+
+    <menuitem id="easy_sales_credit_menu_applications"
+              name="All Applications"
+              parent="easy_sales_credit_menu_root"
+              action="action_credit_facility"
+              sequence="10"/>
+
+    <menuitem id="easy_sales_credit_menu_dashboard"
+              name="Credit Exceeded Dashboard"
+              parent="easy_sales_credit_menu_root"
+              action="action_credit_exceeded_dashboard"
+              sequence="20"
+              groups="sales_team.group_sale_salesman"/>
+
+    <menuitem id="easy_sales_credit_menu_risk_history"
+              name="Risk History"
+              parent="easy_sales_credit_menu_root"
+              action="action_risk_score_history"
+              sequence="40"/>
+
+    <menuitem id="easy_sales_credit_menu_whatsapp"
+              name="WhatsApp Integration"
+              parent="easy_sales.easy_sales_menu_config"
+              action="action_whatsapp_integration"
+              sequence="50"/>
+
+</odoo>

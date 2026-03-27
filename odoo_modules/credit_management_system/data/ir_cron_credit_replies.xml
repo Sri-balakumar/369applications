@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Cron: Process incoming WhatsApp credit approval replies -->
+        <record id="ir_cron_credit_wa_replies" model="ir.cron">
+            <field name="name">Credit: Process WhatsApp Approval Replies</field>
+            <field name="model_id" ref="model_whatsapp_integration"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_process_credit_replies()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active">True</field>
+            <field name="user_id" ref="base.user_root"/>
+        </record>
+
+        <!-- Cron: Check credit facility and trade license expiry (daily) -->
+        <record id="ir_cron_credit_expiry_check" model="ir.cron">
+            <field name="name">Credit: Check Credit &amp; License Expiry</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_check_credit_expiry()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active">True</field>
+            <field name="user_id" ref="base.user_root"/>
+        </record>
+
+        <!-- Cron: Daily Credit Limit Check (90% warning) -->
+        <record id="ir_cron_daily_credit_limit_check" model="ir.cron">
+            <field name="name">Credit: Daily Credit Limit Check (90% Warning)</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_daily_credit_limit_check()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active">True</field>
+            <field name="user_id" ref="base.user_root"/>
+        </record>
+
+        <!-- Sequence for Credit Facility Applications -->
+        <record id="seq_credit_facility" model="ir.sequence">
+            <field name="name">Credit Facility Application</field>
+            <field name="code">credit.facility</field>
+            <field name="prefix">CF-</field>
+            <field name="padding">5</field>
+        </record>
+    </data>
+</odoo>
