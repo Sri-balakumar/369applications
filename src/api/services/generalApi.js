@@ -10451,9 +10451,12 @@ export const createCreditFacilityOdoo = async (data = {}) => {
   try {
     const { headers, baseUrl } = await authenticateOdoo();
     const vals = {};
+    // Header fields
     if (data.partner_id) vals.partner_id = data.partner_id;
     if (data.credit_limit) vals.credit_limit = parseFloat(data.credit_limit) || 0;
     if (data.use_credit_facility) vals.use_credit_facility = data.use_credit_facility;
+
+    // Company Information
     if (data.company_name) vals.company_name = data.company_name;
     if (data.company_address) vals.company_address = data.company_address;
     if (data.phone_number) vals.phone_number = data.phone_number;
@@ -10465,6 +10468,82 @@ export const createCreditFacilityOdoo = async (data = {}) => {
     if (data.license_expiry_date) vals.license_expiry_date = data.license_expiry_date;
     if (data.credit_issue_date) vals.credit_issue_date = data.credit_issue_date;
     if (data.credit_expiry_date) vals.credit_expiry_date = data.credit_expiry_date;
+
+    // Branch Details
+    if (data.branch_mobile_no) vals.branch_mobile_no = data.branch_mobile_no;
+    if (data.branch_tele) vals.branch_tele = data.branch_tele;
+    if (data.branch_fax) vals.branch_fax = data.branch_fax;
+
+    // Business & Proprietors
+    if (data.local_sponsor) vals.local_sponsor = data.local_sponsor;
+    if (data.occupation) vals.occupation = data.occupation;
+    if (data.proprietor_name_1) vals.proprietor_name_1 = data.proprietor_name_1;
+    if (data.proprietor_nationality_1) vals.proprietor_nationality_1 = data.proprietor_nationality_1;
+    if (data.proprietor_holding_1) vals.proprietor_holding_1 = data.proprietor_holding_1;
+    if (data.proprietor_name_2) vals.proprietor_name_2 = data.proprietor_name_2;
+    if (data.proprietor_nationality_2) vals.proprietor_nationality_2 = data.proprietor_nationality_2;
+    if (data.proprietor_holding_2) vals.proprietor_holding_2 = data.proprietor_holding_2;
+    if (data.proprietor_name_3) vals.proprietor_name_3 = data.proprietor_name_3;
+    if (data.proprietor_nationality_3) vals.proprietor_nationality_3 = data.proprietor_nationality_3;
+    if (data.proprietor_holding_3) vals.proprietor_holding_3 = data.proprietor_holding_3;
+
+    // Authorized Signatories
+    if (data.signatory_name_1) vals.signatory_name_1 = data.signatory_name_1;
+    if (data.signatory_nationality_1) vals.signatory_nationality_1 = data.signatory_nationality_1;
+    if (data.signatory_signature_1) vals.signatory_signature_1 = data.signatory_signature_1;
+    if (data.signatory_name_2) vals.signatory_name_2 = data.signatory_name_2;
+    if (data.signatory_nationality_2) vals.signatory_nationality_2 = data.signatory_nationality_2;
+    if (data.signatory_signature_2) vals.signatory_signature_2 = data.signatory_signature_2;
+    if (data.signatory_name_3) vals.signatory_name_3 = data.signatory_name_3;
+    if (data.signatory_nationality_3) vals.signatory_nationality_3 = data.signatory_nationality_3;
+    if (data.signatory_signature_3) vals.signatory_signature_3 = data.signatory_signature_3;
+
+    // Purchasing Contacts
+    if (data.purchasing_name_1) vals.purchasing_name_1 = data.purchasing_name_1;
+    if (data.purchasing_title_1) vals.purchasing_title_1 = data.purchasing_title_1;
+    if (data.purchasing_tele_1) vals.purchasing_tele_1 = data.purchasing_tele_1;
+    if (data.purchasing_fax_1) vals.purchasing_fax_1 = data.purchasing_fax_1;
+    if (data.purchasing_email_1) vals.purchasing_email_1 = data.purchasing_email_1;
+    if (data.purchasing_signature_1) vals.purchasing_signature_1 = data.purchasing_signature_1;
+    if (data.purchasing_name_2) vals.purchasing_name_2 = data.purchasing_name_2;
+    if (data.purchasing_title_2) vals.purchasing_title_2 = data.purchasing_title_2;
+    if (data.purchasing_tele_2) vals.purchasing_tele_2 = data.purchasing_tele_2;
+    if (data.purchasing_fax_2) vals.purchasing_fax_2 = data.purchasing_fax_2;
+    if (data.purchasing_email_2) vals.purchasing_email_2 = data.purchasing_email_2;
+    if (data.purchasing_signature_2) vals.purchasing_signature_2 = data.purchasing_signature_2;
+
+    // Accounts Contact
+    if (data.accounts_name) vals.accounts_name = data.accounts_name;
+    if (data.accounts_tele) vals.accounts_tele = data.accounts_tele;
+    if (data.accounts_fax) vals.accounts_fax = data.accounts_fax;
+    if (data.accounts_email) vals.accounts_email = data.accounts_email;
+    if (data.accounts_signature) vals.accounts_signature = data.accounts_signature;
+    if (data.date_business_started) vals.date_business_started = data.date_business_started;
+    if (data.any_other_business) vals.any_other_business = data.any_other_business;
+    if (data.business_description) vals.business_description = data.business_description;
+
+    // Financial Information
+    if (data.sales_volume) vals.sales_volume = data.sales_volume;
+    if (data.sales_days) vals.sales_days = data.sales_days;
+    if (data.bank_name_1) vals.bank_name_1 = data.bank_name_1;
+    if (data.bank_account_1) vals.bank_account_1 = data.bank_account_1;
+    if (data.bank_branch_1) vals.bank_branch_1 = data.bank_branch_1;
+    if (data.bank_country_1) vals.bank_country_1 = data.bank_country_1;
+    if (data.bank_tele_1) vals.bank_tele_1 = data.bank_tele_1;
+    if (data.bank_fax_1) vals.bank_fax_1 = data.bank_fax_1;
+    if (data.bank_name_2) vals.bank_name_2 = data.bank_name_2;
+    if (data.bank_account_2) vals.bank_account_2 = data.bank_account_2;
+    if (data.bank_branch_2) vals.bank_branch_2 = data.bank_branch_2;
+    if (data.bank_country_2) vals.bank_country_2 = data.bank_country_2;
+    if (data.bank_tele_2) vals.bank_tele_2 = data.bank_tele_2;
+    if (data.bank_fax_2) vals.bank_fax_2 = data.bank_fax_2;
+
+    // Document Uploads (base64)
+    if (data.trade_license_file) vals.trade_license_file = data.trade_license_file;
+    if (data.tax_registration_file) vals.tax_registration_file = data.tax_registration_file;
+    if (data.nationality_id_file) vals.nationality_id_file = data.nationality_id_file;
+    if (data.passport_copy_file) vals.passport_copy_file = data.passport_copy_file;
+    if (data.credit_application_file) vals.credit_application_file = data.credit_application_file;
 
     const response = await axios.post(
       `${baseUrl}/web/dataset/call_kw`,
@@ -10478,7 +10557,7 @@ export const createCreditFacilityOdoo = async (data = {}) => {
           kwargs: {},
         },
       },
-      { headers, withCredentials: true, timeout: 15000 }
+      { headers, withCredentials: true, timeout: 30000 }
     );
     if (response.data.error) {
       throw new Error(response.data.error.data?.message || 'Failed to create credit facility');

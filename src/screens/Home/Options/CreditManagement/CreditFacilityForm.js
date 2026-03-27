@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import React, { useState, useEffect, useReducer, useCallback } from 'react';
+import { View, StyleSheet, Platform, ScrollView, TouchableOpacity } from 'react-native';
 import Text from '@components/Text';
-import { SafeAreaView, RoundedScrollContainer } from '@components/containers';
+import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { TextInput as FormInput } from '@components/common/TextInput';
 import { LoadingButton } from '@components/common/Button';
@@ -14,43 +14,132 @@ import Toast from 'react-native-toast-message';
 import { OverlayLoader } from '@components/Loader';
 import { createCreditFacilityOdoo, submitCreditFacilityOdoo } from '@api/services/generalApi';
 
+import {
+  CompanyInfoTab,
+  BusinessProprietorsTab,
+  AuthorizedSignatoriesTab,
+  ContactsTab,
+  FinancialInfoTab,
+  UploadedDocumentsTab,
+} from './CreditFacilityFormTabs';
+
 const USE_CREDIT_OPTIONS = [
   { id: 'yes', label: 'Yes' },
   { id: 'no', label: 'No' },
 ];
 
+// --- Reducer ---
+const initialState = {
+  // Header
+  partner: null,
+  creditLimit: '',
+  useCreditFacility: { id: 'yes', label: 'Yes' },
+
+  // Tab 1: Company Info
+  companyName: '', companyAddress: '', fax: '', phoneNumber: '',
+  tradeLicenseNo: '', poBox: '', email: '',
+  licenseIssueDate: null, licenseExpiryDate: null,
+  creditIssueDate: null, creditExpiryDate: null,
+  branchMobileNo: '', branchTelephone: '', branchFax: '',
+
+  // Tab 2: Business & Proprietors
+  localSponsor: '', occupation: '',
+  proprietors: [
+    { name: '', nationality: '', holdingPercent: '' },
+    { name: '', nationality: '', holdingPercent: '' },
+    { name: '', nationality: '', holdingPercent: '' },
+  ],
+
+  // Tab 3: Authorized Signatories
+  signatories: [
+    { name: '', nationality: '', signatureBase64: null },
+    { name: '', nationality: '', signatureBase64: null },
+    { name: '', nationality: '', signatureBase64: null },
+  ],
+
+  // Tab 4: Contacts
+  purchasingContacts: [
+    { name: '', title: '', telephone: '', fax: '', email: '', signatureBase64: null },
+    { name: '', title: '', telephone: '', fax: '', email: '', signatureBase64: null },
+  ],
+  accountsContact: {
+    name: '', telephone: '', fax: '', email: '',
+    dateBusinessStarted: null, anyOtherBusiness: { id: 'no', label: 'No' },
+    businessDescription: '', signatureBase64: null,
+  },
+
+  // Tab 5: Financial Information
+  yearlySalesVolume: '', salesDays: '',
+  banks: [
+    { bankName: '', account: '', branch: '', country: '', telephone: '', fax: '' },
+    { bankName: '', account: '', branch: '', country: '', telephone: '', fax: '' },
+  ],
+
+  // Tab 6: Uploaded Documents
+  tradeLicenseFile: null, passportCopyFile: null,
+  taxRegistrationFile: null, creditApplicationFile: null,
+  nationalityIdFile: null,
+};
+
+function formReducer(state, action) {
+  switch (action.type) {
+    case 'SET_FIELD':
+      return { ...state, [action.field]: action.value };
+    case 'SET_PROPRIETOR': {
+      const proprietors = [...state.proprietors];
+      proprietors[action.index] = { ...proprietors[action.index], [action.field]: action.value };
+      return { ...state, proprietors };
+    }
+    case 'SET_SIGNATORY': {
+      const signatories = [...state.signatories];
+      signatories[action.index] = { ...signatories[action.index], [action.field]: action.value };
+      return { ...state, signatories };
+    }
+    case 'SET_PURCHASING_CONTACT': {
+      const purchasingContacts = [...state.purchasingContacts];
+      purchasingContacts[action.index] = { ...purchasingContacts[action.index], [action.field]: action.value };
+      return { ...state, purchasingContacts };
+    }
+    case 'SET_ACCOUNTS_CONTACT':
+      return { ...state, accountsContact: { ...state.accountsContact, [action.field]: action.value } };
+    case 'SET_BANK': {
+      const banks = [...state.banks];
+      banks[action.index] = { ...banks[action.index], [action.field]: action.value };
+      return { ...state, banks };
+    }
+    default:
+      return state;
+  }
+}
+
 const CreditFacilityForm = ({ navigation, route }) => {
   const currency = useCurrencyStore((state) => state.currency) || '';
 
-  // --- Form State ---
-  const [partner, setPartner] = useState(route?.params?.partner || null);
-  const [useCreditFacility, setUseCreditFacility] = useState({ id: 'yes', label: 'Yes' });
-  const [creditLimit, setCreditLimit] = useState('');
-  const [companyName, setCompanyName] = useState('');
-  const [companyAddress, setCompanyAddress] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [email, setEmail] = useState('');
-  const [fax, setFax] = useState('');
-  const [tradeLicenseNo, setTradeLicenseNo] = useState('');
-  const [poBox, setPoBox] = useState('');
-  const [licenseIssueDate, setLicenseIssueDate] = useState(null);
-  const [licenseExpiryDate, setLicenseExpiryDate] = useState(null);
-  const [creditIssueDate, setCreditIssueDate] = useState(null);
-  const [creditExpiryDate, setCreditExpiryDate] = useState(null);
-  const [errors, setErrors] = useState({});
+  const [formData, dispatch] = useReducer(formReducer, {
+    ...initialState,
+    partner: route?.params?.partner || null,
+  });
 
-  // --- Dropdown & Date Picker State ---
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDropdownVisible, setIsDropdownVisible] = useState(false);
   const [activeDateField, setActiveDateField] = useState(null);
   const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
 
-  // --- Loading ---
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Tab state
+  const [tabIndex, setTabIndex] = useState(0);
+  const [routes] = useState([
+    { key: 'companyInfo', title: 'Company Info' },
+    { key: 'business', title: 'Business & Proprietors' },
+    { key: 'signatories', title: 'Auth. Signatories' },
+    { key: 'contacts', title: 'Contacts' },
+    { key: 'financial', title: 'Financial Info' },
+    { key: 'documents', title: 'Documents' },
+  ]);
 
-  // --- Update partner from route params ---
   useEffect(() => {
     if (route?.params?.partner) {
-      setPartner(route.params.partner);
+      dispatch({ type: 'SET_FIELD', field: 'partner', value: route.params.partner });
       clearError('partner');
     }
   }, [route?.params?.partner]);
@@ -59,48 +148,75 @@ const CreditFacilityForm = ({ navigation, route }) => {
     setErrors((prev) => ({ ...prev, [field]: null }));
   };
 
+  // --- Helper callbacks ---
+  const updateField = useCallback((field, value) => {
+    dispatch({ type: 'SET_FIELD', field, value });
+  }, []);
+
+  const updateProprietor = useCallback((index, field, value) => {
+    dispatch({ type: 'SET_PROPRIETOR', index, field, value });
+  }, []);
+
+  const updateSignatory = useCallback((index, field, value) => {
+    dispatch({ type: 'SET_SIGNATORY', index, field, value });
+  }, []);
+
+  const updatePurchasingContact = useCallback((index, field, value) => {
+    dispatch({ type: 'SET_PURCHASING_CONTACT', index, field, value });
+  }, []);
+
+  const updateAccountsContact = useCallback((field, value) => {
+    dispatch({ type: 'SET_ACCOUNTS_CONTACT', field, value });
+  }, []);
+
+  const updateBank = useCallback((index, field, value) => {
+    dispatch({ type: 'SET_BANK', index, field, value });
+  }, []);
+
   const openPartnerSelector = () => {
     navigation.navigate('CustomerScreen', {
       selectMode: true,
       onSelect: (selected) => {
-        setPartner(selected);
+        dispatch({ type: 'SET_FIELD', field: 'partner', value: selected });
         clearError('partner');
       },
     });
   };
 
-  const openDatePicker = (field) => {
+  const openDatePicker = useCallback((field) => {
     setActiveDateField(field);
     setIsDatePickerVisible(true);
-  };
+  }, []);
 
   const handleDateConfirm = (date) => {
     setIsDatePickerVisible(false);
-    switch (activeDateField) {
-      case 'licenseIssueDate': setLicenseIssueDate(date); break;
-      case 'licenseExpiryDate': setLicenseExpiryDate(date); break;
-      case 'creditIssueDate': setCreditIssueDate(date); break;
-      case 'creditExpiryDate': setCreditExpiryDate(date); break;
+    if (activeDateField === 'dateBusinessStarted') {
+      dispatch({ type: 'SET_ACCOUNTS_CONTACT', field: 'dateBusinessStarted', value: date });
+    } else {
+      dispatch({ type: 'SET_FIELD', field: activeDateField, value: date });
     }
   };
 
   const getDateValue = () => {
-    switch (activeDateField) {
-      case 'licenseIssueDate': return licenseIssueDate || new Date();
-      case 'licenseExpiryDate': return licenseExpiryDate || new Date();
-      case 'creditIssueDate': return creditIssueDate || new Date();
-      case 'creditExpiryDate': return creditExpiryDate || new Date();
-      default: return new Date();
+    if (activeDateField === 'dateBusinessStarted') {
+      return formData.accountsContact.dateBusinessStarted || new Date();
     }
+    return formData[activeDateField] || new Date();
   };
 
   // --- Validation ---
   const validate = () => {
     const newErrors = {};
-    if (!partner) newErrors.partner = 'Customer is required';
-    if (!creditLimit || parseFloat(creditLimit) <= 0) newErrors.creditLimit = 'Valid credit limit is required';
+    if (!formData.partner) newErrors.partner = 'Customer is required';
+    if (!formData.creditLimit || parseFloat(formData.creditLimit) <= 0) newErrors.creditLimit = 'Valid credit limit is required';
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
+  };
+
+  // --- Helper to strip base64 prefix ---
+  const stripBase64Prefix = (base64Str) => {
+    if (!base64Str) return false;
+    return base64Str.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
   };
 
   // --- Submit ---
@@ -109,23 +225,94 @@ const CreditFacilityForm = ({ navigation, route }) => {
 
     setIsSubmitting(true);
     try {
-      const partnerId = partner?.id || partner?._id || null;
+      const partnerId = formData.partner?.id || formData.partner?._id || null;
       const data = {
         partner_id: partnerId,
-        credit_limit: parseFloat(creditLimit) || 0,
-        use_credit_facility: useCreditFacility.id,
-        company_name: companyName || '',
-        company_address: companyAddress || '',
-        phone_number: phoneNumber || '',
-        email: email || '',
-        fax: fax || '',
-        trade_license_no: tradeLicenseNo || '',
-        po_box: poBox || '',
+        credit_limit: parseFloat(formData.creditLimit) || 0,
+        use_credit_facility: formData.useCreditFacility.id,
+        // Tab 1: Company Info
+        company_name: formData.companyName || '',
+        company_address: formData.companyAddress || '',
+        phone_number: formData.phoneNumber || '',
+        email: formData.email || '',
+        fax: formData.fax || '',
+        trade_license_no: formData.tradeLicenseNo || '',
+        po_box: formData.poBox || '',
+        branch_mobile_no: formData.branchMobileNo || '',
+        branch_tele: formData.branchTelephone || '',
+        branch_fax: formData.branchFax || '',
+        // Tab 2: Business & Proprietors
+        local_sponsor: formData.localSponsor || '',
+        occupation: formData.occupation || '',
+        proprietor_name_1: formData.proprietors[0].name || '',
+        proprietor_nationality_1: formData.proprietors[0].nationality || '',
+        proprietor_holding_1: parseFloat(formData.proprietors[0].holdingPercent) || 0,
+        proprietor_name_2: formData.proprietors[1].name || '',
+        proprietor_nationality_2: formData.proprietors[1].nationality || '',
+        proprietor_holding_2: parseFloat(formData.proprietors[1].holdingPercent) || 0,
+        proprietor_name_3: formData.proprietors[2].name || '',
+        proprietor_nationality_3: formData.proprietors[2].nationality || '',
+        proprietor_holding_3: parseFloat(formData.proprietors[2].holdingPercent) || 0,
+        // Tab 3: Signatories
+        signatory_name_1: formData.signatories[0].name || '',
+        signatory_nationality_1: formData.signatories[0].nationality || '',
+        signatory_signature_1: stripBase64Prefix(formData.signatories[0].signatureBase64),
+        signatory_name_2: formData.signatories[1].name || '',
+        signatory_nationality_2: formData.signatories[1].nationality || '',
+        signatory_signature_2: stripBase64Prefix(formData.signatories[1].signatureBase64),
+        signatory_name_3: formData.signatories[2].name || '',
+        signatory_nationality_3: formData.signatories[2].nationality || '',
+        signatory_signature_3: stripBase64Prefix(formData.signatories[2].signatureBase64),
+        // Tab 4: Purchasing Contacts
+        purchasing_name_1: formData.purchasingContacts[0].name || '',
+        purchasing_title_1: formData.purchasingContacts[0].title || '',
+        purchasing_tele_1: formData.purchasingContacts[0].telephone || '',
+        purchasing_fax_1: formData.purchasingContacts[0].fax || '',
+        purchasing_email_1: formData.purchasingContacts[0].email || '',
+        purchasing_signature_1: stripBase64Prefix(formData.purchasingContacts[0].signatureBase64),
+        purchasing_name_2: formData.purchasingContacts[1].name || '',
+        purchasing_title_2: formData.purchasingContacts[1].title || '',
+        purchasing_tele_2: formData.purchasingContacts[1].telephone || '',
+        purchasing_fax_2: formData.purchasingContacts[1].fax || '',
+        purchasing_email_2: formData.purchasingContacts[1].email || '',
+        purchasing_signature_2: stripBase64Prefix(formData.purchasingContacts[1].signatureBase64),
+        // Tab 4: Accounts Contact
+        accounts_name: formData.accountsContact.name || '',
+        accounts_tele: formData.accountsContact.telephone || '',
+        accounts_fax: formData.accountsContact.fax || '',
+        accounts_email: formData.accountsContact.email || '',
+        accounts_signature: stripBase64Prefix(formData.accountsContact.signatureBase64),
+        any_other_business: formData.accountsContact.anyOtherBusiness?.id || '',
+        business_description: formData.accountsContact.businessDescription || '',
+        // Tab 5: Financial Info
+        sales_volume: parseFloat(formData.yearlySalesVolume) || 0,
+        sales_days: parseInt(formData.salesDays, 10) || 0,
+        bank_name_1: formData.banks[0].bankName || '',
+        bank_account_1: formData.banks[0].account || '',
+        bank_branch_1: formData.banks[0].branch || '',
+        bank_country_1: formData.banks[0].country || '',
+        bank_tele_1: formData.banks[0].telephone || '',
+        bank_fax_1: formData.banks[0].fax || '',
+        bank_name_2: formData.banks[1].bankName || '',
+        bank_account_2: formData.banks[1].account || '',
+        bank_branch_2: formData.banks[1].branch || '',
+        bank_country_2: formData.banks[1].country || '',
+        bank_tele_2: formData.banks[1].telephone || '',
+        bank_fax_2: formData.banks[1].fax || '',
+        // Tab 6: Documents
+        trade_license_file: stripBase64Prefix(formData.tradeLicenseFile),
+        passport_copy_file: stripBase64Prefix(formData.passportCopyFile),
+        tax_registration_file: stripBase64Prefix(formData.taxRegistrationFile),
+        credit_application_file: stripBase64Prefix(formData.creditApplicationFile),
+        nationality_id_file: stripBase64Prefix(formData.nationalityIdFile),
       };
-      if (licenseIssueDate) data.license_issue_date = format(licenseIssueDate, 'yyyy-MM-dd');
-      if (licenseExpiryDate) data.license_expiry_date = format(licenseExpiryDate, 'yyyy-MM-dd');
-      if (creditIssueDate) data.credit_issue_date = format(creditIssueDate, 'yyyy-MM-dd');
-      if (creditExpiryDate) data.credit_expiry_date = format(creditExpiryDate, 'yyyy-MM-dd');
+
+      // Dates
+      if (formData.licenseIssueDate) data.license_issue_date = format(formData.licenseIssueDate, 'yyyy-MM-dd');
+      if (formData.licenseExpiryDate) data.license_expiry_date = format(formData.licenseExpiryDate, 'yyyy-MM-dd');
+      if (formData.creditIssueDate) data.credit_issue_date = format(formData.creditIssueDate, 'yyyy-MM-dd');
+      if (formData.creditExpiryDate) data.credit_expiry_date = format(formData.creditExpiryDate, 'yyyy-MM-dd');
+      if (formData.accountsContact.dateBusinessStarted) data.date_business_started = format(formData.accountsContact.dateBusinessStarted, 'yyyy-MM-dd');
 
       const facilityId = await createCreditFacilityOdoo(data);
 
@@ -147,10 +334,10 @@ const CreditFacilityForm = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Credit Facility Application" onBackPress={() => navigation.goBack()} />
-      <RoundedScrollContainer>
 
-        {/* Section: Basic Info */}
-        <View style={styles.sectionCard}>
+      {/* Application Details - Scrollable header with tabs below */}
+      <ScrollView style={styles.headerScrollView} nestedScrollEnabled>
+        <View style={styles.headerSection}>
           <Text style={styles.sectionTitle}>Application Details</Text>
 
           <FormInput
@@ -158,7 +345,7 @@ const CreditFacilityForm = ({ navigation, route }) => {
             placeholder="Select Customer"
             dropIcon="chevron-down"
             editable={false}
-            value={partner?.name?.trim() || ''}
+            value={formData.partner?.name?.trim() || ''}
             required
             validate={errors.partner}
             onPress={openPartnerSelector}
@@ -167,11 +354,11 @@ const CreditFacilityForm = ({ navigation, route }) => {
           <FormInput
             label="Credit Limit"
             placeholder="0.00"
-            value={creditLimit}
+            value={formData.creditLimit}
             keyboardType="numeric"
             required
             validate={errors.creditLimit}
-            onChangeText={(val) => { setCreditLimit(val); clearError('creditLimit'); }}
+            onChangeText={(val) => { updateField('creditLimit', val); clearError('creditLimit'); }}
           />
 
           <FormInput
@@ -179,83 +366,73 @@ const CreditFacilityForm = ({ navigation, route }) => {
             placeholder="Select"
             dropIcon="menu-down"
             editable={false}
-            value={useCreditFacility?.label || ''}
+            value={formData.useCreditFacility?.label || ''}
             onPress={() => setIsDropdownVisible(true)}
           />
         </View>
 
-        {/* Section: Company Information */}
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Company Information</Text>
+        {/* Tab Bar */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabBarContainer}>
+          {routes.map((route, idx) => (
+            <TouchableOpacity
+              key={route.key}
+              style={[styles.tabItem, tabIndex === idx && styles.tabItemActive]}
+              onPress={() => setTabIndex(idx)}
+            >
+              <Text style={[styles.tabLabel, tabIndex === idx && styles.tabLabelActive]}>
+                {route.title}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
 
-          <FormInput label="Company Name" placeholder="Enter company name" value={companyName} onChangeText={setCompanyName} />
-          <FormInput label="Company Address" placeholder="Enter address" value={companyAddress} onChangeText={setCompanyAddress} multiline numberOfLines={2} />
-          <FormInput label="Email" placeholder="Enter email" value={email} onChangeText={setEmail} keyboardType="email-address" />
-          <FormInput label="Phone Number" placeholder="Enter phone" value={phoneNumber} onChangeText={setPhoneNumber} keyboardType="phone-pad" />
-          <FormInput label="Fax" placeholder="Enter fax" value={fax} onChangeText={setFax} />
-          <FormInput label="Trade License No" placeholder="Enter license number" value={tradeLicenseNo} onChangeText={setTradeLicenseNo} />
-          <FormInput label="PO Box" placeholder="Enter PO Box" value={poBox} onChangeText={setPoBox} />
-        </View>
-
-        {/* Section: Dates */}
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>License & Credit Dates</Text>
-
-          <FormInput label="License Issue Date" dropIcon="calendar" placeholder="Select Date" editable={false}
-            value={licenseIssueDate ? format(licenseIssueDate, 'yyyy-MM-dd') : ''}
-            onPress={() => openDatePicker('licenseIssueDate')} />
-
-          <FormInput label="License Expiry Date" dropIcon="calendar" placeholder="Select Date" editable={false}
-            value={licenseExpiryDate ? format(licenseExpiryDate, 'yyyy-MM-dd') : ''}
-            onPress={() => openDatePicker('licenseExpiryDate')} />
-
-          <FormInput label="Credit Issue Date" dropIcon="calendar" placeholder="Select Date" editable={false}
-            value={creditIssueDate ? format(creditIssueDate, 'yyyy-MM-dd') : ''}
-            onPress={() => openDatePicker('creditIssueDate')} />
-
-          <FormInput label="Credit Expiry Date" dropIcon="calendar" placeholder="Select Date" editable={false}
-            value={creditExpiryDate ? format(creditExpiryDate, 'yyyy-MM-dd') : ''}
-            onPress={() => openDatePicker('creditExpiryDate')} />
+        {/* Tab Content - rendered inline inside ScrollView */}
+        <View style={styles.tabContent}>
+          {tabIndex === 0 && <CompanyInfoTab formData={formData} updateField={updateField} openDatePicker={openDatePicker} />}
+          {tabIndex === 1 && <BusinessProprietorsTab formData={formData} updateField={updateField} updateProprietor={updateProprietor} />}
+          {tabIndex === 2 && <AuthorizedSignatoriesTab formData={formData} updateSignatory={updateSignatory} />}
+          {tabIndex === 3 && <ContactsTab formData={formData} updatePurchasingContact={updatePurchasingContact} updateAccountsContact={updateAccountsContact} openDatePicker={openDatePicker} />}
+          {tabIndex === 4 && <FinancialInfoTab formData={formData} updateField={updateField} updateBank={updateBank} />}
+          {tabIndex === 5 && <UploadedDocumentsTab formData={formData} updateField={updateField} />}
         </View>
 
         {/* Buttons */}
-        <LoadingButton
-          backgroundColor={COLORS.primaryThemeColor}
-          title="Save as Draft"
-          onPress={() => handleSubmit(false)}
-          loading={isSubmitting}
-        />
-
-        <View style={{ height: 10 }} />
-
-        <LoadingButton
-          backgroundColor="#4CAF50"
-          title="Submit for Approval"
-          onPress={() => handleSubmit(true)}
-          loading={isSubmitting}
-        />
+        <View style={styles.buttonSection}>
+          <LoadingButton
+            backgroundColor={COLORS.primaryThemeColor}
+            title="Save as Draft"
+            onPress={() => handleSubmit(false)}
+            loading={isSubmitting}
+          />
+          <View style={{ height: 8 }} />
+          <LoadingButton
+            backgroundColor="#4CAF50"
+            title="Submit for Approval"
+            onPress={() => handleSubmit(true)}
+            loading={isSubmitting}
+          />
+        </View>
 
         <View style={{ height: 40 }} />
+      </ScrollView>
 
-        {/* Dropdown */}
-        <DropdownSheet
-          isVisible={isDropdownVisible}
-          items={USE_CREDIT_OPTIONS}
-          title="Use Credit Facility"
-          onClose={() => setIsDropdownVisible(false)}
-          onValueChange={(item) => { setUseCreditFacility(item); setIsDropdownVisible(false); }}
-        />
+      {/* Modals */}
+      <DropdownSheet
+        isVisible={isDropdownVisible}
+        items={USE_CREDIT_OPTIONS}
+        title="Use Credit Facility"
+        onClose={() => setIsDropdownVisible(false)}
+        onValueChange={(item) => { updateField('useCreditFacility', item); setIsDropdownVisible(false); }}
+      />
 
-        {/* Date Picker */}
-        <DateTimePickerModal
-          isVisible={isDatePickerVisible}
-          mode="date"
-          date={getDateValue()}
-          onConfirm={handleDateConfirm}
-          onCancel={() => setIsDatePickerVisible(false)}
-        />
+      <DateTimePickerModal
+        isVisible={isDatePickerVisible}
+        mode="date"
+        date={getDateValue()}
+        onConfirm={handleDateConfirm}
+        onCancel={() => setIsDatePickerVisible(false)}
+      />
 
-      </RoundedScrollContainer>
       <OverlayLoader visible={isSubmitting} />
     </SafeAreaView>
   );
@@ -264,11 +441,15 @@ const CreditFacilityForm = ({ navigation, route }) => {
 export default CreditFacilityForm;
 
 const styles = StyleSheet.create({
-  sectionCard: {
+  headerScrollView: {
+    flex: 1,
+  },
+  headerSection: {
     backgroundColor: COLORS.white,
     borderRadius: 12,
     padding: 16,
-    marginBottom: 12,
+    margin: 12,
+    marginBottom: 8,
     ...Platform.select({
       android: { elevation: 2 },
       ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
@@ -279,5 +460,32 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistBold,
     color: COLORS.primaryThemeColor,
     marginBottom: 10,
+  },
+  tabBarContainer: {
+    backgroundColor: COLORS.tabColor || '#F37021',
+    flexDirection: 'row',
+  },
+  tabItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
+  },
+  tabItemActive: {
+    borderBottomColor: COLORS.tabIndicator || '#2E294E',
+  },
+  tabLabel: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: 'rgba(255,255,255,0.7)',
+  },
+  tabLabelActive: {
+    color: '#fff',
+  },
+  tabContent: {
+    minHeight: 200,
+  },
+  buttonSection: {
+    padding: 12,
   },
 });
