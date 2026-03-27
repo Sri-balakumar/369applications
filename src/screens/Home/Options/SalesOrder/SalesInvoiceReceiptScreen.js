@@ -17,14 +17,31 @@ import { sendWhatsAppDocument } from '@api/services/whatsappApi';
 import { COUNTRIES, getMaxDigits, parsePhoneCountryCode, CountryCodePicker } from '@screens/Home/Options/WhatsApp/ContactsSheet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const INV_COUNTER_KEY = 'inv_counter_s';
 const INV_MAP_KEY = 'inv_map_s';
+const INV_START = 10003;
 
-// Read-only: look up S number assigned by sales order list
-const getSNumberFromMap = async (id) => {
+// Look up S number, or assign one if not found (for direct invoice flow)
+const getOrAssignSNumber = async (id) => {
   if (!id) return null;
+  const key = String(id);
   const mapRaw = await AsyncStorage.getItem(INV_MAP_KEY);
   const map = mapRaw ? JSON.parse(mapRaw) : {};
-  return map[String(id)] || null;
+  if (map[key]) return map[key];
+  // Not found - assign next number (direct invoice flow)
+  let maxUsed = INV_START - 1;
+  for (const val of Object.values(map)) {
+    const num = parseInt(String(val).replace('S', ''), 10);
+    if (!isNaN(num) && num > maxUsed) maxUsed = num;
+  }
+  const counterRaw = await AsyncStorage.getItem(INV_COUNTER_KEY);
+  const storedCounter = counterRaw ? parseInt(counterRaw, 10) : INV_START;
+  const nextNumber = Math.max(maxUsed + 1, storedCounter);
+  const sNumber = `S${nextNumber}`;
+  map[key] = sNumber;
+  await AsyncStorage.setItem(INV_MAP_KEY, JSON.stringify(map));
+  await AsyncStorage.setItem(INV_COUNTER_KEY, String(nextNumber + 1));
+  return sNumber;
 };
 
 const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
@@ -117,9 +134,20 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       }
 
       if (invoiceData) {
-        // Read S number from sales order list (source of truth)
-        const sNum = await getSNumberFromMap(orderId) || await getSNumberFromMap(invoiceId) || await getSNumberFromMap(invoiceData.id);
-        if (sNum) invoiceData.name = sNum;
+        // Get S number - look up existing or assign new one
+        const primaryId = orderId || invoiceId || invoiceData.id;
+        const sNum = await getOrAssignSNumber(primaryId);
+        if (sNum) {
+          invoiceData.name = sNum;
+          // Also store by both keys so both screens find it
+          if (orderId && invoiceId && String(orderId) !== String(invoiceId)) {
+            const mapRaw = await AsyncStorage.getItem(INV_MAP_KEY);
+            const map = mapRaw ? JSON.parse(mapRaw) : {};
+            map[String(orderId)] = sNum;
+            map[String(invoiceId)] = sNum;
+            await AsyncStorage.setItem(INV_MAP_KEY, JSON.stringify(map));
+          }
+        }
         setInvoice(invoiceData);
 
         // Get phone from passed data first
