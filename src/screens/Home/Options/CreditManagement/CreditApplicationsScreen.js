@@ -55,7 +55,11 @@ const CreditApplicationsScreen = ({ navigation }) => {
     const stateColor = STATE_COLORS[state] || '#999';
 
     return (
-      <View style={styles.itemContainer}>
+      <TouchableOpacity
+        style={styles.itemContainer}
+        activeOpacity={0.7}
+        onPress={() => navigation.navigate('CreditFacilityDetailScreen', { facilityId: item.id })}
+      >
         <View style={styles.row}>
           <Text style={styles.head} numberOfLines={1}>{item.name || '-'}</Text>
           <View style={[styles.badge, { backgroundColor: stateColor }]}>
@@ -86,7 +90,7 @@ const CreditApplicationsScreen = ({ navigation }) => {
             <Text style={styles.companyText} numberOfLines={1}>{item.company_name}</Text>
           </View>
         ) : null}
-      </View>
+      </TouchableOpacity>
     );
   };
 

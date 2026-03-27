@@ -77,7 +77,7 @@ import { MobileRepairDashboard, MobileRepairScreen, MobileRepairForm, MobileRepa
 import { BannerManagementScreen } from '@screens/Home/Options/BannerManagement';
 import { GrossProfitReportScreen } from '@screens/Home/Options/GrossProfitReport';
 import { PartnerLedgerScreen } from '@screens/Home/Options/PartnerLedger';
-import { CreditManagementScreen, CreditApplicationsScreen, CreditExceededScreen, CreditRiskHistoryScreen, CreditFacilityForm } from '@screens/Home/Options/CreditManagement';
+import { CreditManagementScreen, CreditApplicationsScreen, CreditExceededScreen, CreditRiskHistoryScreen, CreditFacilityForm, CreditFacilityDetailScreen } from '@screens/Home/Options/CreditManagement';
 import { WhatsAppScreen } from '@screens/Home/Options/WhatsApp';
 import { ProductCreationForm } from '@screens/Home/Options/ProductCreation';
 
@@ -413,6 +413,7 @@ const StackNavigator = () => {
       <Stack.Screen name="CreditExceededScreen" component={CreditExceededScreen} options={{ headerShown: false }} />
       <Stack.Screen name="CreditRiskHistoryScreen" component={CreditRiskHistoryScreen} options={{ headerShown: false }} />
       <Stack.Screen name="CreditFacilityForm" component={CreditFacilityForm} options={{ headerShown: false }} />
+      <Stack.Screen name="CreditFacilityDetailScreen" component={CreditFacilityDetailScreen} options={{ headerShown: false }} />
 
       <Stack.Screen name="WhatsAppScreen" component={WhatsAppScreen} options={{ headerShown: false }} />
 

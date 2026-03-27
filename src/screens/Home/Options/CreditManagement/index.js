@@ -3,3 +3,4 @@ export { default as CreditApplicationsScreen } from './CreditApplicationsScreen'
 export { default as CreditExceededScreen } from './CreditExceededScreen';
 export { default as CreditRiskHistoryScreen } from './CreditRiskHistoryScreen';
 export { default as CreditFacilityForm } from './CreditFacilityForm';
+export { default as CreditFacilityDetailScreen } from './CreditFacilityDetailScreen';

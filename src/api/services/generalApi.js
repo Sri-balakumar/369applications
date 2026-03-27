@@ -10569,6 +10569,166 @@ export const createCreditFacilityOdoo = async (data = {}) => {
   }
 };
 
+// Fetch a single credit facility application with ALL fields
+export const fetchCreditFacilityDetailOdoo = async (facilityId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'credit.facility',
+          method: 'read',
+          args: [[facilityId]],
+          kwargs: {
+            fields: [
+              'id', 'name', 'partner_id', 'credit_limit', 'state', 'submission_date',
+              'use_credit_facility', 'currency_id', 'approved_by', 'approval_date', 'rejection_reason',
+              'company_name', 'company_address', 'fax', 'phone_number', 'trade_license_no', 'po_box', 'email',
+              'license_issue_date', 'license_expiry_date', 'credit_issue_date', 'credit_expiry_date',
+              'branch_mobile_no', 'branch_tele', 'branch_fax',
+              'local_sponsor', 'occupation',
+              'proprietor_name_1', 'proprietor_nationality_1', 'proprietor_holding_1',
+              'proprietor_name_2', 'proprietor_nationality_2', 'proprietor_holding_2',
+              'proprietor_name_3', 'proprietor_nationality_3', 'proprietor_holding_3',
+              'signatory_name_1', 'signatory_nationality_1', 'signatory_signature_1',
+              'signatory_name_2', 'signatory_nationality_2', 'signatory_signature_2',
+              'signatory_name_3', 'signatory_nationality_3', 'signatory_signature_3',
+              'purchasing_name_1', 'purchasing_title_1', 'purchasing_tele_1', 'purchasing_fax_1', 'purchasing_email_1', 'purchasing_signature_1',
+              'purchasing_name_2', 'purchasing_title_2', 'purchasing_tele_2', 'purchasing_fax_2', 'purchasing_email_2', 'purchasing_signature_2',
+              'accounts_name', 'accounts_tele', 'accounts_fax', 'accounts_email', 'accounts_signature',
+              'date_business_started', 'any_other_business', 'business_description',
+              'sales_volume', 'sales_days',
+              'bank_name_1', 'bank_account_1', 'bank_branch_1', 'bank_country_1', 'bank_tele_1', 'bank_fax_1',
+              'bank_name_2', 'bank_account_2', 'bank_branch_2', 'bank_country_2', 'bank_tele_2', 'bank_fax_2',
+              'trade_license_file', 'tax_registration_file', 'nationality_id_file', 'passport_copy_file', 'credit_application_file',
+            ],
+          },
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to fetch credit facility detail');
+    }
+    const records = response.data.result || [];
+    if (records.length === 0) throw new Error('Credit facility not found');
+    const app = records[0];
+    return {
+      ...app,
+      partner_name: Array.isArray(app.partner_id) ? app.partner_id[1] : '',
+      partner_id_val: Array.isArray(app.partner_id) ? app.partner_id[0] : app.partner_id,
+      currency: Array.isArray(app.currency_id) ? app.currency_id[1] : '',
+      approved_by_name: Array.isArray(app.approved_by) ? app.approved_by[1] : '',
+    };
+  } catch (error) {
+    console.error('[fetchCreditFacilityDetailOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Approve a credit facility application
+export const approveCreditFacilityOdoo = async (facilityId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'credit.facility',
+          method: 'action_approve',
+          args: [[facilityId]],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to approve credit facility');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('[approveCreditFacilityOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Reject a credit facility application
+export const rejectCreditFacilityOdoo = async (facilityId, rejectionReason) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    // First write the rejection reason
+    await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'credit.facility',
+          method: 'write',
+          args: [[facilityId], { rejection_reason: rejectionReason || '' }],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    // Then call action_reject
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'credit.facility',
+          method: 'action_reject',
+          args: [[facilityId]],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to reject credit facility');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('[rejectCreditFacilityOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Reset a credit facility application to draft
+export const resetCreditFacilityToDraftOdoo = async (facilityId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'credit.facility',
+          method: 'action_reset_to_draft',
+          args: [[facilityId]],
+          kwargs: {},
+        },
+      },
+      { headers, withCredentials: true, timeout: 15000 }
+    );
+    if (response.data.error) {
+      throw new Error(response.data.error.data?.message || 'Failed to reset credit facility');
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('[resetCreditFacilityToDraftOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
 // Submit a credit facility application for approval
 export const submitCreditFacilityOdoo = async (facilityId) => {
   try {
