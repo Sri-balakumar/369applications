@@ -176,59 +176,70 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       const html = `
         <html>
         <head><meta charset="utf-8"/><style>
-          body { font-family: Arial, sans-serif; color: #333; padding: 20px; }
-          h2 { color: #2e2a4f; margin: 5px 0; }
-          table { width: 100%; border-collapse: collapse; }
-          .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 15px; }
-          .info td { font-size: 12px; padding: 2px 0; }
-          .products th { text-align: center; padding: 8px; border-bottom: 2px solid #333; background: #f5f5f5; font-size: 12px; }
-          .products td { font-size: 12px; }
-          .total-box { text-align: right; margin: 15px 0; padding: 10px; background: #f9f9f9; border-radius: 8px; }
-          .grand { font-size: 18px; font-weight: bold; color: #e85d04; }
-          .footer { text-align: center; margin-top: 30px; color: #999; font-size: 10px; border-top: 1px solid #ddd; padding-top: 15px; }
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #333; padding: 30px; background: #fff; }
+          .header { text-align: center; padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid #e0e0e0; }
+          .header img { width: 100px; height: auto; mix-blend-mode: multiply; margin-bottom: 6px; }
+          .header h2 { color: #2e2a4f; font-size: 16px; font-weight: 600; letter-spacing: 0.5px; }
+          .invoice-title { text-align: center; margin: 18px 0; padding: 10px 0; background: #2e2a4f; border-radius: 6px; }
+          .invoice-title h3 { color: #fff; font-size: 16px; letter-spacing: 2px; font-weight: 700; }
+          .info-grid { display: flex; flex-wrap: wrap; margin-bottom: 18px; font-size: 12px; line-height: 1.8; }
+          .info-grid .left { width: 60%; }
+          .info-grid .right { width: 40%; text-align: right; }
+          .info-grid strong { color: #2e2a4f; }
+          .products { width: 100%; border-collapse: collapse; margin: 16px 0; }
+          .products thead th { background: #2e2a4f; color: #fff; font-size: 11px; font-weight: 600; padding: 10px 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+          .products thead th:first-child { border-radius: 6px 0 0 6px; text-align: left; }
+          .products thead th:last-child { border-radius: 0 6px 6px 0; }
+          .products tbody tr { border-bottom: 1px solid #f0f0f0; }
+          .products tbody tr:nth-child(even) { background: #fafafa; }
+          .products tbody td { font-size: 12px; padding: 10px 8px; color: #444; }
+          .total-box { text-align: center; margin: 20px 0; padding: 14px 20px; background: #e85d04; border-radius: 8px; }
+          .grand { font-size: 18px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+          .payment-section { margin: 20px 0; padding: 16px; background: #f8f9fa; border-radius: 8px; border: 1px solid #eee; }
+          .payment-section h4 { color: #2e2a4f; font-size: 14px; font-weight: 700; text-align: center; margin-bottom: 10px; }
+          .payment-section table { width: 60%; margin: 0 auto; font-size: 12px; }
+          .payment-section td { padding: 4px 0; }
+          .footer { text-align: center; margin-top: 30px; padding-top: 16px; border-top: 1px solid #e0e0e0; }
+          .footer p { color: #2e2a4f; font-size: 13px; font-weight: 600; }
         </style></head>
         <body>
           <div class="header">
-            <img src="${INVOICE_LOGO_BASE64}" style="width:120px;height:auto;margin-bottom:8px;" />
-            <h2>${invoice.companyName || 'Company'}</h2>
+            <img src="${INVOICE_LOGO_BASE64}" />
           </div>
-          <h3 style="text-align:center;color:#2e2a4f;">INVOICE</h3>
-          <table class="info" style="margin-bottom:15px;">
-            <tr>
-              <td><strong>Date:</strong> ${invoice.invoiceDate || '-'}</td>
-              <td style="text-align:right;"><strong>Invoice:</strong> ${invoice.name || '-'}</td>
-            </tr>
-            <tr>
-              <td><strong>Cashier:</strong> ${cashierName}</td>
-              <td style="text-align:right;"><strong>Company:</strong> ${invoice.companyName || '-'}</td>
-            </tr>
-            <tr><td><strong>Customer:</strong> ${invoice.partnerName || '-'}</td></tr>
-            ${(partnerPhone || invoice?.partnerPhone) ? `<tr><td><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</td></tr>` : ''}
-          </table>
-          <hr/>
-          <table class="products" style="margin:15px 0;">
+          <div class="invoice-title"><h3>INVOICE</h3></div>
+          <div class="info-grid">
+            <div class="left">
+              <div><strong>Date:</strong> ${invoice.invoiceDate || '-'}</div>
+              <div><strong>Cashier:</strong> ${cashierName}</div>
+              <div><strong>Customer:</strong> ${invoice.partnerName || '-'}</div>
+              ${(partnerPhone || invoice?.partnerPhone) ? `<div><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</div>` : ''}
+            </div>
+            <div class="right">
+              <div><strong>Invoice:</strong> ${invoice.name || '-'}</div>
+              <div><strong>Company:</strong> ${invoice.companyName || '-'}</div>
+            </div>
+          </div>
+          <table class="products">
             <thead><tr>
-              <th style="text-align:left;width:40%;">Product Name</th>
-              <th style="width:15%;">Qty</th>
-              <th style="text-align:right;width:20%;">Unit Price</th>
-              <th style="text-align:right;width:25%;">Total</th>
+              <th style="width:40%;">Product Name</th>
+              <th style="width:15%;text-align:center;">Qty</th>
+              <th style="width:20%;text-align:right;">Unit Price</th>
+              <th style="width:25%;text-align:right;">Total</th>
             </tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>
-          <hr/>
           <div class="total-box">
             <span class="grand">Grand Total: ${(invoice.amountTotal || 0).toFixed(3)} ${currency}</span>
           </div>
-          <hr/>
-          <div style="text-align:center;margin:15px 0;">
-            <h4 style="color:#2e2a4f;">Payment Details</h4>
-            <table style="width:50%;margin:0 auto;font-size:12px;">
+          <div class="payment-section">
+            <h4>Payment Details</h4>
+            <table>
               <tr><td style="color:#666;">Cash:</td><td style="text-align:right;font-weight:bold;">${(invoice.amountTotal || 0).toFixed(3)} ${currency}</td></tr>
             </table>
           </div>
           <div class="footer">
-            <p>Thank you for your business!</p>
-            <p>Generated from 369ai Biz Mobile App</p>
+            <p>Thankyou</p>
           </div>
         </body></html>
       `;
@@ -309,40 +320,66 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
 
       const html = `
         <html><head><meta charset="utf-8"/><style>
-          body { font-family: Arial, sans-serif; color: #333; padding: 20px; }
-          h2 { color: #2e2a4f; margin: 5px 0; }
-          table { width: 100%; border-collapse: collapse; }
-          .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 15px; }
-          .info td { font-size: 12px; padding: 2px 0; }
-          .products th { text-align: center; padding: 8px; border-bottom: 2px solid #333; background: #f5f5f5; font-size: 12px; }
-          .products td { font-size: 12px; }
-          .total-box { text-align: right; margin: 15px 0; padding: 10px; background: #f9f9f9; border-radius: 8px; }
-          .grand { font-size: 18px; font-weight: bold; color: #e85d04; }
-          .footer { text-align: center; margin-top: 30px; color: #999; font-size: 10px; border-top: 1px solid #ddd; padding-top: 15px; }
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #333; padding: 30px; background: #fff; }
+          .header { text-align: center; padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid #e0e0e0; }
+          .header img { width: 100px; height: auto; mix-blend-mode: multiply; margin-bottom: 6px; }
+          .header h2 { color: #2e2a4f; font-size: 16px; font-weight: 600; letter-spacing: 0.5px; }
+          .invoice-title { text-align: center; margin: 18px 0; padding: 10px 0; background: #2e2a4f; border-radius: 6px; }
+          .invoice-title h3 { color: #fff; font-size: 16px; letter-spacing: 2px; font-weight: 700; }
+          .info-grid { display: flex; flex-wrap: wrap; margin-bottom: 18px; font-size: 12px; line-height: 1.8; }
+          .info-grid .left { width: 60%; }
+          .info-grid .right { width: 40%; text-align: right; }
+          .info-grid strong { color: #2e2a4f; }
+          .products { width: 100%; border-collapse: collapse; margin: 16px 0; }
+          .products thead th { background: #2e2a4f; color: #fff; font-size: 11px; font-weight: 600; padding: 10px 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+          .products thead th:first-child { border-radius: 6px 0 0 6px; text-align: left; }
+          .products thead th:last-child { border-radius: 0 6px 6px 0; }
+          .products tbody tr { border-bottom: 1px solid #f0f0f0; }
+          .products tbody tr:nth-child(even) { background: #fafafa; }
+          .products tbody td { font-size: 12px; padding: 10px 8px; color: #444; }
+          .total-box { text-align: center; margin: 20px 0; padding: 14px 20px; background: #e85d04; border-radius: 8px; }
+          .grand { font-size: 18px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+          .payment-section { margin: 20px 0; padding: 16px; background: #f8f9fa; border-radius: 8px; border: 1px solid #eee; }
+          .payment-section h4 { color: #2e2a4f; font-size: 14px; font-weight: 700; text-align: center; margin-bottom: 10px; }
+          .payment-section table { width: 60%; margin: 0 auto; font-size: 12px; }
+          .payment-section td { padding: 4px 0; }
+          .footer { text-align: center; margin-top: 30px; padding-top: 16px; border-top: 1px solid #e0e0e0; }
+          .footer p { color: #2e2a4f; font-size: 13px; font-weight: 600; }
         </style></head><body>
           <div class="header">
-            <img src="${INVOICE_LOGO_BASE64}" style="width:120px;height:auto;margin-bottom:8px;" />
-            <h2>${invoice.companyName || 'Company'}</h2>
+            <img src="${INVOICE_LOGO_BASE64}" />
           </div>
-          <h3 style="text-align:center;color:#2e2a4f;">INVOICE</h3>
-          <table class="info" style="margin-bottom:15px;">
-            <tr><td><strong>Date:</strong> ${invoice.invoiceDate || '-'}</td><td style="text-align:right;"><strong>Invoice:</strong> ${invoice.name || '-'}</td></tr>
-            <tr><td><strong>Cashier:</strong> ${cashierName}</td><td style="text-align:right;"><strong>Company:</strong> ${invoice.companyName || '-'}</td></tr>
-            <tr><td><strong>Customer:</strong> ${invoice.partnerName || '-'}</td></tr>
-            ${(partnerPhone || invoice?.partnerPhone) ? `<tr><td><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</td></tr>` : ''}
-          </table><hr/>
-          <table class="products" style="margin:15px 0;">
-            <thead><tr><th style="text-align:left;width:40%;">Product Name</th><th style="width:15%;">Qty</th><th style="text-align:right;width:20%;">Unit Price</th><th style="text-align:right;width:25%;">Total</th></tr></thead>
+          <div class="invoice-title"><h3>INVOICE</h3></div>
+          <div class="info-grid">
+            <div class="left">
+              <div><strong>Date:</strong> ${invoice.invoiceDate || '-'}</div>
+              <div><strong>Cashier:</strong> ${cashierName}</div>
+              <div><strong>Customer:</strong> ${invoice.partnerName || '-'}</div>
+              ${(partnerPhone || invoice?.partnerPhone) ? `<div><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</div>` : ''}
+            </div>
+            <div class="right">
+              <div><strong>Invoice:</strong> ${invoice.name || '-'}</div>
+              <div><strong>Company:</strong> ${invoice.companyName || '-'}</div>
+            </div>
+          </div>
+          <table class="products">
+            <thead><tr>
+              <th style="width:40%;">Product Name</th>
+              <th style="width:15%;text-align:center;">Qty</th>
+              <th style="width:20%;text-align:right;">Unit Price</th>
+              <th style="width:25%;text-align:right;">Total</th>
+            </tr></thead>
             <tbody>${rowsHtml}</tbody>
-          </table><hr/>
-          <div class="total-box"><span class="grand">Grand Total: ${(invoice.amountTotal || 0).toFixed(3)} ${currency}</span></div><hr/>
-          <div style="text-align:center;margin:15px 0;">
-            <h4 style="color:#2e2a4f;">Payment Details</h4>
-            <table style="width:50%;margin:0 auto;font-size:12px;">
+          </table>
+          <div class="total-box"><span class="grand">Grand Total: ${(invoice.amountTotal || 0).toFixed(3)} ${currency}</span></div>
+          <div class="payment-section">
+            <h4>Payment Details</h4>
+            <table>
               <tr><td style="color:#666;">Cash:</td><td style="text-align:right;font-weight:bold;">${(invoice.amountTotal || 0).toFixed(3)} ${currency}</td></tr>
             </table>
           </div>
-          <div class="footer"><p>Thank you for your business!</p><p>Generated from 369ai Biz Mobile App</p></div>
+          <div class="footer"><p>Thankyou</p></div>
         </body></html>`;
 
       const { uri } = await Print.printToFileAsync({ html });
