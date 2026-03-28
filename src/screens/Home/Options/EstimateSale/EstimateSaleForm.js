@@ -56,7 +56,10 @@ const EstimateSaleForm = ({ navigation }) => {
   const [showProductModal, setShowProductModal] = useState(false);
   const [newProdName, setNewProdName] = useState('');
   const [newProdPrice, setNewProdPrice] = useState('');
+  const [newProdCost, setNewProdCost] = useState('');
   const [newProdBarcode, setNewProdBarcode] = useState('');
+  const [newProdOnHand, setNewProdOnHand] = useState('');
+  const [newProdInternalRef, setNewProdInternalRef] = useState('');
   const [newProdCategory, setNewProdCategory] = useState(null);
   const [prodCategories, setProdCategories] = useState([]);
   const [showProdCatDropdown, setShowProdCatDropdown] = useState(false);
@@ -128,7 +131,10 @@ const EstimateSaleForm = ({ navigation }) => {
         name: newProdName.trim(),
         posCategoryId: newProdCategory.id,
         listPrice: newProdPrice || undefined,
+        standardPrice: newProdCost || undefined,
         barcode: newProdBarcode || undefined,
+        defaultCode: newProdInternalRef || undefined,
+        onHandQty: newProdOnHand || undefined,
       });
       const newItem = { id: productId, name: newProdName.trim(), label: newProdName.trim(), lst_price: parseFloat(newProdPrice) || 0 };
       setProducts(prev => [newItem, ...prev]);
@@ -138,7 +144,7 @@ const EstimateSaleForm = ({ navigation }) => {
         setLines(updated);
       }
       setShowProductModal(false);
-      setNewProdName(''); setNewProdPrice(''); setNewProdBarcode(''); setNewProdCategory(null);
+      setNewProdName(''); setNewProdPrice(''); setNewProdCost(''); setNewProdBarcode(''); setNewProdOnHand(''); setNewProdInternalRef(''); setNewProdCategory(null);
       showToastMessage('Product created successfully');
     } catch (err) {
       Alert.alert('Error', err?.message || 'Failed to create product');
@@ -327,11 +333,20 @@ const EstimateSaleForm = ({ navigation }) => {
               <Text style={styles.modalLabel}>Sales Price</Text>
               <TextInput style={styles.modalInput} placeholder="0.000" placeholderTextColor="#999" value={newProdPrice} onChangeText={setNewProdPrice} keyboardType="decimal-pad" />
 
+              <Text style={styles.modalLabel}>Cost</Text>
+              <TextInput style={styles.modalInput} placeholder="0.000" placeholderTextColor="#999" value={newProdCost} onChangeText={setNewProdCost} keyboardType="decimal-pad" />
+
+              <Text style={styles.modalLabel}>On Hand Quantity</Text>
+              <TextInput style={styles.modalInput} placeholder="0" placeholderTextColor="#999" value={newProdOnHand} onChangeText={setNewProdOnHand} keyboardType="numeric" />
+
               <Text style={styles.modalLabel}>Barcode</Text>
               <TextInput style={styles.modalInput} placeholder="Enter barcode" placeholderTextColor="#999" value={newProdBarcode} onChangeText={setNewProdBarcode} />
 
+              <Text style={styles.modalLabel}>Internal Reference</Text>
+              <TextInput style={styles.modalInput} placeholder="e.g. PROD-001" placeholderTextColor="#999" value={newProdInternalRef} onChangeText={setNewProdInternalRef} />
+
               <View style={styles.modalBtnRow}>
-                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setShowProductModal(false); setNewProdName(''); setNewProdPrice(''); setNewProdBarcode(''); setNewProdCategory(null); }}>
+                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setShowProductModal(false); setNewProdName(''); setNewProdPrice(''); setNewProdCost(''); setNewProdBarcode(''); setNewProdOnHand(''); setNewProdInternalRef(''); setNewProdCategory(null); }}>
                   <Text style={styles.modalCancelText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.modalSaveBtn} onPress={handleCreateProduct} disabled={creatingProduct}>

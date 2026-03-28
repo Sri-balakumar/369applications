@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- Email template for below cost sale notification -->
+        <record id="mail_template_below_cost_notification" model="mail.template">
+            <field name="name">Below Cost Sale: Approval Notification</field>
+            <field name="model_id" ref="sale.model_sale_order"/>
+            <field name="subject">Below Cost Sale Alert: {{ object.name }}</field>
+            <field name="body_html"><![CDATA[
+<div style="margin: 0px; padding: 0px; font-size: 14px;">
+    <p style="margin: 0px; padding: 0px; font-size: 14px;">
+        Dear Approver,
+    </p>
+    <br/>
+    <p style="margin: 0px; padding: 0px; font-size: 14px;">
+        A sale order <strong>{{ object.name }}</strong> created by 
+        <strong>{{ object.user_id.name }}</strong> contains products 
+        priced <strong>at or below cost</strong> and requires your approval.
+    </p>
+    <br/>
+    <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; font-size: 13px;">
+        <thead>
+            <tr style="background-color: #875A7B; color: white;">
+                <th>Product</th>
+                <th>Unit Price</th>
+                <th>Cost Price</th>
+                <th>Margin</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for line in object.order_line.filtered(lambda l: l.is_below_cost) %}
+            <tr>
+                <td>{{ line.product_id.display_name }}</td>
+                <td>{{ "%.2f"|format(line.price_unit) }} {{ object.currency_id.symbol }}</td>
+                <td>{{ "%.2f"|format(line.product_cost_price) }} {{ object.currency_id.symbol }}</td>
+                <td style="color: red;">{{ "%.2f"|format(line.margin_percentage) }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <br/>
+    <p style="margin: 0px; padding: 0px; font-size: 14px;">
+        Customer: <strong>{{ object.partner_id.name }}</strong><br/>
+        Total Amount: <strong>{{ "%.2f"|format(object.amount_total) }} {{ object.currency_id.symbol }}</strong>
+    </p>
+    <br/>
+    <p style="margin: 0px; padding: 0px; font-size: 14px;">
+        Please review and approve/reject this sale order.
+    </p>
+</div>
+            ]]></field>
+            <field name="auto_delete" eval="True"/>
+        </record>
+
+    </data>
+</odoo>

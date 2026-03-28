@@ -80,6 +80,7 @@ import { PartnerLedgerScreen } from '@screens/Home/Options/PartnerLedger';
 import { CreditManagementScreen, CreditApplicationsScreen, CreditExceededScreen, CreditRiskHistoryScreen, CreditFacilityForm, CreditFacilityDetailScreen } from '@screens/Home/Options/CreditManagement';
 import { WhatsAppScreen } from '@screens/Home/Options/WhatsApp';
 import { ProductCreationForm, ProductEditForm } from '@screens/Home/Options/ProductCreation';
+import SaleCostApprovalLogsScreen from '@screens/Home/Options/SaleCostProtection/SaleCostApprovalLogsScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -958,6 +959,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="ProductEditForm"
         component={ProductEditForm}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="SaleCostApprovalLogsScreen"
+        component={SaleCostApprovalLogsScreen}
         options={{ headerShown: false }}
       />
     </Stack.Navigator>

@@ -87,7 +87,7 @@ const ProductDetail = ({ navigation, route }) => {
             id: detail.id,
             product_name: od?.product_name || detail.product_name || detail.name,
             image_url: od?.image_url || detail.image_url,
-            cost: od?.price ?? detail.price ?? 0,
+            cost: od?.standard_price ?? detail.standard_price ?? 0,
             sale_price: od?.price ?? detail.price ?? 0,
             minimal_sales_price: od?.minimal_sales_price ?? null,
             inventory_ledgers: od?.inventory_ledgers || [],
@@ -269,7 +269,8 @@ const ProductDetail = ({ navigation, route }) => {
     || (Array.isArray(details?.categ_id) ? details.categ_id[1] : null)
     || (details?.categ_id && typeof details.categ_id === 'string' ? details.categ_id : null)
     || 'N/A';
-  const priceValue = (details.cost ?? details.price ?? 0);
+  const priceValue = (details.sale_price ?? details.price ?? 0);
+  const costValue = (details.cost ?? details.standard_price ?? 0);
   const barcodeValue = details.barcode || 'N/A';
   const internalRef = details.product_code || details.code || details.default_code || 'N/A';
   const stockQty = details.total_product_quantity ?? 0;
@@ -332,6 +333,7 @@ const ProductDetail = ({ navigation, route }) => {
                 </View>
                 <DetailRow icon="category" label="Category" value={categoryName} />
                 <DetailRow icon="attach-money" label="Sales Price" value={`${Number(priceValue).toFixed(3)} ${currency || ''}`} valueColor={COLORS.primaryThemeColor} />
+                <DetailRow icon="money-off" label="Cost" value={`${Number(costValue).toFixed(3)} ${currency || ''}`} valueColor="#E65100" />
                 <DetailRow icon="inventory" label="On Hand" value={String(stockQty)} valueColor={stockQty > 0 ? '#4CAF50' : '#F44336'} />
                 <DetailRow icon="qr-code" label="Barcode" value={barcodeValue} />
                 <DetailRow icon="tag" label="Internal Reference" value={internalRef} />
@@ -342,6 +344,7 @@ const ProductDetail = ({ navigation, route }) => {
               <View style={s.sectionCard}>
                 <DetailRow icon="category" label="Category" value={categoryName} />
                 <DetailRow icon="attach-money" label="Sales Price" value={`${Number(priceValue).toFixed(3)} ${currency || ''}`} valueColor={COLORS.primaryThemeColor} />
+                <DetailRow icon="money-off" label="Cost" value={`${Number(costValue).toFixed(3)} ${currency || ''}`} valueColor="#E65100" />
                 <DetailRow icon="inventory" label="On Hand" value={String(stockQty)} valueColor={stockQty > 0 ? '#4CAF50' : '#F44336'} />
                 <DetailRow icon="qr-code" label="Barcode" value={barcodeValue} />
                 <DetailRow icon="tag" label="Internal Reference" value={internalRef} />

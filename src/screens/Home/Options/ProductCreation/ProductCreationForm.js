@@ -325,6 +325,7 @@ const ProductCreationForm = ({ navigation }) => {
 
         {/* Optional Fields */}
         <FormInput label="Sales Price" placeholder="0.000" value={salesPrice} onChangeText={setSalesPrice} keyboardType="numeric" />
+        <FormInput label="Cost" placeholder="0.000" value={cost} onChangeText={setCost} keyboardType="numeric" />
         <FormInput label="On Hand Quantity" placeholder="0" value={onHandQty} onChangeText={setOnHandQty} keyboardType="numeric" />
         <FormInput label="Barcode" placeholder="Enter barcode" value={barcode} onChangeText={setBarcode}
           onScanPress={() => navigation.navigate('Scanner', {

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="sale_cost_approval_wizard_form" model="ir.ui.view">
+        <field name="name">sale.cost.approval.wizard.form</field>
+        <field name="model">sale.cost.approval.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Below Cost Sale - Approval Required">
+                <div class="alert alert-warning" role="alert">
+                    <h4 class="alert-heading">
+                        ⚠ Below Cost Sale Detected!
+                    </h4>
+                    <p>
+                        This sale order contains products priced below the
+                        minimum allowed price (cost + minimum margin).
+                        Authorization from an approved person is required
+                        to proceed.
+                    </p>
+                </div>
+
+                <group>
+                    <group string="Order Information">
+                        <field name="sale_order_id" readonly="1"/>
+                        <field name="partner_id" readonly="1"/>
+                        <field name="amount_total" readonly="1"/>
+                        <field name="currency_id" invisible="1"/>
+                    </group>
+                    <group string="Approver Authentication">
+                        <field name="approver_id"
+                               options="{'no_create': True, 'no_open': True}"/>
+                        <field name="approver_password" password="True"/>
+                    </group>
+                </group>
+
+                <group string="Below Cost Lines">
+                    <field name="below_cost_summary"
+                           nolabel="1"
+                           readonly="1"/>
+                </group>
+
+                <group>
+                    <field name="reason"
+                           placeholder="Enter reason for approving this below-cost sale (optional but recommended)..."
+                           nolabel="1"/>
+                </group>
+
+                <footer>
+                    <button name="action_approve"
+                            type="object"
+                            string="Approve &amp; Confirm"
+                            class="btn-primary"/>
+                    <button name="action_reject"
+                            type="object"
+                            string="Reject"
+                            class="btn-danger"/>
+                    <button string="Cancel"
+                            class="btn-secondary"
+                            special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+</odoo>

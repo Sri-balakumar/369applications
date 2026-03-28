@@ -20,7 +20,6 @@ class VehicleTracking(models.Model):
                                  readonly=True)
     tank_capacity = fields.Float(string="Tank Capacity", readonly=True)
 
-
     # Tracking Details
     source_id = fields.Many2one('vehicle.location', string='Source Location')
     destination_id = fields.Many2one('vehicle.location', string='Destination Location')
@@ -28,8 +27,7 @@ class VehicleTracking(models.Model):
     start_km = fields.Integer(string='Start Km', default=0)
     end_km = fields.Integer(string='End Km', default=0)
     km_travelled = fields.Integer(string='KM Travelled', compute='_compute_km_travelled', store=True)
-    purpose_of_visit_id = fields.Many2one('vehicle.purpose',string="Purpose of Visit")
-
+    purpose_of_visit_id = fields.Many2one('vehicle.purpose', string="Purpose of Visit")
 
     start_time = fields.Datetime(string='Start Time', default=fields.Datetime.now)
     end_time = fields.Datetime(string='End Time')
@@ -46,25 +44,20 @@ class VehicleTracking(models.Model):
     tyre_checking = fields.Boolean(string='Tyre Checking')
     battery_checking = fields.Boolean(string='Battery Checking')
     daily_checks = fields.Boolean(string='Daily Checks')
-    fuel_checking = fields.Boolean(string="Fuel Checking") 
+    fuel_checking = fields.Boolean(string="Fuel Checking")
     fuel_status = fields.Char(string="Fuel Status", readonly=True)
-    fuel_log_ids = fields.One2many('vehicle.fuel.log','vehicle_tracking_id',string='Fuel Logs')
-
-
-
-
+    fuel_log_ids = fields.One2many('vehicle.fuel.log', 'vehicle_tracking_id', string='Fuel Logs')
 
     invoice_line_ids = fields.One2many(
-        'vehicle.tracking.invoice',   # child model name
-        'tracking_id',     
+        'vehicle.tracking.invoice',
+        'tracking_id',
         string='Invoice Details'
     )
 
-    #info section
+    # Info section
     start_trip = fields.Boolean(string='Start Trip')
     end_trip = fields.Boolean(string='End Trip')
     trip_cancel = fields.Boolean(string='Trip Cancel')
-    
 
     start_latitude = fields.Char(string='Start Latitude')
     start_longitude = fields.Char(string='Start Longitude')
@@ -74,13 +67,10 @@ class VehicleTracking(models.Model):
     image_url = fields.Char(string='Image URL')
     remarks = fields.Text(string='Remarks')
 
-
     state = fields.Selection([
         ('draft', 'Draft'),
         ('validated', 'Validated'),
     ], default='draft', string='Status', readonly=True)
-
-    
 
     # Compute fields
     @api.depends('start_km', 'end_km')
@@ -97,47 +87,14 @@ class VehicleTracking(models.Model):
             else:
                 rec.duration = 0.0
 
-
-
-    @api.depends('fuel_checking', 'end_fuel_checking')
-    def _compute_completion_status(self):
-        for rec in self:
-            if rec.fuel_checking and rec.end_fuel_checking :
-                rec.completion_status = "Fuel workflow completed ✓"
-            else:
-                rec.completion_status = ""     
-
     @api.onchange('vehicle_id')
     def _onchange_vehicle_id(self):
         if self.vehicle_id:
-            # Fetch number plate from fleet vehicle
             self.number_plate = self.vehicle_id.license_plate
-
-            # Fetch tank capacity
             self.tank_capacity = self.vehicle_id.tank_capacity
         else:
             self.number_plate = False
             self.tank_capacity = 0.0
-
-
-    @api.model_create_multi
-    def create(self, vals_list):
-        for vals in vals_list:
-            if vals.get('vehicle_id'):
-                vehicle = self.env['fleet.vehicle'].browse(vals['vehicle_id'])
-                vals['tank_capacity'] = vehicle.tank_capacity
-        return super(VehicleTracking, self).create(vals_list)
-
-
-    def write(self, vals):
-        if vals.get('vehicle_id'):
-            vehicle = self.env['fleet.vehicle'].browse(vals['vehicle_id'])
-            vals['tank_capacity'] = vehicle.tank_capacity
-        return super(VehicleTracking, self).write(vals)
-
-
-    
-
 
     @api.onchange('fuel_checking')
     def _onchange_fuel_checking(self):
@@ -146,17 +103,6 @@ class VehicleTracking(models.Model):
         else:
             self.fuel_status = ""
 
-
-        
-    @api.model_create_multi
-    def create(self, vals_list):
-        # DO NOT assign sequence here - let it remain as 'New'
-        for vals in vals_list:
-            if vals.get('ref', 'New') == 'New' or not vals.get('ref'):
-                vals['ref'] = self.env['ir.sequence'].next_by_code('vehicle.tracking.seq')
-        records = super(VehicleTracking, self).create(vals_list)
-        return records
-        
     @api.onchange('invoice_number')
     def _onchange_invoice_number(self):
         if not self.invoice_number:
@@ -164,7 +110,6 @@ class VehicleTracking(models.Model):
             self.invoice_message = ""
             return
 
-        # check invoice in account.move with move_type='out_invoice'
         invoice = self.env['account.move'].search([
             ('name', '=', self.invoice_number),
             ('move_type', '=', 'out_invoice')
@@ -175,26 +120,33 @@ class VehicleTracking(models.Model):
             self.invoice_message = "Invoice number matches ✓"
         else:
             self.invoice_match = False
-            self.invoice_message = "Invoice number doesn’t match ✗"
-
-    def write(self, vals):
-    # Check if user tries to save without fuel checking
-        fuel_checking_value = vals.get('fuel_checking', self.fuel_checking)
-
-        if not fuel_checking_value:
-            raise UserError("Fuel checking is not updated")
-
-        return super(VehicleTracking, self).write(vals)
+            self.invoice_message = "Invoice number doesn't match ✗"
 
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
+            # Assign sequence
+            if vals.get('ref', 'New') == 'New' or not vals.get('ref'):
+                vals['ref'] = self.env['ir.sequence'].next_by_code('vehicle.tracking.seq')
+            # Set tank capacity from vehicle
+            if vals.get('vehicle_id'):
+                vehicle = self.env['fleet.vehicle'].browse(vals['vehicle_id'])
+                vals['tank_capacity'] = vehicle.tank_capacity
+            # Fuel checking validation
             if not vals.get('fuel_checking'):
                 raise UserError("Fuel checking is not updated")
         return super(VehicleTracking, self).create(vals_list)
-    
 
-
+    def write(self, vals):
+        # Set tank capacity from vehicle
+        if vals.get('vehicle_id'):
+            vehicle = self.env['fleet.vehicle'].browse(vals['vehicle_id'])
+            vals['tank_capacity'] = vehicle.tank_capacity
+        # Fuel checking validation
+        fuel_checking_value = vals.get('fuel_checking', self.fuel_checking)
+        if not fuel_checking_value:
+            raise UserError("Fuel checking is not updated")
+        return super(VehicleTracking, self).write(vals)
 
     def action_add_fuel_log(self):
         self.ensure_one()
@@ -211,7 +163,6 @@ class VehicleTracking(models.Model):
             }
         }
 
-    # Buttons
     def action_validate(self):
         for rec in self:
             if rec.invoice_number:
@@ -221,40 +172,22 @@ class VehicleTracking(models.Model):
                 ], limit=1)
 
                 if not invoice:
-                    # Invoice does NOT exist → block validation
                     rec.invoice_match = False
-                    rec.invoice_message = "Invoice number doesn’t match ✗"
-                    raise UserError("Invoice number doesn’t match any existing invoice!")
+                    rec.invoice_message = "Invoice number doesn't match ✗"
+                    raise UserError("Invoice number doesn't match any existing invoice!")
 
-                # Invoice exists → allow validation
                 rec.invoice_match = True
                 rec.invoice_message = "Invoice number matches ✓"
 
-            # Continue your normal validation logic
             rec.state = 'validated'
 
     def action_save_fuel_log(self):
         """Close the popup window after saving."""
         return {'type': 'ir.actions.act_window_close'}
 
-
-    
-
-    # def action_discard_custom(self):
-    #     """Custom discard button — shows confirmation and redirects to list view."""
-    #     return {
-    #         'type': 'ir.actions.act_window',
-    #         'name': 'Vehicle Tracking',
-    #         'res_model': 'vehicle.tracking',
-    #         'view_mode': 'list,form',
-    #         'target': 'current',
-    #         'views': [(False, 'list'), (False, 'form')],
-    #     }
-    
     def action_discard_custom(self):
-        """Custom discard button – only delete if record has ref='New' (not saved properly)"""
+        """Custom discard button – redirect to list view"""
         self.ensure_one()
-
         return {
             'type': 'ir.actions.act_window',
             'name': 'Vehicle Tracking',
@@ -266,24 +199,14 @@ class VehicleTracking(models.Model):
         }
 
     def action_custom_save(self):
-        # Save the record (Odoo does this automatically when you save a form)
-        self.ensure_one()  # Ensure only one record is processed at a time
+        self.ensure_one()
         if self.ref == 'New' and self.state == 'draft':
             self.ref = self.env['ir.sequence'].next_by_code('vehicle.tracking.seq') or 'New'
-
-        if self.ref == 'New' and self.state == 'draft':
-            self.ref = self.env['ir.sequence'].next_by_code('vehicle.tracking.seq') or 'New'
-        # Return to the list view after saving
         return {
             'type': 'ir.actions.act_window',
             'name': 'Vehicle Tracking',
             'res_model': 'vehicle.tracking',
-            'view_mode': 'list', # Use the default list views
+            'view_mode': 'list',
             'target': 'current',
             'context': self.env.context,
         }
-    
-
-
-    # def action_custom_save(self):
-    #     return True

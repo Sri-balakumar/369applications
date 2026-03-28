@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="0">
+
+        <!-- Group: Below Cost Sale Approver -->
+        <record id="group_sale_cost_approver" model="res.groups">
+            <field name="name">Below Cost Sale Approver</field>
+            <field name="comment">
+                Users in this group can approve sales at or below cost price.
+                They will be prompted to authenticate when approving below-cost sales.
+            </field>
+        </record>
+
+        <!-- Group: Below Cost Sale Manager (can configure settings) -->
+        <record id="group_sale_cost_manager" model="res.groups">
+            <field name="name">Below Cost Protection Manager</field>
+            <field name="implied_ids" eval="[(4, ref('group_sale_cost_approver'))]"/>
+            <field name="comment">
+                Users in this group can configure below cost protection settings
+                and manage approvers. Inherits approver rights.
+            </field>
+        </record>
+
+    </data>
+</odoo>

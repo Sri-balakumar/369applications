@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_sale_cost_approval_log_approver,sale.cost.approval.log.approver,model_sale_cost_approval_log,group_sale_cost_approver,1,1,1,0
+access_sale_cost_approval_log_manager,sale.cost.approval.log.manager,model_sale_cost_approval_log,group_sale_cost_manager,1,1,1,1
+access_sale_cost_approval_log_user,sale.cost.approval.log.user,model_sale_cost_approval_log,base.group_user,1,0,0,0
+access_sale_cost_approval_wizard_approver,sale.cost.approval.wizard.approver,model_sale_cost_approval_wizard,group_sale_cost_approver,1,1,1,1
+access_sale_cost_approval_wizard_user,sale.cost.approval.wizard.user,model_sale_cost_approval_wizard,base.group_user,1,1,1,1

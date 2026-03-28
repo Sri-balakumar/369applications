@@ -30,7 +30,8 @@ const ProductEditForm = ({ navigation, route }) => {
   // Form fields - pre-filled from product
   const [productName, setProductName] = useState(product?.product_name || product?.name || '');
   const [category, setCategory] = useState(null);
-  const [salesPrice, setSalesPrice] = useState(String(product?.cost ?? product?.price ?? product?.list_price ?? ''));
+  const [salesPrice, setSalesPrice] = useState(String(product?.sale_price ?? product?.price ?? product?.list_price ?? ''));
+  const [cost, setCost] = useState(String(product?.cost ?? product?.standard_price ?? ''));
   const [barcode, setBarcode] = useState(product?.barcode || '');
   const [internalRef, setInternalRef] = useState(product?.product_code || product?.code || product?.default_code || '');
   const [onHandQty] = useState(String(product?.total_product_quantity ?? product?.qty_available ?? 0));
@@ -112,6 +113,7 @@ const ProductEditForm = ({ navigation, route }) => {
         name: productName.trim(),
         posCategoryId: category.id,
         listPrice: salesPrice || undefined,
+        standardPrice: cost || undefined,
         barcode: barcode || undefined,
         defaultCode: internalRef || undefined,
         image: imageBase64 || undefined,
@@ -148,6 +150,7 @@ const ProductEditForm = ({ navigation, route }) => {
         <FormInput label="Category" placeholder="Select category" dropIcon="menu-down" editable={false}
           value={category?.name || ''} validate={errors.category} required onPress={() => setIsDropdownVisible(true)} />
         <FormInput label="Sales Price" placeholder="0.000" value={salesPrice} onChangeText={setSalesPrice} keyboardType="decimal-pad" />
+        <FormInput label="Cost" placeholder="0.000" value={cost} onChangeText={setCost} keyboardType="decimal-pad" />
         <FormInput label="On Hand Quantity" placeholder="0" value={onHandQty} editable={false} />
         <FormInput label="Barcode" placeholder="Enter barcode" value={barcode} onChangeText={setBarcode}
           onScanPress={() => navigation.navigate('Scanner', {

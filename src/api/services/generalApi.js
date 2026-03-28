@@ -1024,7 +1024,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
           args: [[['id', '=', productId]]],
           kwargs: {
             fields: [
-              'id', 'name', 'list_price', 'default_code', 'barcode', 'uom_id', 'image_128',
+              'id', 'name', 'list_price', 'standard_price', 'default_code', 'barcode', 'uom_id', 'image_128',
               'description_sale', 'categ_id', 'pos_categ_ids', 'qty_available', 'virtual_available'
             ],
             limit: 1,
@@ -1117,6 +1117,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
       product_name: p.name || '',
       image_url: imageUrl,
       price: p.list_price || 0,
+      standard_price: p.standard_price || 0,
       minimal_sales_price: p.list_price || null,
       inventory_ledgers,
       total_product_quantity: p.qty_available ?? p.virtual_available ?? 0,
@@ -9909,13 +9910,13 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
   }
 };
 
-export const updateProductOdoo = async (productId, { name, posCategoryId, listPrice, barcode, defaultCode, image }) => {
+export const updateProductOdoo = async (productId, { name, posCategoryId, listPrice, standardPrice, barcode, defaultCode, image }) => {
   try {
     const headers = await getOdooAuthHeaders();
     const vals = {};
     if (name !== undefined && name !== '') vals.name = name;
-    if (posCategoryId !== undefined && posCategoryId !== null) vals.pos_categ_ids = [[6, 0, [Number(posCategoryId)]]];
     if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
+    if (standardPrice !== undefined && standardPrice !== '') vals.standard_price = parseFloat(standardPrice) || 0;
     if (barcode !== undefined) vals.barcode = barcode || false;
     if (defaultCode !== undefined) vals.default_code = defaultCode || false;
     if (image) vals.image_1920 = image;
@@ -10036,6 +10037,38 @@ export const createVendorOdoo = async ({ name, phone, email, company }) => {
     return response.data.result; // returns the new partner ID
   } catch (error) {
     console.error('[createVendorOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// =============================================
+// SALE COST PROTECTION
+// =============================================
+
+export const fetchSaleCostApprovalLogsOdoo = async ({ offset = 0, limit = 50 } = {}) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'sale.cost.approval.log',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: ['id', 'sale_order_id', 'approver_id', 'approval_date', 'reason', 'action', 'partner_id', 'order_amount_total', 'currency_id', 'salesperson_id', 'below_cost_details'],
+            offset, limit,
+            order: 'create_date desc',
+          },
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) throw new Error('Failed to fetch approval logs');
+    return response.data.result || [];
+  } catch (error) {
+    console.error('[fetchSaleCostApprovalLogsOdoo] error:', error?.message || error);
     throw error;
   }
 };

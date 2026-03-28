@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="sale_cost_protection_config_form" model="ir.ui.view">
+        <field name="name">sale.cost.protection.config.form</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="priority" eval="95"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form[@class='oe_form_configuration']" position="inside">
+                <div class="app_settings_block"
+                     data-string="Below Cost Protection"
+                     data-key="sale_cost_protection">
+                    <h2>Below Cost Sale Protection</h2>
+                    <div class="row mt16 o_settings_container">
+                        <div class="col-12 col-lg-6 o_setting_box">
+                            <div class="o_setting_left_pane">
+                                <field name="enable_below_cost_protection"/>
+                            </div>
+                            <div class="o_setting_right_pane">
+                                <label for="enable_below_cost_protection"/>
+                                <div class="text-muted">
+                                    Require approval from authorized person for sales at or below product cost price
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div invisible="not enable_below_cost_protection">
+                        <h3 class="mt16">Margin Settings</h3>
+                        <div class="row mt16 o_settings_container">
+                            <div class="col-12 col-lg-6 o_setting_box">
+                                <div class="o_setting_right_pane">
+                                    <label for="minimum_margin_percentage"/>
+                                    <div class="text-muted">
+                                        Minimum margin percentage required. Sales below this margin trigger approval.
+                                    </div>
+                                    <div class="content-group mt8">
+                                        <field name="minimum_margin_percentage" class="oe_inline"/>
+                                        <span class="ms-1">%</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-6 o_setting_box">
+                                <div class="o_setting_right_pane">
+                                    <label for="cost_field_source"/>
+                                    <div class="text-muted">
+                                        Which cost field to use when checking below-cost sales
+                                    </div>
+                                    <div class="content-group mt8">
+                                        <field name="cost_field_source" class="oe_inline"/>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <h3 class="mt16">Protection Options</h3>
+                        <div class="row mt16 o_settings_container">
+                            <div class="col-12 col-lg-6 o_setting_box">
+                                <div class="o_setting_left_pane">
+                                    <field name="block_below_cost_completely"/>
+                                </div>
+                                <div class="o_setting_right_pane">
+                                    <label for="block_below_cost_completely"/>
+                                    <div class="text-muted">
+                                        Block users from entering prices below cost (hard block on line entry)
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-6 o_setting_box">
+                                <div class="o_setting_left_pane">
+                                    <field name="notify_approvers_on_flag"/>
+                                </div>
+                                <div class="o_setting_right_pane">
+                                    <label for="notify_approvers_on_flag"/>
+                                    <div class="text-muted">
+                                        Send email notification to approvers when a sale is flagged
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <h3 class="mt16">Authorized Approvers</h3>
+                        <div class="row mt16 o_settings_container">
+                            <div class="col-12 o_setting_box">
+                                <div class="o_setting_right_pane">
+                                    <label for="below_cost_approver_ids"/>
+                                    <div class="text-muted">
+                                        Users authorized to approve below-cost sales (added to Below Cost Sale Approver group)
+                                    </div>
+                                    <div class="content-group mt8">
+                                        <field name="below_cost_approver_ids" widget="many2many_tags"
+                                               options="{'no_create': True}"/>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

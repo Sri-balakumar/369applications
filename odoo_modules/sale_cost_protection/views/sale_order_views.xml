@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Sale Order Form View Inherit -->
+    <record id="sale_order_form_inherit_cost_protection" model="ir.ui.view">
+        <field name="name">sale.order.form.inherit.cost.protection</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_order_form"/>
+        <field name="arch" type="xml">
+
+            <!-- Add approval status banner at the top -->
+            <xpath expr="//header" position="after">
+                <div class="alert alert-warning text-center mb-0"
+                     role="alert"
+                     invisible="not needs_cost_approval">
+                    <strong>⚠ Below Cost Alert:</strong>
+                    This order has <field name="below_cost_line_count" readonly="1"/> line(s)
+                    priced below cost. Approval from an authorized person is required before confirmation.
+                    <button name="action_notify_approvers"
+                            type="object"
+                            class="btn btn-sm btn-warning ms-2"
+                            string="Notify Approvers"
+                            invisible="not needs_cost_approval"/>
+                </div>
+                <div class="alert alert-success text-center mb-0"
+                     role="alert"
+                     invisible="not below_cost_approved">
+                    <strong>✓ Below Cost Approved</strong> by
+                    <field name="below_cost_approved_by" readonly="1" class="oe_inline"/>
+                    on <field name="below_cost_approved_date" readonly="1" class="oe_inline"/>
+                </div>
+            </xpath>
+
+            <!-- Add below cost fields to the order line tree -->
+            <xpath expr="//field[@name='order_line']/list/field[@name='price_unit']" position="after">
+                <field name="product_cost_price"
+                       string="Cost"
+                       optional="hide"
+                       readonly="1"/>
+                <field name="minimum_required_price"
+                       string="Min Price"
+                       optional="hide"
+                       readonly="1"/>
+                <field name="margin_percentage"
+                       string="Margin %"
+                       optional="show"
+                       readonly="1"
+                       decoration-danger="margin_percentage &lt; 0"
+                       decoration-warning="margin_percentage &gt;= 0 and is_below_cost"/>
+                <field name="is_below_cost"
+                       string="Below Cost"
+                       optional="show"
+                       readonly="1"
+                       widget="boolean"/>
+            </xpath>
+
+            <!-- Add approval info in a new page -->
+            <xpath expr="//page[@name='other_information']" position="after">
+                <page string="Cost Protection"
+                      name="cost_protection"
+                      invisible="not has_below_cost_lines">
+                    <group>
+                        <group string="Approval Status">
+                            <field name="has_below_cost_lines" readonly="1"/>
+                            <field name="below_cost_line_count" readonly="1"/>
+                            <field name="needs_cost_approval" readonly="1"/>
+                            <field name="below_cost_approved" readonly="1"/>
+                        </group>
+                        <group string="Approval Details"
+                               invisible="not below_cost_approved">
+                            <field name="below_cost_approved_by" readonly="1"/>
+                            <field name="below_cost_approved_date" readonly="1"/>
+                            <field name="below_cost_approval_reason" readonly="1"/>
+                        </group>
+                    </group>
+                    <group string="Actions" invisible="not below_cost_approved">
+                        <button name="action_reset_cost_approval"
+                                type="object"
+                                string="Reset Approval"
+                                class="btn btn-warning"
+                                groups="sale_cost_protection.group_sale_cost_manager"
+                                confirm="Are you sure you want to reset the below-cost approval? The order will need to be re-approved."/>
+                    </group>
+                </page>
+            </xpath>
+
+        </field>
+    </record>
+
+    <!-- Sale Order List View - Add below cost indicator -->
+    <record id="sale_order_tree_inherit_cost_protection" model="ir.ui.view">
+        <field name="name">sale.order.tree.inherit.cost.protection</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_quotation_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='amount_total']" position="after">
+                <field name="has_below_cost_lines"
+                       string="Below Cost"
+                       optional="show"
+                       widget="boolean"/>
+                <field name="below_cost_approved"
+                       string="Cost Approved"
+                       optional="show"
+                       widget="boolean"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Search view for filtering -->
+    <record id="sale_order_search_inherit_cost_protection" model="ir.ui.view">
+        <field name="name">sale.order.search.inherit.cost.protection</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.sale_order_view_search_inherit_quotation"/>
+        <field name="arch" type="xml">
+            <xpath expr="//search" position="inside">
+                <separator/>
+                <filter string="Below Cost Orders"
+                        name="below_cost"
+                        domain="[('has_below_cost_lines', '=', True)]"/>
+                <filter string="Pending Cost Approval"
+                        name="pending_cost_approval"
+                        domain="[('needs_cost_approval', '=', True)]"/>
+                <filter string="Cost Approved"
+                        name="cost_approved"
+                        domain="[('below_cost_approved', '=', True)]"/>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>
