@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, StyleSheet, Keyboard, TouchableOpacity, Alert, TextInput } from 'react-native';
+import { View, StyleSheet, Keyboard, TouchableOpacity, Alert, TextInput, Modal } from 'react-native';
 import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
 import { NavigationHeader, TitleWithButton } from '@components/Header';
 import { CustomListModal } from '@components/Modal';
@@ -13,11 +13,14 @@ import { AntDesign } from '@expo/vector-icons';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import {
   fetchCustomersOdoo,
+  createCustomerOdoo,
   fetchWarehousesSessionOdoo,
   fetchEstimateSalePaymentMethodsOdoo,
   fetchProductsOdoo,
   createEstimateSaleOdoo,
   fetchProductByBarcodeOdoo,
+  createProductOdoo,
+  fetchPosCategoriesOdoo,
 } from '@api/services/generalApi';
 
 const EstimateSaleForm = ({ navigation }) => {
@@ -41,6 +44,24 @@ const EstimateSaleForm = ({ navigation }) => {
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([]);
 
+  // Create Customer modal
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
+  const [newCustName, setNewCustName] = useState('');
+  const [newCustPhone, setNewCustPhone] = useState('');
+  const [newCustEmail, setNewCustEmail] = useState('');
+  const [newCustCompany, setNewCustCompany] = useState('');
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+
+  // Create Product modal
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [newProdName, setNewProdName] = useState('');
+  const [newProdPrice, setNewProdPrice] = useState('');
+  const [newProdBarcode, setNewProdBarcode] = useState('');
+  const [newProdCategory, setNewProdCategory] = useState(null);
+  const [prodCategories, setProdCategories] = useState([]);
+  const [showProdCatDropdown, setShowProdCatDropdown] = useState(false);
+  const [creatingProduct, setCreatingProduct] = useState(false);
+
   useEffect(() => {
     fetchCustomersOdoo({ limit: 50 }).then(data => {
       setCustomers((data || []).map(c => ({ id: c.id, name: c.name || '', label: c.name || '' })));
@@ -59,6 +80,72 @@ const EstimateSaleForm = ({ navigation }) => {
       setProducts((data || []).map(p => ({ id: p.id, name: p.product_name || p.name || '', label: p.product_name || p.name || '', lst_price: p.lst_price || p.price || 0 })));
     }).catch(() => {});
   }, []);
+
+  const handleCreateCustomer = async () => {
+    if (!newCustName.trim()) {
+      Alert.alert('Error', 'Customer name is required');
+      return;
+    }
+    setCreatingCustomer(true);
+    try {
+      const newId = await createCustomerOdoo({
+        name: newCustName.trim(),
+        phone: newCustPhone.trim() || undefined,
+        email: newCustEmail.trim() || undefined,
+        company: newCustCompany.trim() || undefined,
+      });
+      const newItem = { id: newId, name: newCustName.trim(), label: newCustName.trim() };
+      setCustomers(prev => [newItem, ...prev]);
+      setCustomer(newItem);
+      if (errors.customer) setErrors(prev => ({ ...prev, customer: null }));
+      setShowCustomerModal(false);
+      setNewCustName(''); setNewCustPhone(''); setNewCustEmail(''); setNewCustCompany('');
+      showToastMessage('Customer created successfully');
+    } catch (err) {
+      Alert.alert('Error', err?.message || 'Failed to create customer');
+    } finally {
+      setCreatingCustomer(false);
+    }
+  };
+
+  const openCreateProduct = async () => {
+    setIsDropdownVisible(false);
+    if (prodCategories.length === 0) {
+      try {
+        const cats = await fetchPosCategoriesOdoo();
+        setProdCategories((cats || []).map(c => ({ id: c._id || c.id, name: c.category_name || c.name || '', label: c.category_name || c.name || '' })));
+      } catch (e) {}
+    }
+    setShowProductModal(true);
+  };
+
+  const handleCreateProduct = async () => {
+    if (!newProdName.trim()) { Alert.alert('Error', 'Product name is required'); return; }
+    if (!newProdCategory) { Alert.alert('Error', 'Category is required'); return; }
+    setCreatingProduct(true);
+    try {
+      const productId = await createProductOdoo({
+        name: newProdName.trim(),
+        posCategoryId: newProdCategory.id,
+        listPrice: newProdPrice || undefined,
+        barcode: newProdBarcode || undefined,
+      });
+      const newItem = { id: productId, name: newProdName.trim(), label: newProdName.trim(), lst_price: parseFloat(newProdPrice) || 0 };
+      setProducts(prev => [newItem, ...prev]);
+      if (editingLineIndex !== null) {
+        const updated = [...lines];
+        updated[editingLineIndex] = { ...updated[editingLineIndex], product_id: productId, product_name: newProdName.trim(), price_unit: parseFloat(newProdPrice) || 0 };
+        setLines(updated);
+      }
+      setShowProductModal(false);
+      setNewProdName(''); setNewProdPrice(''); setNewProdBarcode(''); setNewProdCategory(null);
+      showToastMessage('Product created successfully');
+    } catch (err) {
+      Alert.alert('Error', err?.message || 'Failed to create product');
+    } finally {
+      setCreatingProduct(false);
+    }
+  };
 
   const openDropdown = (type, lineIndex = null) => { setDropdownType(type); setEditingLineIndex(lineIndex); setIsDropdownVisible(true); };
 
@@ -188,7 +275,73 @@ const EstimateSaleForm = ({ navigation }) => {
 
         <LoadingButton title="CREATE ESTIMATE SALE" onPress={handleSubmit} marginTop={10} loading={isSubmitting} />
         <View style={{ height: 40 }} />
-        <CustomListModal isVisible={isDropdownVisible} items={getDropdownItems()} title={getDropdownTitle()} onClose={() => setIsDropdownVisible(false)} onValueChange={handleDropdownSelect} onAddIcon={false} />
+        <CustomListModal isVisible={isDropdownVisible} items={getDropdownItems()} title={getDropdownTitle()} onClose={() => setIsDropdownVisible(false)} onValueChange={handleDropdownSelect}
+          onAddIcon={dropdownType === 'customer' || dropdownType === 'product'}
+          onAdd={dropdownType === 'customer' ? () => { setIsDropdownVisible(false); setShowCustomerModal(true); } : dropdownType === 'product' ? openCreateProduct : undefined}
+        />
+
+        {/* Create Customer Modal */}
+        <Modal visible={showCustomerModal} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalBox}>
+              <Text style={styles.modalTitle}>Create Customer</Text>
+
+              <Text style={styles.modalLabel}>Name *</Text>
+              <TextInput style={styles.modalInput} placeholder="Customer name" placeholderTextColor="#999" value={newCustName} onChangeText={setNewCustName} autoFocus />
+
+              <Text style={styles.modalLabel}>Phone</Text>
+              <TextInput style={styles.modalInput} placeholder="Phone number" placeholderTextColor="#999" value={newCustPhone} onChangeText={setNewCustPhone} keyboardType="phone-pad" />
+
+              <Text style={styles.modalLabel}>Email</Text>
+              <TextInput style={styles.modalInput} placeholder="Email address" placeholderTextColor="#999" value={newCustEmail} onChangeText={setNewCustEmail} keyboardType="email-address" autoCapitalize="none" />
+
+              <Text style={styles.modalLabel}>Company</Text>
+              <TextInput style={styles.modalInput} placeholder="Company name" placeholderTextColor="#999" value={newCustCompany} onChangeText={setNewCustCompany} />
+
+              <View style={styles.modalBtnRow}>
+                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setShowCustomerModal(false); setNewCustName(''); setNewCustPhone(''); setNewCustEmail(''); setNewCustCompany(''); }}>
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalSaveBtn} onPress={handleCreateCustomer} disabled={creatingCustomer}>
+                  <Text style={styles.modalSaveText}>{creatingCustomer ? 'Saving...' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Create Product Modal */}
+        <Modal visible={showProductModal} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalBox}>
+              <Text style={styles.modalTitle}>Create Product</Text>
+
+              <Text style={styles.modalLabel}>Product Name *</Text>
+              <TextInput style={styles.modalInput} placeholder="Product name" placeholderTextColor="#999" value={newProdName} onChangeText={setNewProdName} autoFocus />
+
+              <Text style={styles.modalLabel}>Category *</Text>
+              <TouchableOpacity style={styles.modalInput} onPress={() => setShowProdCatDropdown(true)}>
+                <Text style={{ fontSize: 15, color: newProdCategory ? '#1f2937' : '#999' }}>{newProdCategory?.name || 'Select category'}</Text>
+              </TouchableOpacity>
+
+              <Text style={styles.modalLabel}>Sales Price</Text>
+              <TextInput style={styles.modalInput} placeholder="0.000" placeholderTextColor="#999" value={newProdPrice} onChangeText={setNewProdPrice} keyboardType="decimal-pad" />
+
+              <Text style={styles.modalLabel}>Barcode</Text>
+              <TextInput style={styles.modalInput} placeholder="Enter barcode" placeholderTextColor="#999" value={newProdBarcode} onChangeText={setNewProdBarcode} />
+
+              <View style={styles.modalBtnRow}>
+                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setShowProductModal(false); setNewProdName(''); setNewProdPrice(''); setNewProdBarcode(''); setNewProdCategory(null); }}>
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalSaveBtn} onPress={handleCreateProduct} disabled={creatingProduct}>
+                  <Text style={styles.modalSaveText}>{creatingProduct ? 'Saving...' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+        <CustomListModal isVisible={showProdCatDropdown} items={prodCategories} title="Select Category" onClose={() => setShowProdCatDropdown(false)} onValueChange={(item) => { setNewProdCategory(item); setShowProdCatDropdown(false); }} />
       </RoundedScrollContainer>
       <OverlayLoader visible={isSubmitting} />
     </SafeAreaView>
@@ -206,6 +359,17 @@ const styles = StyleSheet.create({
   totalSection: { flexDirection: 'row', justifyContent: 'center', marginVertical: 10, padding: 10, backgroundColor: '#e9ecef', borderRadius: 8 },
   totalLabel: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: '#212529' },
   totalValue: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: COLORS.primaryThemeColor },
+  // Customer modal styles
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  modalBox: { backgroundColor: '#fff', borderRadius: 14, padding: 24, width: '88%', maxWidth: 400 },
+  modalTitle: { fontSize: 18, fontFamily: FONT_FAMILY.urbanistBold, color: '#1f2937', marginBottom: 16, textAlign: 'center' },
+  modalLabel: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistMedium, color: '#555', marginBottom: 4 },
+  modalInput: { backgroundColor: '#f9fafb', borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: '#1f2937', marginBottom: 14, fontFamily: FONT_FAMILY.urbanistMedium },
+  modalBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 6 },
+  modalCancelBtn: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8, backgroundColor: '#f3f4f6' },
+  modalCancelText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#6b7280' },
+  modalSaveBtn: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8, backgroundColor: COLORS.primaryThemeColor },
+  modalSaveText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#fff' },
 });
 
 export default EstimateSaleForm;

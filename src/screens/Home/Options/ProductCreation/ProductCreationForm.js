@@ -325,21 +325,12 @@ const ProductCreationForm = ({ navigation }) => {
 
         {/* Optional Fields */}
         <FormInput label="Sales Price" placeholder="0.000" value={salesPrice} onChangeText={setSalesPrice} keyboardType="numeric" />
-        <FormInput label="Cost" placeholder="0.000" value={cost} onChangeText={setCost} keyboardType="numeric" />
         <FormInput label="On Hand Quantity" placeholder="0" value={onHandQty} onChangeText={setOnHandQty} keyboardType="numeric" />
         <FormInput label="Barcode" placeholder="Enter barcode" value={barcode} onChangeText={setBarcode}
           onScanPress={() => navigation.navigate('Scanner', {
             onScan: async (scannedBarcode) => { setBarcode(scannedBarcode); navigation.goBack(); }
           })} />
         <FormInput label="Internal Reference" placeholder="e.g. PROD-001" value={internalRef} onChangeText={setInternalRef} />
-        <FormInput label="Unit of Measure" placeholder="Select UoM" dropIcon="menu-down" editable={false}
-          value={uom?.name || ''} onPress={() => openDropdown('uom')} />
-        <FormInput label="Sales Tax" placeholder="Select sales tax" dropIcon="menu-down" editable={false}
-          value={salesTax?.name || ''} onPress={() => openDropdown('salesTax')} />
-        <FormInput label="Purchase Tax" placeholder="Select purchase tax" dropIcon="menu-down" editable={false}
-          value={purchaseTax?.name || ''} onPress={() => openDropdown('purchaseTax')} />
-        <FormInput label="Description" placeholder="Product description (optional)" value={description}
-          onChangeText={setDescription} multiline />
 
         <LoadingButton title="CREATE PRODUCT" onPress={handleSubmit} marginTop={10} loading={isSubmitting} />
         <View style={{ height: 40 }} />

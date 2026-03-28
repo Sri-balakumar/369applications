@@ -607,6 +607,8 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
               "image_128",       // product image
               "taxes_id",        // customer taxes
               "qty_available",   // on-hand stock quantity
+              "categ_id",        // product category [id, name]
+              "pos_categ_ids",   // POS category IDs
             ],
             limit: odooLimit,
             order: "name asc",
@@ -677,6 +679,8 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
         tax_percent: taxPercent,
         taxes: productTaxes,
         qty_available: p.qty_available ?? 0,
+        categ_id: p.categ_id && Array.isArray(p.categ_id) ? p.categ_id : null,
+        pos_categ_ids: p.pos_categ_ids || [],
       };
     });
   } catch (error) {
@@ -1021,7 +1025,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
           kwargs: {
             fields: [
               'id', 'name', 'list_price', 'default_code', 'barcode', 'uom_id', 'image_128',
-              'description_sale', 'categ_id', 'qty_available', 'virtual_available'
+              'description_sale', 'categ_id', 'pos_categ_ids', 'qty_available', 'virtual_available'
             ],
             limit: 1,
           },
@@ -1075,6 +1079,39 @@ export const fetchProductDetailsOdoo = async (productId) => {
       ? `data:image/png;base64,${p.image_128}`
       : `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`;
 
+    // Fetch POS category name
+    let posCategoryName = '';
+    const posCategIds = p.pos_categ_ids || [];
+    console.log('[fetchProductDetailsOdoo] categ_id:', p.categ_id, 'pos_categ_ids:', posCategIds);
+
+    if (posCategIds.length > 0) {
+      try {
+        const posCatResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'pos.category',
+              method: 'search_read',
+              args: [[['id', 'in', posCategIds]]],
+              kwargs: { fields: ['id', 'name'], limit: 1 },
+            },
+          },
+          { headers }
+        );
+        const posCatResult = posCatResp.data?.result || [];
+        console.log('[fetchProductDetailsOdoo] POS cat result:', JSON.stringify(posCatResult));
+        if (posCatResult.length > 0) {
+          posCategoryName = posCatResult[0].name || '';
+        }
+      } catch (e) { console.warn('[fetchProductDetailsOdoo] POS category fetch failed:', e?.message); }
+    }
+
+    // Use POS category name first, then product category name
+    const categName = p.categ_id && Array.isArray(p.categ_id) ? p.categ_id[1] : '';
+    const finalCategoryName = posCategoryName || categName || '';
+    console.log('[fetchProductDetailsOdoo] finalCategoryName:', finalCategoryName);
+
     return {
       id: p.id,
       product_name: p.name || '',
@@ -1088,6 +1125,8 @@ export const fetchProductDetailsOdoo = async (productId) => {
       barcode: p.barcode || '',
       uom: p.uom_id ? { uom_id: p.uom_id[0], uom_name: p.uom_id[1] } : null,
       categ_id: p.categ_id && Array.isArray(p.categ_id) ? p.categ_id : null,
+      pos_categ_ids: posCategIds,
+      category_name: finalCategoryName,
       product_description: p.description_sale || '',
     };
   } catch (error) {
@@ -9870,6 +9909,50 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
   }
 };
 
+export const updateProductOdoo = async (productId, { name, posCategoryId, listPrice, barcode, defaultCode, image }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = {};
+    if (name !== undefined && name !== '') vals.name = name;
+    if (posCategoryId !== undefined && posCategoryId !== null) vals.pos_categ_ids = [[6, 0, [Number(posCategoryId)]]];
+    if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
+    if (barcode !== undefined) vals.barcode = barcode || false;
+    if (defaultCode !== undefined) vals.default_code = defaultCode || false;
+    if (image) vals.image_1920 = image;
+
+    console.log('[updateProductOdoo] productId:', productId, 'vals:', JSON.stringify(vals));
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.product',
+          method: 'write',
+          args: [[Number(productId)], vals],
+          kwargs: {
+            context: {},
+          },
+        },
+      },
+      { headers, timeout: 30000 }
+    );
+
+    console.log('[updateProductOdoo] response:', JSON.stringify(response.data));
+
+    if (response.data.error) {
+      const errMsg = response.data.error?.data?.message || response.data.error?.message || 'Failed to update product';
+      console.error('[updateProductOdoo] Odoo error:', errMsg);
+      throw new Error(errMsg);
+    }
+    return response.data.result;
+  } catch (error) {
+    console.error('[updateProductOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
 export const fetchVendorsOdoo = async ({ offset = 0, limit = 50, searchText } = {}) => {
   try {
     let domain = [];
@@ -9900,6 +9983,60 @@ export const fetchVendorsOdoo = async ({ offset = 0, limit = 50, searchText } = 
   } catch (error) {
     console.error('[fetchVendorsOdoo] error:', error?.message || error);
     return [];
+  }
+};
+
+export const createCustomerOdoo = async ({ name, phone, email, company }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = {
+      name,
+      customer_rank: 1,
+    };
+    if (phone) vals.phone = phone;
+    if (email) vals.email = email;
+    if (company) vals.company_name = company;
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'res.partner', method: 'create', args: [vals], kwargs: {} },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create customer');
+    return response.data.result;
+  } catch (error) {
+    console.error('[createCustomerOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const createVendorOdoo = async ({ name, phone, email, company }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = {
+      name,
+      supplier_rank: 1,
+    };
+    if (phone) vals.phone = phone;
+    if (email) vals.email = email;
+    if (company) vals.company_name = company;
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'res.partner', method: 'create', args: [vals], kwargs: {} },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create vendor');
+    return response.data.result; // returns the new partner ID
+  } catch (error) {
+    console.error('[createVendorOdoo] error:', error?.message || error);
+    throw error;
   }
 };
 

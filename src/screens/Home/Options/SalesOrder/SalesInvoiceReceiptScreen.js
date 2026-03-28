@@ -193,11 +193,115 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   };
 
   const [downloading, setDownloading] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [sendingWA, setSendingWA] = useState(false);
   const [waPhone, setWaPhone] = useState('');
   const [waCountryCode, setWaCountryCode] = useState('+968');
   const [showPhoneModal, setShowPhoneModal] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
+  const buildInvoiceHtml = () => {
+    const rowsHtml = (invoice.lines || []).map((line, idx) =>
+      `<tr style="border-bottom:1px solid #eee;">
+        <td style="padding:8px;">${idx + 1}. ${line.productName || '-'}</td>
+        <td style="text-align:center;padding:8px;">${line.quantity || 0}</td>
+        <td style="text-align:right;padding:8px;">${(line.priceUnit || 0).toFixed(3)}</td>
+        <td style="text-align:right;padding:8px;">${(line.subtotal || 0).toFixed(3)}</td>
+      </tr>`
+    ).join('');
+
+    return `
+      <html>
+      <head><meta charset="utf-8"/>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet"/>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; color: #2d2d2d; padding: 32px; background: #fff; font-size: 13px; line-height: 1.6; }
+        .header { text-align: center; padding-bottom: 18px; margin-bottom: 18px; border-bottom: 2px solid #2e2a4f; }
+        .header img { width: 90px; height: auto; mix-blend-mode: multiply; margin-bottom: 8px; }
+        .header h2 { font-family: 'Playfair Display', Georgia, serif; color: #2e2a4f; font-size: 20px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 4px; }
+        .invoice-title { text-align: center; margin: 16px 0; padding: 10px 0; background: #2e2a4f; border-radius: 4px; }
+        .invoice-title h3 { font-family: 'Inter', sans-serif; color: #fff; font-size: 15px; letter-spacing: 3px; font-weight: 700; text-transform: uppercase; }
+        .info-grid { display: flex; flex-wrap: wrap; margin-bottom: 16px; font-size: 12.5px; line-height: 1.9; }
+        .info-grid .left { width: 58%; }
+        .info-grid .right { width: 42%; text-align: right; }
+        .info-grid strong { color: #2e2a4f; font-weight: 600; }
+        .products { width: 100%; border-collapse: collapse; margin: 14px 0; }
+        .products thead th { background: #2e2a4f; color: #fff; font-size: 11.5px; font-weight: 600; padding: 10px 8px; text-transform: uppercase; letter-spacing: 0.8px; }
+        .products thead th:first-child { border-radius: 4px 0 0 4px; text-align: left; }
+        .products thead th:last-child { border-radius: 0 4px 4px 0; }
+        .products tbody tr { border-bottom: 1px solid #eaeaea; }
+        .products tbody tr:nth-child(even) { background: #f9f9fb; }
+        .products tbody td { font-size: 12.5px; padding: 10px 8px; color: #333; font-weight: 400; }
+        .total-box { text-align: center; margin: 20px 0; padding: 14px 20px; background: #e85d04; border-radius: 6px; }
+        .grand { font-size: 18px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+        .payment-section { margin: 18px 0; padding: 16px; background: #f7f8fa; border-radius: 6px; border: 1px solid #e8e8e8; }
+        .payment-section h4 { color: #2e2a4f; font-size: 14px; font-weight: 700; text-align: center; margin-bottom: 10px; letter-spacing: 0.5px; }
+        .payment-section table { width: 60%; margin: 0 auto; font-size: 12.5px; }
+        .payment-section td { padding: 5px 0; }
+        .footer { text-align: center; margin-top: 28px; padding-top: 14px; border-top: 2px solid #2e2a4f; }
+        .footer p { color: #2e2a4f; font-size: 13px; font-weight: 600; letter-spacing: 0.3px; }
+      </style></head>
+      <body>
+        <div class="header">
+          <img src="${INVOICE_LOGO_BASE64}" />
+          <h2>MOBILE ACCESSORIES & TOYS</h2>
+          <p style="font-size:18px; color:#111; font-weight:700; margin-top:4px; direction:rtl;">\u0625\u0643\u0633\u0633\u0648\u0627\u0631\u0627\u062A \u0627\u0644\u0647\u0648\u0627\u062A\u0641 \u0627\u0644\u0645\u062D\u0645\u0648\u0644\u0629 \u0648\u0627\u0644\u0623\u0644\u0639\u0627\u0628</p>
+        </div>
+        <div class="invoice-title"><h3>INVOICE</h3></div>
+        <div class="info-grid">
+          <div class="left">
+            <div><strong>Date:</strong> ${invoice.invoiceDate || '-'}</div>
+            <div><strong>Cashier:</strong> ${cashierName}</div>
+            <div><strong>Customer:</strong> ${invoice.partnerName || '-'}</div>
+            ${(partnerPhone || invoice?.partnerPhone) ? `<div><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</div>` : ''}
+          </div>
+          <div class="right">
+            <div><strong>Invoice:</strong> ${invoice.name || '-'}</div>
+            <div><strong>Company:</strong> ${invoice.companyName || '-'}</div>
+          </div>
+        </div>
+        <table class="products">
+          <thead><tr>
+            <th style="width:40%;">Product Name</th>
+            <th style="width:15%;text-align:center;">Qty</th>
+            <th style="width:20%;text-align:right;">Unit Price</th>
+            <th style="width:25%;text-align:right;">Total</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div class="total-box">
+          <span class="grand">Grand Total: ${(invoice.amountTotal || 0).toFixed(3)} ${currency}</span>
+        </div>
+        <div class="payment-section">
+          <h4>Payment Details</h4>
+          <table>
+            <tr><td style="color:#666;">Cash:</td><td style="text-align:right;font-weight:bold;">${(invoice.amountTotal || 0).toFixed(3)} ${currency}</td></tr>
+          </table>
+        </div>
+        <div class="footer">
+          <p>Thank You for Your Purchase</p>
+        </div>
+      </body></html>
+    `;
+  };
+
+  const handlePrintInvoice = async () => {
+    if (!invoice) {
+      showToastMessage('Invoice data not available');
+      return;
+    }
+    setPrinting(true);
+    try {
+      const html = buildInvoiceHtml();
+      await Print.printAsync({ html });
+    } catch (err) {
+      console.error('[Print] error:', err);
+      showToastMessage('Failed to print invoice');
+    } finally {
+      setPrinting(false);
+    }
+  };
+
   const handleDownloadPdf = async () => {
     if (!invoice) {
       showToastMessage('Invoice data not available');
@@ -205,86 +309,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
     }
     setDownloading(true);
     try {
-      // Build product rows HTML
-      const rowsHtml = (invoice.lines || []).map((line, idx) =>
-        `<tr style="border-bottom:1px solid #eee;">
-          <td style="padding:8px;">${idx + 1}. ${line.productName || '-'}</td>
-          <td style="text-align:center;padding:8px;">${line.quantity || 0}</td>
-          <td style="text-align:right;padding:8px;">${(line.priceUnit || 0).toFixed(3)}</td>
-          <td style="text-align:right;padding:8px;">${(line.subtotal || 0).toFixed(3)}</td>
-        </tr>`
-      ).join('');
-
-      const html = `
-        <html>
-        <head><meta charset="utf-8"/><style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #333; padding: 30px; background: #fff; }
-          .header { text-align: center; padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid #e0e0e0; }
-          .header img { width: 100px; height: auto; mix-blend-mode: multiply; margin-bottom: 6px; }
-          .header h2 { color: #2e2a4f; font-size: 16px; font-weight: 600; letter-spacing: 0.5px; }
-          .invoice-title { text-align: center; margin: 18px 0; padding: 10px 0; background: #2e2a4f; border-radius: 6px; }
-          .invoice-title h3 { color: #fff; font-size: 16px; letter-spacing: 2px; font-weight: 700; }
-          .info-grid { display: flex; flex-wrap: wrap; margin-bottom: 18px; font-size: 12px; line-height: 1.8; }
-          .info-grid .left { width: 60%; }
-          .info-grid .right { width: 40%; text-align: right; }
-          .info-grid strong { color: #2e2a4f; }
-          .products { width: 100%; border-collapse: collapse; margin: 16px 0; }
-          .products thead th { background: #2e2a4f; color: #fff; font-size: 11px; font-weight: 600; padding: 10px 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-          .products thead th:first-child { border-radius: 6px 0 0 6px; text-align: left; }
-          .products thead th:last-child { border-radius: 0 6px 6px 0; }
-          .products tbody tr { border-bottom: 1px solid #f0f0f0; }
-          .products tbody tr:nth-child(even) { background: #fafafa; }
-          .products tbody td { font-size: 12px; padding: 10px 8px; color: #444; }
-          .total-box { text-align: center; margin: 20px 0; padding: 14px 20px; background: #e85d04; border-radius: 8px; }
-          .grand { font-size: 18px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
-          .payment-section { margin: 20px 0; padding: 16px; background: #f8f9fa; border-radius: 8px; border: 1px solid #eee; }
-          .payment-section h4 { color: #2e2a4f; font-size: 14px; font-weight: 700; text-align: center; margin-bottom: 10px; }
-          .payment-section table { width: 60%; margin: 0 auto; font-size: 12px; }
-          .payment-section td { padding: 4px 0; }
-          .footer { text-align: center; margin-top: 30px; padding-top: 16px; border-top: 1px solid #e0e0e0; }
-          .footer p { color: #2e2a4f; font-size: 13px; font-weight: 600; }
-        </style></head>
-        <body>
-          <div class="header">
-            <img src="${INVOICE_LOGO_BASE64}" />
-          </div>
-          <div class="invoice-title"><h3>INVOICE</h3></div>
-          <div class="info-grid">
-            <div class="left">
-              <div><strong>Date:</strong> ${invoice.invoiceDate || '-'}</div>
-              <div><strong>Cashier:</strong> ${cashierName}</div>
-              <div><strong>Customer:</strong> ${invoice.partnerName || '-'}</div>
-              ${(partnerPhone || invoice?.partnerPhone) ? `<div><strong>Phone:</strong> ${partnerPhone || invoice.partnerPhone}</div>` : ''}
-            </div>
-            <div class="right">
-              <div><strong>Invoice:</strong> ${invoice.name || '-'}</div>
-              <div><strong>Company:</strong> ${invoice.companyName || '-'}</div>
-            </div>
-          </div>
-          <table class="products">
-            <thead><tr>
-              <th style="width:40%;">Product Name</th>
-              <th style="width:15%;text-align:center;">Qty</th>
-              <th style="width:20%;text-align:right;">Unit Price</th>
-              <th style="width:25%;text-align:right;">Total</th>
-            </tr></thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-          <div class="total-box">
-            <span class="grand">Grand Total: ${(invoice.amountTotal || 0).toFixed(3)} ${currency}</span>
-          </div>
-          <div class="payment-section">
-            <h4>Payment Details</h4>
-            <table>
-              <tr><td style="color:#666;">Cash:</td><td style="text-align:right;font-weight:bold;">${(invoice.amountTotal || 0).toFixed(3)} ${currency}</td></tr>
-            </table>
-          </div>
-          <div class="footer">
-            <p>Thankyou</p>
-          </div>
-        </body></html>
-      `;
+      const html = buildInvoiceHtml();
 
       const { uri } = await Print.printToFileAsync({ html });
       console.log('[DownloadPDF] PDF created at:', uri);
@@ -421,7 +446,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
               <tr><td style="color:#666;">Cash:</td><td style="text-align:right;font-weight:bold;">${(invoice.amountTotal || 0).toFixed(3)} ${currency}</td></tr>
             </table>
           </div>
-          <div class="footer"><p>Thankyou</p></div>
+          <div class="footer"><p>Thank You for Your Purchase</p></div>
         </body></html>`;
 
       const { uri } = await Print.printToFileAsync({ html });
@@ -516,6 +541,15 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
         </View>
 
         <View style={{ marginTop: 20 }}>
+          <Button
+            backgroundColor="#1E88E5"
+            title={printing ? "Printing..." : "Print Invoice"}
+            onPress={handlePrintInvoice}
+            loading={printing}
+          />
+        </View>
+
+        <View style={{ marginTop: 10 }}>
           <Button
             backgroundColor="#E85D04"
             title={downloading ? "Downloading..." : "Download PDF"}

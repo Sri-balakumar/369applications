@@ -79,7 +79,7 @@ import { GrossProfitReportScreen } from '@screens/Home/Options/GrossProfitReport
 import { PartnerLedgerScreen } from '@screens/Home/Options/PartnerLedger';
 import { CreditManagementScreen, CreditApplicationsScreen, CreditExceededScreen, CreditRiskHistoryScreen, CreditFacilityForm, CreditFacilityDetailScreen } from '@screens/Home/Options/CreditManagement';
 import { WhatsAppScreen } from '@screens/Home/Options/WhatsApp';
-import { ProductCreationForm } from '@screens/Home/Options/ProductCreation';
+import { ProductCreationForm, ProductEditForm } from '@screens/Home/Options/ProductCreation';
 
 const Stack = createNativeStackNavigator();
 
@@ -953,6 +953,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="ProductCreationForm"
         component={ProductCreationForm}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ProductEditForm"
+        component={ProductEditForm}
         options={{ headerShown: false }}
       />
     </Stack.Navigator>

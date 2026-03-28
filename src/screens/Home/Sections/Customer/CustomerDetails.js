@@ -97,9 +97,8 @@ const CustomerDetails = ({ navigation, route }) => {
   };
 
   const handlePriceChange = (productId, price) => {
-    const updatedPrice = isNaN(parseFloat(price)) ? 0 : parseFloat(price);
     const product = products.find(p => p.id === productId);
-    addProduct({ ...product, price: updatedPrice });
+    addProduct({ ...product, price });
   };
 
   const calculateAmounts = () => {
@@ -107,7 +106,7 @@ const CustomerDetails = ({ navigation, route }) => {
     let taxAmount = 0;
     let totalQuantity = 0;
     products.forEach(product => {
-      const lineUntaxed = product.price * product.quantity;
+      const lineUntaxed = (parseFloat(product.price) || 0) * product.quantity;
       const taxRate = (product.tax_percent || 0) / 100;
       untaxedAmount += lineUntaxed;
       taxAmount += lineUntaxed * taxRate;
@@ -161,9 +160,9 @@ const CustomerDetails = ({ navigation, route }) => {
               <View style={s.priceRow}>
                 <TextInput
                   style={s.priceInput}
-                  value={item.price.toString()}
+                  value={String(item.price)}
                   onChangeText={(text) => handlePriceChange(item.id, text)}
-                  keyboardType="numeric"
+                  keyboardType="decimal-pad"
                   selectTextOnFocus
                 />
                 <Text style={s.currencyLabel}>{currency}</Text>
@@ -171,7 +170,7 @@ const CustomerDetails = ({ navigation, route }) => {
             </View>
             <View style={s.subtotalSection}>
               <Text style={s.controlLabel}>Subtotal</Text>
-              <Text style={s.subtotalValue}>{(item.price * item.quantity).toFixed(3)}</Text>
+              <Text style={s.subtotalValue}>{((parseFloat(item.price) || 0) * item.quantity).toFixed(3)}</Text>
             </View>
           </View>
         </View>
@@ -196,7 +195,7 @@ const CustomerDetails = ({ navigation, route }) => {
     setIsPlacingOrder(true);
     try {
       const orderItems = products.map((product) => ({
-        product_id: product.id, qty: product.quantity, price_unit: product.price, product_uom_qty: product.quantity,
+        product_id: product.id, qty: product.quantity, price_unit: parseFloat(product.price) || 0, product_uom_qty: product.quantity,
       }));
       let warehouseId = currentUser?.warehouse?.warehouse_id || currentUser?.warehouse?.id || null;
       const odooOrderId = await createSaleOrderOdoo({ partnerId: customerId, orderLines: orderItems, warehouseId: warehouseId || undefined });
@@ -234,7 +233,7 @@ const CustomerDetails = ({ navigation, route }) => {
     setIsDirectInvoicing(true);
     try {
       const orderItems = products.map((product) => ({
-        product_id: product.id, qty: product.quantity, price_unit: product.price, product_uom_qty: product.quantity,
+        product_id: product.id, qty: product.quantity, price_unit: parseFloat(product.price) || 0, product_uom_qty: product.quantity,
       }));
       let warehouseId = currentUser?.warehouse?.warehouse_id || currentUser?.warehouse?.id || null;
       const odooOrderId = await createSaleOrderOdoo({ partnerId: customerId, orderLines: orderItems, warehouseId: warehouseId || undefined });
@@ -266,9 +265,9 @@ const CustomerDetails = ({ navigation, route }) => {
           id: p.id,
           productName: p.name || p.display_name || '-',
           quantity: p.quantity || 1,
-          priceUnit: p.price || 0,
+          priceUnit: parseFloat(p.price) || 0,
           discount: p.discount || 0,
-          subtotal: (p.price || 0) * (p.quantity || 1),
+          subtotal: (parseFloat(p.price) || 0) * (p.quantity || 1),
         })),
       };
       console.log('[DirectInvoice] Built orderData with', orderData.lines.length, 'lines');

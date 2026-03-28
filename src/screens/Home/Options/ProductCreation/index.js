@@ -1,3 +1,4 @@
 import ProductCreationForm from './ProductCreationForm';
+import ProductEditForm from './ProductEditForm';
 
-export { ProductCreationForm };
+export { ProductCreationForm, ProductEditForm };

@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Image, TouchableOpacity, Modal, StyleSheet, Dimensions, ActivityIndicator, Platform } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import Text from '@components/Text';
 import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
@@ -75,7 +76,7 @@ const ProductDetail = ({ navigation, route }) => {
     }
   };
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (isOdooProduct) {
       const loadOdooDetails = async () => {
         setLoading(true);
@@ -96,8 +97,11 @@ const ProductDetail = ({ navigation, route }) => {
             barcode: od?.barcode || detail.barcode || '',
             uom: od?.uom || detail.uom || null,
             categ_id: od?.categ_id || (detail.categ_id && Array.isArray(detail.categ_id) ? detail.categ_id : null),
+            category_name: od?.category_name || (Array.isArray(od?.categ_id) ? od.categ_id[1] : null) || (Array.isArray(detail?.categ_id) ? detail.categ_id[1] : null),
+            pos_categ_ids: od?.pos_categ_ids || [],
             product_description: od?.product_description || '',
           });
+          console.log('[ProductDetail] category_name from API:', od?.category_name, 'categ_id:', od?.categ_id, 'pos_categ_ids:', od?.pos_categ_ids);
         } catch (e) {
           console.error('Error loading Odoo product details:', e);
           setDetails({
@@ -122,7 +126,7 @@ const ProductDetail = ({ navigation, route }) => {
     } else {
       setDetails(detail || {});
     }
-  }, [detail, isOdooProduct]);
+  }, [detail, isOdooProduct]));
 
   const handleBoxNamePress = async (boxName, warehouseId) => {
     setLoading(true);
@@ -261,11 +265,13 @@ const ProductDetail = ({ navigation, route }) => {
 
   // Derive display values
   const categoryName = details?.category?.category_name
-    || (Array.isArray(details?.categ_id) ? details.categ_id[1] : null)
     || details?.category_name
+    || (Array.isArray(details?.categ_id) ? details.categ_id[1] : null)
+    || (details?.categ_id && typeof details.categ_id === 'string' ? details.categ_id : null)
     || 'N/A';
   const priceValue = (details.cost ?? details.price ?? 0);
-  const barcodeValue = details.barcode || details.product_code || details.code || details.default_code || 'N/A';
+  const barcodeValue = details.barcode || 'N/A';
+  const internalRef = details.product_code || details.code || details.default_code || 'N/A';
   const stockQty = details.total_product_quantity ?? 0;
 
   const DetailRow = ({ icon, label, value, valueColor }) => (
@@ -315,19 +321,30 @@ const ProductDetail = ({ navigation, route }) => {
             {/* Details Card */}
             {!route?.params?.fromPOS && (
               <View style={s.sectionCard}>
-                <Text style={s.sectionTitle}>Details</Text>
+                <View style={s.sectionHeaderRow}>
+                  <Text style={[s.sectionTitle, { marginBottom: 0 }]}>Details</Text>
+                  {isOdooProduct && (
+                    <TouchableOpacity style={s.editBtn} onPress={() => navigation.navigate('ProductEditForm', { product: details })}>
+                      <MaterialIcons name="edit" size={16} color="#fff" />
+                      <Text style={s.editBtnText}>Edit</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
                 <DetailRow icon="category" label="Category" value={categoryName} />
-                <DetailRow icon="attach-money" label="Price" value={`${Number(priceValue).toFixed(3)} ${currency || ''}`} valueColor={COLORS.primaryThemeColor} />
+                <DetailRow icon="attach-money" label="Sales Price" value={`${Number(priceValue).toFixed(3)} ${currency || ''}`} valueColor={COLORS.primaryThemeColor} />
+                <DetailRow icon="inventory" label="On Hand" value={String(stockQty)} valueColor={stockQty > 0 ? '#4CAF50' : '#F44336'} />
                 <DetailRow icon="qr-code" label="Barcode" value={barcodeValue} />
-                <DetailRow icon="inventory" label="Stock on Hand" value={String(stockQty)} valueColor={stockQty > 0 ? '#4CAF50' : '#F44336'} />
+                <DetailRow icon="tag" label="Internal Reference" value={internalRef} />
               </View>
             )}
 
             {route?.params?.fromPOS && (
               <View style={s.sectionCard}>
                 <DetailRow icon="category" label="Category" value={categoryName} />
-                <DetailRow icon="attach-money" label="Price" value={`${Number(priceValue).toFixed(3)} ${currency || ''}`} valueColor={COLORS.primaryThemeColor} />
-                <DetailRow icon="inventory" label="Stock on Hand" value={String(stockQty)} valueColor={stockQty > 0 ? '#4CAF50' : '#F44336'} />
+                <DetailRow icon="attach-money" label="Sales Price" value={`${Number(priceValue).toFixed(3)} ${currency || ''}`} valueColor={COLORS.primaryThemeColor} />
+                <DetailRow icon="inventory" label="On Hand" value={String(stockQty)} valueColor={stockQty > 0 ? '#4CAF50' : '#F44336'} />
+                <DetailRow icon="qr-code" label="Barcode" value={barcodeValue} />
+                <DetailRow icon="tag" label="Internal Reference" value={internalRef} />
               </View>
             )}
 
@@ -461,6 +478,26 @@ const s = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistBold,
     color: '#2e2a4f',
     marginBottom: 14,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primaryThemeColor,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+  },
+  editBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
   },
 
   // Detail Row

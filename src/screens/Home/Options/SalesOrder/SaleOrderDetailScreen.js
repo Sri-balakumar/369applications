@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, Platform, Alert } from 'react-native';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { View, TextInput, TouchableOpacity, StyleSheet, Platform, Alert, Keyboard } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView, RoundedScrollContainer } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
@@ -57,6 +57,17 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const SO_CART_KEY = `__so_edit_${orderId}__`;
   const { getCurrentCart, setCurrentCustomer, loadCustomerCart, clearProducts } = useProductStore();
   const initialLoadDone = useRef(false);
+
+  // Refs for auto-save (to access latest state in debounced/async calls)
+  const editedLinesRef = useRef({});
+  const deletedLineIdsRef = useRef([]);
+  const hasChangesRef = useRef(false);
+  const autoSaveTimer = useRef(null);
+  const savingRef = useRef(false);
+
+  useEffect(() => { editedLinesRef.current = editedLines; }, [editedLines]);
+  useEffect(() => { deletedLineIdsRef.current = deletedLineIds; }, [deletedLineIds]);
+  useEffect(() => { hasChangesRef.current = hasChanges; }, [hasChanges]);
 
   const fetchDetail = useCallback(async (showLoader = true) => {
     if (!orderId) return;
@@ -145,6 +156,13 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     return 0;
   };
 
+  // Get numeric value for calculations (handles raw string input during typing)
+  const getNumericValue = (line, field) => {
+    const val = getLineValue(line, field);
+    if (typeof val === 'string') return parseFloat(val) || 0;
+    return val;
+  };
+
   const updateLineField = (lineId, field, value) => {
     setEditedLines(prev => ({
       ...prev,
@@ -156,6 +174,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const handleDeleteLine = (lineId) => {
     setDeletedLineIds(prev => [...prev, lineId]);
     setHasChanges(true);
+    debouncedAutoSave();
   };
 
   const handleUndoDelete = (lineId) => {
@@ -165,11 +184,16 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     }
   };
 
-  const handleSaveChanges = async () => {
+  // Silent auto-save using refs for latest state
+  const autoSave = useCallback(async () => {
+    if (!hasChangesRef.current || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
-      const changes = Object.entries(editedLines)
-        .filter(([lineId]) => !deletedLineIds.includes(Number(lineId)))
+      const currentEdited = editedLinesRef.current;
+      const currentDeleted = deletedLineIdsRef.current;
+      const changes = Object.entries(currentEdited)
+        .filter(([lineId]) => !currentDeleted.includes(Number(lineId)))
         .map(([lineId, vals]) => ({
           lineId: Number(lineId),
           qty: vals.qty !== undefined ? Number(vals.qty) : undefined,
@@ -178,25 +202,37 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
 
       await updateSaleOrderLinesOdoo(orderId, {
         changes,
-        deletions: deletedLineIds,
+        deletions: currentDeleted,
       });
 
-      Alert.alert('Saved', 'Order lines updated successfully.');
-      await fetchDetail();
+      await fetchDetail(false);
     } catch (err) {
       Alert.alert('Error', err?.message || 'Failed to save changes.');
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  };
+  }, [orderId, fetchDetail]);
+
+  // Debounced auto-save for rapid actions (+/- buttons, delete)
+  const debouncedAutoSave = useCallback(() => {
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => autoSave(), 500);
+  }, [autoSave]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
+  }, []);
 
   const handleConfirmOrder = async () => {
-    if (hasChanges) {
-      Alert.alert('Unsaved Changes', 'Please save your changes before confirming.');
-      return;
-    }
     setConfirming(true);
     try {
+      // Auto-save any pending changes before confirming
+      if (hasChangesRef.current) {
+        if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+        await autoSave();
+      }
       const companyId = record?.company_id ? (Array.isArray(record.company_id) ? record.company_id[0] : record.company_id) : null;
       await confirmSaleOrderOdoo(orderId, companyId);
       Alert.alert('Order Confirmed', 'Quotation has been confirmed as a Sales Order.', [
@@ -319,8 +355,8 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   let untaxed, taxes, total;
   if (hasChanges) {
     untaxed = visibleLines.reduce((sum, line) => {
-      const qty = getLineValue(line, 'qty');
-      const price = getLineValue(line, 'price_unit');
+      const qty = getNumericValue(line, 'qty');
+      const price = getNumericValue(line, 'price_unit');
       return sum + (qty * price);
     }, 0);
     // Use ratio from Odoo's original amounts for tax estimate
@@ -430,6 +466,8 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
               const productName = Array.isArray(line.product_id) ? line.product_id[1] : (line.name || '-');
               const qty = getLineValue(line, 'qty');
               const price = getLineValue(line, 'price_unit');
+              const numQty = getNumericValue(line, 'qty');
+              const numPrice = getNumericValue(line, 'price_unit');
               const subtotal = line.price_subtotal || 0;
               const discount = line.discount || 0;
               const isDeleted = deletedLineIds.includes(line.id);
@@ -447,16 +485,18 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
                       <View style={styles.editField}>
                         <Text style={styles.editFieldLabel}>Qty</Text>
                         <View style={styles.qtyRow}>
-                          <TouchableOpacity onPress={() => updateLineField(line.id, 'qty', Math.max(0, qty - 1))}>
+                          <TouchableOpacity onPress={() => { updateLineField(line.id, 'qty', Math.max(0, numQty - 1)); debouncedAutoSave(); }}>
                             <AntDesign name="minuscircleo" size={20} color={COLORS.primaryThemeColor} />
                           </TouchableOpacity>
                           <TextInput
                             style={styles.editInput}
                             value={String(qty)}
-                            onChangeText={(text) => updateLineField(line.id, 'qty', parseFloat(text) || 0)}
-                            keyboardType="numeric"
+                            onChangeText={(text) => updateLineField(line.id, 'qty', text)}
+                            keyboardType="decimal-pad"
+                            onBlur={autoSave}
+                            onSubmitEditing={autoSave}
                           />
-                          <TouchableOpacity onPress={() => updateLineField(line.id, 'qty', qty + 1)}>
+                          <TouchableOpacity onPress={() => { updateLineField(line.id, 'qty', numQty + 1); debouncedAutoSave(); }}>
                             <AntDesign name="pluscircleo" size={20} color={COLORS.primaryThemeColor} />
                           </TouchableOpacity>
                         </View>
@@ -466,13 +506,15 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
                         <TextInput
                           style={styles.editInput}
                           value={String(price)}
-                          onChangeText={(text) => updateLineField(line.id, 'price_unit', parseFloat(text) || 0)}
-                          keyboardType="numeric"
+                          onChangeText={(text) => updateLineField(line.id, 'price_unit', text)}
+                          keyboardType="decimal-pad"
+                          onBlur={autoSave}
+                          onSubmitEditing={autoSave}
                         />
                       </View>
                       <View style={styles.editField}>
                         <Text style={styles.editFieldLabel}>Subtotal</Text>
-                        <Text style={styles.lineSubtotal}>{currencySymbol} {(qty * price).toFixed(3)}</Text>
+                        <Text style={styles.lineSubtotal}>{currencySymbol} {(numQty * numPrice).toFixed(3)}</Text>
                       </View>
                     </View>
                   </View>
@@ -502,18 +544,6 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
             <Text style={styles.grandTotalValue}>{currencySymbol} {total.toFixed ? total.toFixed(3) : '0.000'}</Text>
           </View>
         </View>
-
-        {/* Save Changes Button */}
-        {isDraft && hasChanges && (
-          <View style={{ marginVertical: 8 }}>
-            <Button
-              backgroundColor="#2196F3"
-              title="Save Changes"
-              onPress={handleSaveChanges}
-              loading={saving}
-            />
-          </View>
-        )}
 
         {/* Confirm Order Button */}
         {isDraft && (
