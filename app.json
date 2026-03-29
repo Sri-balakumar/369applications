@@ -67,7 +67,6 @@
         }
       ],
       "expo-task-manager",
-      "react-native-ble-manager",
       [
         "expo-camera",
         {
@@ -84,7 +83,10 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34,
+            "kotlinVersion": "1.8.10"
           }
         }
       ]
