@@ -21,12 +21,17 @@ import {
   fetchProductByBarcodeOdoo,
   createProductOdoo,
   fetchPosCategoriesOdoo,
+  createBelowCostApprovalLogOdoo,
 } from '@api/services/generalApi';
+import BelowCostApprovalModal from '@components/BelowCostApprovalModal';
+import { checkBelowCostLines, generateBelowCostDetailsText } from '@utils/belowCostCheck';
 
 const EstimateSaleForm = ({ navigation }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
   const submittingRef = useRef(false);
+  const [showBelowCostModal, setShowBelowCostModal] = useState(false);
+  const [belowCostLines, setBelowCostLines] = useState([]);
 
   const [customers, setCustomers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
@@ -221,20 +226,59 @@ const EstimateSaleForm = ({ navigation }) => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = async () => {
-    if (submittingRef.current) return;
-    if (!validateForm()) return;
+  const executeEstimateSale = async () => {
     submittingRef.current = true; setIsSubmitting(true);
     try {
-      await createEstimateSaleOdoo({
+      const result = await createEstimateSaleOdoo({
         partnerId: customer.id, warehouseId: warehouse.id, paymentMethodId: paymentMethod.id,
         reference: reference || undefined, notes: notes || undefined,
         orderLines: lines.map(l => ({ product_id: l.product_id, qty: Number(l.quantity), price_unit: Number(l.price_unit || 0) })),
       });
       showToastMessage('Estimate Sale created successfully');
       navigation.goBack();
-    } catch (error) { Alert.alert('Error', error?.message || 'Failed to create'); }
+      return result;
+    } catch (error) { Alert.alert('Error', error?.message || 'Failed to create'); return null; }
     finally { submittingRef.current = false; setIsSubmitting(false); }
+  };
+
+  const handleSubmit = async () => {
+    if (submittingRef.current) return;
+    if (!validateForm()) return;
+
+    // Check for below-cost lines
+    submittingRef.current = true; setIsSubmitting(true);
+    try {
+      const linesToCheck = lines.map(l => ({
+        product_id: l.product_id,
+        product_name: l.product_name || '',
+        price_unit: Number(l.price_unit || 0),
+        qty: Number(l.quantity || 1),
+      }));
+      const result = await checkBelowCostLines(linesToCheck);
+      if (result.hasBelowCost) {
+        setBelowCostLines(result.belowCostLines);
+        submittingRef.current = false; setIsSubmitting(false);
+        setShowBelowCostModal(true);
+        return;
+      }
+    } catch (err) {
+      console.log('[EstimateSale] Below cost check failed, proceeding:', err?.message);
+    }
+    submittingRef.current = false; setIsSubmitting(false);
+
+    await executeEstimateSale();
+  };
+
+  const handleBelowCostApprove = async ({ approverId, approverName, reason }) => {
+    setShowBelowCostModal(false);
+    await executeEstimateSale();
+    setBelowCostLines([]);
+  };
+
+  const handleBelowCostReject = async () => {
+    setShowBelowCostModal(false);
+    Alert.alert('Sale Rejected', 'The below-cost sale has been rejected.');
+    setBelowCostLines([]);
   };
 
   const renderLine = (line, index) => (
@@ -359,6 +403,15 @@ const EstimateSaleForm = ({ navigation }) => {
         <CustomListModal isVisible={showProdCatDropdown} items={prodCategories} title="Select Category" onClose={() => setShowProdCatDropdown(false)} onValueChange={(item) => { setNewProdCategory(item); setShowProdCatDropdown(false); }} />
       </RoundedScrollContainer>
       <OverlayLoader visible={isSubmitting} />
+      <BelowCostApprovalModal
+        visible={showBelowCostModal}
+        belowCostLines={belowCostLines}
+        orderTotal={Number(computeTotal())}
+        currency=""
+        onApprove={handleBelowCostApprove}
+        onReject={handleBelowCostReject}
+        onCancel={() => { setShowBelowCostModal(false); setBelowCostLines([]); }}
+      />
     </SafeAreaView>
   );
 };

@@ -600,8 +600,10 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
             fields: [
               "id",
               "name",
-              "list_price",      // selling price
+              "list_price",      // selling price (template)
+              "lst_price",       // selling price (computed with pricelist/variant)
               "standard_price",  // cost price
+              "product_tmpl_id", // product template ID (for pricelist matching)
               "default_code",    // internal reference
               "uom_id",          // many2one [id, name]
               "image_128",       // product image
@@ -649,6 +651,40 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
       } catch (e) { console.warn('[fetchProductsOdoo] Could not fetch tax details:', e?.message); }
     }
 
+    // Fetch template sales prices for all products
+    let templatePriceMap = {};
+    try {
+      const tmplIds = [...new Set(products.map(p => Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id).filter(Boolean))];
+      if (tmplIds.length > 0) {
+        const tmplResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'product.template', method: 'read',
+              args: [tmplIds],
+              kwargs: { fields: ['id', 'list_price'] },
+            },
+          },
+          { headers }
+        );
+        if (!tmplResp.data?.error) {
+          const templates = tmplResp.data?.result || [];
+          const tmplPriceMap = {};
+          templates.forEach(t => { tmplPriceMap[t.id] = t.list_price; });
+          // Map template prices to product IDs
+          for (const p of products) {
+            const tmplId = Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id;
+            if (tmplId && tmplPriceMap[tmplId] !== undefined) {
+              templatePriceMap[p.id] = tmplPriceMap[tmplId];
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[fetchProductsOdoo] Template price fetch failed:', e?.message);
+    }
+
     // 🔹 Shape to match existing ProductsList expectations
     return products.map((p) => {
       // If Odoo returned the image as base64 (image_128), prefer using a data URI
@@ -670,7 +706,8 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
         id: p.id,
         product_name: p.name || "",
         image_url: imageUrl,
-        price: p.list_price || 0,
+        price: templatePriceMap[p.id] || p.lst_price || p.list_price || 0,
+        list_price: p.list_price || 0,
         standard_price: p.standard_price || 0,
         code: p.default_code || "",
         uom: p.uom_id
@@ -708,6 +745,7 @@ export const fetchProductByBarcodeOdoo = async (barcode) => {
               "id",
               "name",
               "list_price",
+              "lst_price",
               "standard_price",
               "default_code",
               "barcode",
@@ -727,6 +765,52 @@ export const fetchProductByBarcodeOdoo = async (barcode) => {
     }
 
     const products = response.data.result || [];
+
+    // Fetch template sales prices
+    let templatePriceMap = {};
+    if (products.length > 0) {
+      try {
+        // Need product_tmpl_id — fetch it if not already available
+        const prodWithTmpl = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'product.product', method: 'read',
+              args: [products.map(p => p.id)],
+              kwargs: { fields: ['id', 'product_tmpl_id'] },
+            },
+          },
+          { headers }
+        );
+        const tmplIds = [...new Set((prodWithTmpl.data?.result || []).map(p => Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id).filter(Boolean))];
+        if (tmplIds.length > 0) {
+          const tmplResp = await axios.post(
+            `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+            {
+              jsonrpc: '2.0', method: 'call',
+              params: {
+                model: 'product.template', method: 'read',
+                args: [tmplIds],
+                kwargs: { fields: ['id', 'list_price'] },
+              },
+            },
+            { headers }
+          );
+          if (!tmplResp.data?.error) {
+            const tmplPrices = {};
+            (tmplResp.data?.result || []).forEach(t => { tmplPrices[t.id] = t.list_price; });
+            (prodWithTmpl.data?.result || []).forEach(p => {
+              const tmplId = Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id;
+              if (tmplId && tmplPrices[tmplId] !== undefined) {
+                templatePriceMap[p.id] = tmplPrices[tmplId];
+              }
+            });
+          }
+        }
+      } catch (e) { console.warn('[fetchProductByBarcodeOdoo] Template price fetch failed:', e?.message); }
+    }
+
     return products.map((p) => {
       const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
       const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
@@ -738,7 +822,7 @@ export const fetchProductByBarcodeOdoo = async (barcode) => {
         id: p.id,
         product_name: p.name || "",
         image_url: imageUrl,
-        price: p.list_price || 0,
+        price: templatePriceMap[p.id] || p.lst_price || p.list_price || 0,
         standard_price: p.standard_price || 0,
         code: p.default_code || "",
         barcode: p.barcode || "",
@@ -1024,7 +1108,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
           args: [[['id', '=', productId]]],
           kwargs: {
             fields: [
-              'id', 'name', 'list_price', 'standard_price', 'default_code', 'barcode', 'uom_id', 'image_128',
+              'id', 'name', 'list_price', 'lst_price', 'standard_price', 'default_code', 'barcode', 'uom_id', 'image_128',
               'description_sale', 'categ_id', 'pos_categ_ids', 'qty_available', 'virtual_available'
             ],
             limit: 1,
@@ -1116,9 +1200,9 @@ export const fetchProductDetailsOdoo = async (productId) => {
       id: p.id,
       product_name: p.name || '',
       image_url: imageUrl,
-      price: p.list_price || 0,
+      price: p.lst_price || p.list_price || 0,
       standard_price: p.standard_price || 0,
-      minimal_sales_price: p.list_price || null,
+      minimal_sales_price: p.lst_price || p.list_price || null,
       inventory_ledgers,
       total_product_quantity: p.qty_available ?? p.virtual_available ?? 0,
       inventory_box_products_details: [],
@@ -10069,6 +10153,139 @@ export const fetchSaleCostApprovalLogsOdoo = async ({ offset = 0, limit = 50 } =
     return response.data.result || [];
   } catch (error) {
     console.error('[fetchSaleCostApprovalLogsOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch product costs (standard_price) for a list of product IDs
+export const fetchProductCostsOdoo = async (productIds) => {
+  try {
+    if (!productIds || productIds.length === 0) return {};
+    const headers = await getOdooAuthHeaders();
+    console.log('[fetchProductCostsOdoo] Fetching costs for product IDs:', productIds);
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'product.product', method: 'search_read',
+          args: [[['id', 'in', productIds]]],
+          kwargs: { fields: ['id', 'standard_price', 'name'], limit: productIds.length },
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) {
+      console.error('[fetchProductCostsOdoo] API error:', JSON.stringify(response.data.error));
+      throw new Error('Failed to fetch product costs');
+    }
+    const results = response.data.result || [];
+    console.log('[fetchProductCostsOdoo] Results:', JSON.stringify(results));
+    const costMap = {};
+    results.forEach(p => { costMap[p.id] = p.standard_price || 0; });
+    console.log('[fetchProductCostsOdoo] Cost map:', JSON.stringify(costMap));
+    return costMap;
+  } catch (error) {
+    console.error('[fetchProductCostsOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Fetch below cost protection settings from ir.config_parameter
+export const fetchBelowCostSettingsOdoo = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const params = [
+      'sale_cost_protection.enable_below_cost_protection',
+      'sale_cost_protection.minimum_margin_percentage',
+    ];
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'ir.config_parameter', method: 'get_param',
+          args: ['sale_cost_protection.enable_below_cost_protection'],
+          kwargs: {},
+        },
+      },
+      { headers, timeout: 10000 }
+    );
+    const enabled = response.data.result === 'True' || response.data.result === true;
+
+    const marginResp = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'ir.config_parameter', method: 'get_param',
+          args: ['sale_cost_protection.minimum_margin_percentage'],
+          kwargs: {},
+        },
+      },
+      { headers, timeout: 10000 }
+    );
+    const minimumMargin = parseFloat(marginResp.data.result) || 0;
+
+    return { enabled, minimumMargin };
+  } catch (error) {
+    console.error('[fetchBelowCostSettingsOdoo] error:', error?.message || error);
+    return { enabled: false, minimumMargin: 0 };
+  }
+};
+
+// Authenticate an approver by attempting Odoo login with their credentials
+export const authenticateApproverOdoo = async (login, password) => {
+  try {
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/session/authenticate`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          db: DEFAULT_ODOO_DB,
+          login,
+          password,
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
+    );
+    if (response.data.error) return { success: false, error: 'Authentication failed' };
+    const uid = response.data.result?.uid;
+    if (!uid) return { success: false, error: 'Invalid credentials' };
+    return { success: true, uid, name: response.data.result?.name || login };
+  } catch (error) {
+    console.error('[authenticateApproverOdoo] error:', error?.message || error);
+    return { success: false, error: error?.message || 'Authentication failed' };
+  }
+};
+
+// Create a below-cost approval log entry in Odoo
+export const createBelowCostApprovalLogOdoo = async ({ saleOrderId, approverId, reason, action, belowCostDetails }) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const vals = {
+      sale_order_id: saleOrderId,
+      approver_id: approverId,
+      reason: reason || '',
+      action: action || 'approved',
+      below_cost_details: belowCostDetails || '',
+    };
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'sale.cost.approval.log', method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (response.data.error) throw new Error('Failed to create approval log');
+    return response.data.result;
+  } catch (error) {
+    console.error('[createBelowCostApprovalLogOdoo] error:', error?.message || error);
     throw error;
   }
 };

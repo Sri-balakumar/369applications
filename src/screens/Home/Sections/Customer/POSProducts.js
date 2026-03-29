@@ -72,14 +72,16 @@ const POSProducts = ({ navigation, route }) => {
   };
 
   const handleAdd = (p) => {
+    console.log('[POSProducts] Adding product - raw data:', JSON.stringify({ id: p.id, price: p.price, list_price: p.list_price, lst_price: p.lst_price, standard_price: p.standard_price }));
     const product = {
       id: p.id,
       name: p.product_name || p.name,
-      price: p.price || p.list_price || 0,
+      price: p.lst_price || p.list_price || p.price || 0,
       quantity: 1,
       imageUrl: p.imageUrl || p.image_url || p.image || '',
       tax_percent: p.tax_percent || 0,
     };
+    console.log('[POSProducts] Final price used:', product.price);
     addProduct(product);
     Toast.show({ type: 'success', text1: 'Added', text2: product.name });
   };

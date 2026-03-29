@@ -21,6 +21,8 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useCurrencyStore } from '@stores/currency';
 import { useProductStore } from '@stores/product';
+import BelowCostApprovalModal from '@components/BelowCostApprovalModal';
+import { checkBelowCostLines } from '@utils/belowCostCheck';
 
 const STATE_LABELS = {
   draft: 'QUOTATION',
@@ -48,6 +50,9 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const [invoicing, setInvoicing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [createdInvoiceId, setCreatedInvoiceId] = useState(null);
+  const [showBelowCostModal, setShowBelowCostModal] = useState(false);
+  const [belowCostLines, setBelowCostLines] = useState([]);
+  const [belowCostAction, setBelowCostAction] = useState(null); // 'confirm' or 'invoice'
 
   // Editable lines state: { [lineId]: { qty, price_unit } }
   const [editedLines, setEditedLines] = useState({});
@@ -225,10 +230,20 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
   }, []);
 
-  const handleConfirmOrder = async () => {
+  const getOrderLinesToCheck = () => {
+    return (record?.order_lines_detail || [])
+      .filter(l => !(l.name || '').toLowerCase().includes('down payment'))
+      .map(l => ({
+        product_id: Array.isArray(l.product_id) ? l.product_id[0] : l.product_id,
+        product_name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''),
+        price_unit: l.price_unit || 0,
+        qty: l.product_uom_qty || 1,
+      }));
+  };
+
+  const executeConfirmOrder = async () => {
     setConfirming(true);
     try {
-      // Auto-save any pending changes before confirming
       if (hasChangesRef.current) {
         if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
         await autoSave();
@@ -243,6 +258,44 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     } finally {
       setConfirming(false);
     }
+  };
+
+  const handleConfirmOrder = async () => {
+    // Check for below-cost lines first
+    setConfirming(true);
+    try {
+      const linesToCheck = getOrderLinesToCheck();
+      const result = await checkBelowCostLines(linesToCheck);
+      if (result.hasBelowCost) {
+        setBelowCostLines(result.belowCostLines);
+        setBelowCostAction('confirm');
+        setConfirming(false);
+        setShowBelowCostModal(true);
+        return;
+      }
+    } catch (err) {
+      console.log('[SaleOrderDetail] Below cost check failed, proceeding:', err?.message);
+    }
+    setConfirming(false);
+    await executeConfirmOrder();
+  };
+
+  const handleBelowCostApprove = async () => {
+    setShowBelowCostModal(false);
+    if (belowCostAction === 'confirm') {
+      await executeConfirmOrder();
+    } else if (belowCostAction === 'invoice') {
+      await executeCreateInvoice();
+    }
+    setBelowCostLines([]);
+    setBelowCostAction(null);
+  };
+
+  const handleBelowCostReject = () => {
+    setShowBelowCostModal(false);
+    Alert.alert('Rejected', 'The below-cost action has been rejected.');
+    setBelowCostLines([]);
+    setBelowCostAction(null);
   };
 
   const buildOrderData = () => ({
@@ -267,20 +320,18 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
       })),
   });
 
-  const handleCreateInvoice = async () => {
+  const executeCreateInvoice = async () => {
     setInvoicing(true);
     try {
-      // CAPTURE order data FIRST before any async state changes
       const od = buildOrderData();
       console.log('[Invoice] Captured orderData with', od.lines.length, 'lines before create');
       const companyId = record?.company_id ? (Array.isArray(record.company_id) ? record.company_id[0] : record.company_id) : null;
-      // Validate deliveries (auto-deliver) so stock.quant updates (supports negative stock)
       await validateSaleOrderPickingsOdoo(orderId);
       const result = await createInvoiceFromQuotationOdoo(orderId, companyId);
       const invoiceId = result?.result;
       if (invoiceId) {
         setCreatedInvoiceId(invoiceId);
-        fetchDetail(false); // Refresh in background, don't await
+        fetchDetail(false);
         navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId, orderData: od });
       } else {
         await fetchDetail(false);
@@ -291,6 +342,26 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     } finally {
       setInvoicing(false);
     }
+  };
+
+  const handleCreateInvoice = async () => {
+    // Check for below-cost lines first
+    setInvoicing(true);
+    try {
+      const linesToCheck = getOrderLinesToCheck();
+      const result = await checkBelowCostLines(linesToCheck);
+      if (result.hasBelowCost) {
+        setBelowCostLines(result.belowCostLines);
+        setBelowCostAction('invoice');
+        setInvoicing(false);
+        setShowBelowCostModal(true);
+        return;
+      }
+    } catch (err) {
+      console.log('[SaleOrderDetail] Below cost check failed, proceeding:', err?.message);
+    }
+    setInvoicing(false);
+    await executeCreateInvoice();
   };
 
   const handleViewInvoice = () => {
@@ -594,6 +665,15 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
 
       </RoundedScrollContainer>
       <OverlayLoader visible={confirming || invoicing || saving || cancelling} />
+      <BelowCostApprovalModal
+        visible={showBelowCostModal}
+        belowCostLines={belowCostLines}
+        orderTotal={record?.amount_total || 0}
+        currency={currencySymbol}
+        onApprove={handleBelowCostApprove}
+        onReject={handleBelowCostReject}
+        onCancel={() => { setShowBelowCostModal(false); setBelowCostLines([]); setBelowCostAction(null); }}
+      />
     </SafeAreaView>
   );
 };

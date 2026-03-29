@@ -17,6 +17,8 @@ import Toast from 'react-native-toast-message';
 import Text from '@components/Text';
 import { useCurrencyStore } from '@stores/currency';
 import { StyleSheet } from 'react-native';
+import BelowCostApprovalModal from '@components/BelowCostApprovalModal';
+import { checkBelowCostLines } from '@utils/belowCostCheck';
 
 const CustomerDetails = ({ navigation, route }) => {
   const { details } = route?.params || {};
@@ -32,6 +34,9 @@ const CustomerDetails = ({ navigation, route }) => {
   const currency = useCurrencyStore((state) => state.currency) || '';
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [isDirectInvoicing, setIsDirectInvoicing] = useState(false);
+  const [showBelowCostModal, setShowBelowCostModal] = useState(false);
+  const [belowCostLines, setBelowCostLines] = useState([]);
+  const [belowCostAction, setBelowCostAction] = useState(null); // 'place' or 'invoice'
 
   useEffect(() => {
     if (details?.id || details?._id) {
@@ -182,16 +187,8 @@ const CustomerDetails = ({ navigation, route }) => {
     );
   };
 
-  const placeOrder = async () => {
-    if (products.length === 0) {
-      Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before placing order', position: 'bottom' });
-      return;
-    }
+  const executePlaceOrder = async () => {
     const customerId = details?.id || details?._id || details?.customer_id || null;
-    if (!customerId) {
-      Toast.show({ type: 'error', text1: 'Missing Data', text2: 'Customer ID is required', position: 'bottom' });
-      return;
-    }
     setIsPlacingOrder(true);
     try {
       const orderItems = products.map((product) => ({
@@ -220,9 +217,9 @@ const CustomerDetails = ({ navigation, route }) => {
     }
   };
 
-  const handleDirectInvoice = async () => {
+  const placeOrder = async () => {
     if (products.length === 0) {
-      Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before creating an invoice', position: 'bottom' });
+      Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before placing order', position: 'bottom' });
       return;
     }
     const customerId = details?.id || details?._id || details?.customer_id || null;
@@ -230,6 +227,30 @@ const CustomerDetails = ({ navigation, route }) => {
       Toast.show({ type: 'error', text1: 'Missing Data', text2: 'Customer ID is required', position: 'bottom' });
       return;
     }
+    // Check for below-cost lines
+    const linesToCheck = products.map(p => ({
+      product_id: p.id, product_name: p.name || p.display_name || '', price_unit: parseFloat(p.price) || 0, qty: p.quantity || 1,
+    }));
+    console.log('[PlaceOrder] Checking below cost for lines:', JSON.stringify(linesToCheck));
+    try {
+      const result = await checkBelowCostLines(linesToCheck);
+      console.log('[PlaceOrder] Below cost result:', JSON.stringify(result));
+      if (result.hasBelowCost) {
+        console.log('[PlaceOrder] BELOW COST DETECTED - showing modal');
+        setBelowCostLines(result.belowCostLines);
+        setBelowCostAction('place');
+        setShowBelowCostModal(true);
+        return;
+      }
+      console.log('[PlaceOrder] No below cost lines, proceeding');
+    } catch (err) {
+      console.error('[PlaceOrder] Below cost check ERROR:', err?.message, err);
+    }
+    await executePlaceOrder();
+  };
+
+  const executeDirectInvoice = async () => {
+    const customerId = details?.id || details?._id || details?.customer_id || null;
     setIsDirectInvoicing(true);
     try {
       const orderItems = products.map((product) => ({
@@ -241,16 +262,13 @@ const CustomerDetails = ({ navigation, route }) => {
         Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to create sale order', position: 'bottom' });
         return;
       }
-      // Confirm SO - don't let stock errors block invoice creation
       console.log('[DirectInvoice] === STARTING INVOICE FLOW for SO:', odooOrderId, '===');
       try { await confirmSaleOrderOdoo(odooOrderId); console.log('[DirectInvoice] SO confirmed'); } catch (e) { console.warn('[DirectInvoice] SO confirm warning:', e?.message); }
-      // Validate deliveries (auto-deliver) so stock.quant updates (supports negative stock)
       try { await validateSaleOrderPickingsOdoo(odooOrderId); console.log('[DirectInvoice] Pickings validated'); } catch (e) { console.warn('[DirectInvoice] Picking validation warning:', e?.message); }
       console.log('[DirectInvoice] === CALLING createInvoiceFromQuotationOdoo ===');
       const invoiceResult = await createInvoiceFromQuotationOdoo(odooOrderId);
       console.log('[DirectInvoice] === INVOICE RESULT:', JSON.stringify(invoiceResult), '===');
       const invoiceId = invoiceResult?.result || null;
-      // Build orderData from cart BEFORE clearing it
       const orderData = {
         name: '',
         partnerId: details?.id || details?._id || null,
@@ -290,6 +308,56 @@ const CustomerDetails = ({ navigation, route }) => {
     } finally {
       setIsDirectInvoicing(false);
     }
+  };
+
+  const handleDirectInvoice = async () => {
+    if (products.length === 0) {
+      Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before creating an invoice', position: 'bottom' });
+      return;
+    }
+    const customerId = details?.id || details?._id || details?.customer_id || null;
+    if (!customerId) {
+      Toast.show({ type: 'error', text1: 'Missing Data', text2: 'Customer ID is required', position: 'bottom' });
+      return;
+    }
+    // Check for below-cost lines
+    const linesToCheck = products.map(p => ({
+      product_id: p.id, product_name: p.name || p.display_name || '', price_unit: parseFloat(p.price) || 0, qty: p.quantity || 1,
+    }));
+    console.log('[DirectInvoice] Checking below cost for lines:', JSON.stringify(linesToCheck));
+    try {
+      const result = await checkBelowCostLines(linesToCheck);
+      console.log('[DirectInvoice] Below cost result:', JSON.stringify(result));
+      if (result.hasBelowCost) {
+        console.log('[DirectInvoice] BELOW COST DETECTED - showing modal');
+        setBelowCostLines(result.belowCostLines);
+        setBelowCostAction('invoice');
+        setShowBelowCostModal(true);
+        return;
+      }
+      console.log('[DirectInvoice] No below cost lines, proceeding');
+    } catch (err) {
+      console.error('[DirectInvoice] Below cost check ERROR:', err?.message, err);
+    }
+    await executeDirectInvoice();
+  };
+
+  const handleBelowCostApprove = async () => {
+    setShowBelowCostModal(false);
+    if (belowCostAction === 'place') {
+      await executePlaceOrder();
+    } else if (belowCostAction === 'invoice') {
+      await executeDirectInvoice();
+    }
+    setBelowCostLines([]);
+    setBelowCostAction(null);
+  };
+
+  const handleBelowCostReject = () => {
+    setShowBelowCostModal(false);
+    Alert.alert('Rejected', 'The below-cost sale has been rejected.');
+    setBelowCostLines([]);
+    setBelowCostAction(null);
   };
 
   const phone = details?.customer_mobile || details?.mobile || details?.phone || '-';
@@ -361,6 +429,15 @@ const CustomerDetails = ({ navigation, route }) => {
           </>
         )}
       </RoundedScrollContainer>
+      <BelowCostApprovalModal
+        visible={showBelowCostModal}
+        belowCostLines={belowCostLines}
+        orderTotal={totalAmount}
+        currency={currency}
+        onApprove={handleBelowCostApprove}
+        onReject={handleBelowCostReject}
+        onCancel={() => { setShowBelowCostModal(false); setBelowCostLines([]); setBelowCostAction(null); }}
+      />
     </SafeAreaView>
   );
 };

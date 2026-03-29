@@ -21,8 +21,11 @@ import {
   fetchWarehousesOdoo,
   createEasySaleOdoo,
   fetchProductByBarcodeOdoo,
+  createBelowCostApprovalLogOdoo,
 } from '@api/services/generalApi';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import BelowCostApprovalModal from '@components/BelowCostApprovalModal';
+import { checkBelowCostLines, generateBelowCostDetailsText } from '@utils/belowCostCheck';
 
 const EASY_SALES_CUSTOMER_ID = '__easy_sales__';
 
@@ -48,6 +51,9 @@ const EasySalesForm = ({ navigation }) => {
   const [date] = useState(new Date());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
+  const [showBelowCostModal, setShowBelowCostModal] = useState(false);
+  const [belowCostLines, setBelowCostLines] = useState([]);
+  const [pendingSaleData, setPendingSaleData] = useState(null);
 
   // Dropdown state
   const [paymentMethods, setPaymentMethods] = useState([]);
@@ -161,17 +167,8 @@ const EasySalesForm = ({ navigation }) => {
   const taxAmount = untaxedAmount * 0.05;
   const totalAmount = untaxedAmount + taxAmount;
 
-  // Create Sale
-  const handleCreateSale = async () => {
-    if (!customer) {
-      Alert.alert('Missing Data', 'Please select a customer.');
-      return;
-    }
-    if (products.length === 0) {
-      Alert.alert('No Products', 'Please add at least one product.');
-      return;
-    }
-
+  // Execute the sale creation
+  const executeSale = async () => {
     setIsSubmitting(true);
     try {
       const orderLines = products.map(p => ({
@@ -181,7 +178,6 @@ const EasySalesForm = ({ navigation }) => {
       }));
 
       const customerId = customer.id || customer._id;
-
       console.log('[EasySales] Creating easy sale, customer:', customerId, 'lines:', orderLines.length);
 
       const saleId = await createEasySaleOdoo({
@@ -195,21 +191,83 @@ const EasySalesForm = ({ navigation }) => {
 
       if (!saleId) {
         Alert.alert('Error', 'Failed to create easy sale in Odoo.');
-        return;
+        return null;
       }
 
       console.log('[EasySales] Easy sale created:', saleId);
-
       clearProducts();
       Alert.alert('Sale Created', `Easy sale created successfully.\nSale ID: ${saleId}`, [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
+      return saleId;
     } catch (err) {
       console.error('[EasySales] Error:', err?.message || err);
       Alert.alert('Error', err?.message || 'Failed to create easy sale.');
+      return null;
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Create Sale
+  const handleCreateSale = async () => {
+    if (!customer) {
+      Alert.alert('Missing Data', 'Please select a customer.');
+      return;
+    }
+    if (products.length === 0) {
+      Alert.alert('No Products', 'Please add at least one product.');
+      return;
+    }
+
+    // Check for below-cost lines
+    setIsSubmitting(true);
+    try {
+      const linesToCheck = products.map(p => ({
+        product_id: p.id,
+        product_name: p.name,
+        price_unit: p.price,
+        qty: p.quantity,
+      }));
+
+      const result = await checkBelowCostLines(linesToCheck);
+      if (result.hasBelowCost) {
+        setBelowCostLines(result.belowCostLines);
+        setPendingSaleData(linesToCheck);
+        setIsSubmitting(false);
+        setShowBelowCostModal(true);
+        return;
+      }
+    } catch (err) {
+      console.log('[EasySales] Below cost check failed, proceeding:', err?.message);
+    }
+
+    await executeSale();
+  };
+
+  const handleBelowCostApprove = async ({ approverId, approverName, reason }) => {
+    setShowBelowCostModal(false);
+    const saleId = await executeSale();
+    if (saleId) {
+      try {
+        await createBelowCostApprovalLogOdoo({
+          saleOrderId: saleId,
+          approverId,
+          reason,
+          action: 'approved',
+          belowCostDetails: generateBelowCostDetailsText(belowCostLines),
+        });
+      } catch (e) { console.log('[EasySales] Failed to create approval log:', e?.message); }
+    }
+    setBelowCostLines([]);
+    setPendingSaleData(null);
+  };
+
+  const handleBelowCostReject = async ({ approverId, approverName, reason }) => {
+    setShowBelowCostModal(false);
+    Alert.alert('Sale Rejected', 'The below-cost sale has been rejected.');
+    setBelowCostLines([]);
+    setPendingSaleData(null);
   };
 
   // Render product line
@@ -388,6 +446,15 @@ const EasySalesForm = ({ navigation }) => {
       />
 
       <OverlayLoader visible={isSubmitting} />
+      <BelowCostApprovalModal
+        visible={showBelowCostModal}
+        belowCostLines={belowCostLines}
+        orderTotal={totalAmount}
+        currency={currency}
+        onApprove={handleBelowCostApprove}
+        onReject={handleBelowCostReject}
+        onCancel={() => { setShowBelowCostModal(false); setBelowCostLines([]); setPendingSaleData(null); }}
+      />
     </SafeAreaView>
   );
 };
