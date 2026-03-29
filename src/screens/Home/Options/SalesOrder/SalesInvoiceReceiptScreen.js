@@ -5,7 +5,7 @@ import { NavigationHeader } from '@components/Header';
 import { Button } from '@components/common/Button';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo, fetchPartnerPhoneOdoo, fetchPartnerIdFromInvoice, fetchPartnerIdFromOrder, fetchCustomersOdoo } from '@api/services/generalApi';
+import { fetchInvoiceDetailOdoo, fetchSaleOrderDetailOdoo, fetchPartnerPhoneOdoo, fetchPartnerIdFromInvoice, fetchPartnerIdFromOrder, fetchCustomersOdoo, fetchCompanyNameOdoo } from '@api/services/generalApi';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
@@ -148,6 +148,14 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             await AsyncStorage.setItem(INV_MAP_KEY, JSON.stringify(map));
           }
         }
+        // Fetch company name from Odoo if missing
+        if (!invoiceData.companyName || invoiceData.companyName === '-') {
+          try {
+            const compName = await fetchCompanyNameOdoo();
+            if (compName) invoiceData.companyName = compName;
+          } catch (e) { /* ignore */ }
+        }
+
         setInvoice(invoiceData);
 
         // Get phone from passed data first

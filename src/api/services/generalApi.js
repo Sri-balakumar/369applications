@@ -10136,6 +10136,26 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
   }
 };
 
+// Fetch the current user's company name from res.company
+export const fetchCompanyNameOdoo = async () => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'res.company', method: 'search_read', args: [[]],
+        kwargs: { fields: ['id', 'name'], limit: 1 },
+      },
+    }, { headers, timeout: 10000 });
+    if (resp.data.error) return null;
+    const company = resp.data.result?.[0];
+    return company?.name || null;
+  } catch (e) {
+    console.warn('[fetchCompanyNameOdoo] error:', e?.message);
+    return null;
+  }
+};
+
 // Fetch partner phone number by partner ID
 export const fetchPartnerPhoneOdoo = async (partnerId) => {
   try {

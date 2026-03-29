@@ -108,9 +108,9 @@ const InvoiceScannerScreen = ({ navigation, route }) => {
       <View style={styles.cameraContainer}>
         <Camera
           style={StyleSheet.absoluteFillObject}
-          type={Camera.Constants.Type.back}
+          type="back"
           barCodeScannerSettings={{
-            barCodeTypes: [Camera.Constants.BarCodeType?.qr || 'qr'],
+            barCodeTypes: ['qr'],
           }}
           onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
         />

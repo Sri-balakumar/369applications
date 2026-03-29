@@ -95,17 +95,9 @@ const Scanner = ({ navigation, route }) => {
       <View style={styles.cameraContainer}>
         <Camera
           style={StyleSheet.absoluteFillObject}
-          type={Camera.Constants.Type.back}
+          type="back"
           barCodeScannerSettings={{
-            barCodeTypes: [
-              Camera.Constants.BarCodeType?.ean13 || 'ean13',
-              Camera.Constants.BarCodeType?.ean8 || 'ean8',
-              Camera.Constants.BarCodeType?.upc_a || 'upc_a',
-              Camera.Constants.BarCodeType?.upc_e || 'upc_e',
-              Camera.Constants.BarCodeType?.code39 || 'code39',
-              Camera.Constants.BarCodeType?.code128 || 'code128',
-              Camera.Constants.BarCodeType?.qr || 'qr',
-            ],
+            barCodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'code39', 'code128', 'qr'],
           }}
           onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
         />
