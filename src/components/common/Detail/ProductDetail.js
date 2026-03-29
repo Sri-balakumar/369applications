@@ -213,15 +213,17 @@ const ProductDetail = ({ navigation, route }) => {
     } else if (Array.isArray(details?.uom) && details.uom.length >= 2) {
       uomData = { uom_id: details.uom[0], uom_name: details.uom[1] };
     }
+    console.log('[handleAddProduct] Price fields — sale_price:', details.sale_price, 'price:', details.price, 'cost:', details.cost);
     const newProduct = {
       id: details.id ?? details._id,
       name: details.product_name || details.name,
       quantity: 1,
-      price: details.cost ?? details.price ?? 0,
+      price: details.sale_price ?? details.price ?? 0,
       imageUrl: details.image_url,
       uom: uomData,
       inventory_ledgers: details.inventory_ledgers || [],
     };
+    console.log('[handleAddProduct] Final cart price:', newProduct.price);
     if (!newProduct.id) { showToastMessage('Product ID missing, cannot add to cart'); return; }
     const exist = currentProducts.some((p) => p.id === newProduct.id);
     if (exist) {
@@ -241,14 +243,16 @@ const ProductDetail = ({ navigation, route }) => {
     const isSaleOrderEdit = fromCustomerDetails?.id?.toString().startsWith('__so_edit_');
     setCurrentCustomer(isSaleOrderEdit ? fromCustomerDetails.id : 'pos_guest');
     const currentProducts = getCurrentCart();
+    console.log('[handleAddToPosCart] Price fields — sale_price:', details.sale_price, 'price:', details.price, 'cost:', details.cost);
     const newProduct = {
       id: details.id ?? details._id,
       name: details.product_name || details.name,
       quantity: 1,
-      price: details.cost ?? details.price ?? 0,
+      price: details.sale_price ?? details.price ?? 0,
       imageUrl: details.image_url,
       tax_percent: details.tax_percent || 0,
     };
+    console.log('[handleAddToPosCart] Final cart price:', newProduct.price);
     if (!newProduct.id) { showToastMessage('Product ID missing, cannot add to cart'); return; }
     const exist = currentProducts.some((p) => p.id === newProduct.id);
     if (exist) {
