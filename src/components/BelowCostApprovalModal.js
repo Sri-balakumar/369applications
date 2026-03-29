@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, TextInput, ScrollView, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, StyleSheet, TextInput, ScrollView, ActivityIndicator, TouchableOpacity, Modal, FlatList } from 'react-native';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { showToastMessage } from '@components/Toast';
-import { authenticateApproverOdoo } from '@api/services/generalApi';
+import { authenticateApproverOdoo, fetchUsersOdoo } from '@api/services/generalApi';
+import { MaterialIcons } from '@expo/vector-icons';
 
 const BelowCostApprovalModal = ({
   visible,
@@ -14,19 +15,57 @@ const BelowCostApprovalModal = ({
   onReject,
   onCancel,
 }) => {
-  const [login, setLogin] = useState('');
+  const [selectedUser, setSelectedUser] = useState(null);
   const [password, setPassword] = useState('');
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Approver dropdown state
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [searchText, setSearchText] = useState('');
+  const [fetchingUsers, setFetchingUsers] = useState(false);
+
+  // Fetch users when dropdown opens or search text changes
+  useEffect(() => {
+    if (!showDropdown) return;
+    const timeout = setTimeout(() => {
+      loadUsers(searchText);
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [showDropdown, searchText]);
+
+  const loadUsers = async (search = '') => {
+    setFetchingUsers(true);
+    try {
+      const result = await fetchUsersOdoo({ searchText: search, limit: 20 });
+      setUsers(result || []);
+    } catch (err) {
+      console.error('[BelowCostModal] fetchUsersOdoo error:', err?.message);
+      setUsers([]);
+    } finally {
+      setFetchingUsers(false);
+    }
+  };
+
+  const handleSelectUser = (user) => {
+    setSelectedUser(user);
+    setShowDropdown(false);
+    setSearchText('');
+  };
+
   const handleAction = async (action) => {
-    if (!login.trim() || !password.trim()) {
-      showToastMessage('Please enter approver login and password');
+    if (!selectedUser) {
+      showToastMessage('Please select an authorized approver');
+      return;
+    }
+    if (!password.trim()) {
+      showToastMessage('Please enter approver password');
       return;
     }
     setLoading(true);
     try {
-      const auth = await authenticateApproverOdoo(login.trim(), password.trim());
+      const auth = await authenticateApproverOdoo(selectedUser.login, password.trim());
       if (!auth.success) {
         showToastMessage(auth.error || 'Authentication failed');
         setLoading(false);
@@ -46,9 +85,12 @@ const BelowCostApprovalModal = ({
   };
 
   const resetFields = () => {
-    setLogin('');
+    setSelectedUser(null);
     setPassword('');
     setReason('');
+    setSearchText('');
+    setShowDropdown(false);
+    setUsers([]);
   };
 
   const handleCancel = () => {
@@ -60,7 +102,7 @@ const BelowCostApprovalModal = ({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleCancel}>
       <View style={s.backdrop}>
         <View style={s.container}>
-          <ScrollView showsVerticalScrollIndicator={false}>
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always">
             {/* Warning Banner */}
             <View style={s.warningBanner}>
               <Text style={s.warningIcon}>⚠</Text>
@@ -105,23 +147,75 @@ const BelowCostApprovalModal = ({
             {/* Approver Authentication */}
             <View style={s.section}>
               <Text style={s.sectionTitle}>APPROVER AUTHENTICATION</Text>
+
+              {/* Authorized Approver Dropdown */}
+              <Text style={s.fieldLabel}>Authorized Approver</Text>
+              <TouchableOpacity
+                style={s.dropdownTrigger}
+                onPress={() => setShowDropdown(!showDropdown)}
+                disabled={loading}
+              >
+                <Text style={selectedUser ? s.dropdownText : s.dropdownPlaceholder}>
+                  {selectedUser ? selectedUser.name : 'Select approver...'}
+                </Text>
+                <MaterialIcons
+                  name={showDropdown ? 'arrow-drop-up' : 'arrow-drop-down'}
+                  size={24}
+                  color="#666"
+                />
+              </TouchableOpacity>
+
+              {showDropdown && (
+                <View style={s.dropdownContainer}>
+                  <View style={s.searchRow}>
+                    <MaterialIcons name="search" size={18} color="#999" />
+                    <TextInput
+                      style={s.searchInput}
+                      placeholder="Search users..."
+                      placeholderTextColor="#999"
+                      value={searchText}
+                      onChangeText={setSearchText}
+                      autoCapitalize="none"
+                      autoFocus
+                    />
+                  </View>
+                  {fetchingUsers ? (
+                    <ActivityIndicator size="small" color={COLORS.primaryThemeColor} style={{ padding: 12 }} />
+                  ) : users.length === 0 ? (
+                    <Text style={s.noResults}>No users found</Text>
+                  ) : (
+                    <FlatList
+                      data={users}
+                      keyExtractor={(item) => String(item.id)}
+                      style={{ maxHeight: 160 }}
+                      nestedScrollEnabled
+                      keyboardShouldPersistTaps="always"
+                      renderItem={({ item }) => (
+                        <TouchableOpacity
+                          style={[
+                            s.dropdownItem,
+                            selectedUser?.id === item.id && s.dropdownItemSelected,
+                          ]}
+                          onPress={() => handleSelectUser(item)}
+                        >
+                          <Text style={s.dropdownItemText}>{item.name}</Text>
+                        </TouchableOpacity>
+                      )}
+                    />
+                  )}
+                </View>
+              )}
+
+              <Text style={[s.fieldLabel, { marginTop: 10 }]}>Approver Password</Text>
               <TextInput
                 style={s.input}
-                placeholder="Approver Login"
-                placeholderTextColor="#999"
-                value={login}
-                onChangeText={setLogin}
-                autoCapitalize="none"
-                editable={!loading}
-              />
-              <TextInput
-                style={s.input}
-                placeholder="Approver Password"
+                placeholder="Enter password"
                 placeholderTextColor="#999"
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry
                 editable={!loading}
+                onFocus={() => setShowDropdown(false)}
               />
               <TextInput
                 style={[s.input, { height: 70, textAlignVertical: 'top' }]}
@@ -131,6 +225,7 @@ const BelowCostApprovalModal = ({
                 onChangeText={setReason}
                 multiline
                 editable={!loading}
+                onFocus={() => setShowDropdown(false)}
               />
             </View>
 
@@ -245,6 +340,86 @@ const s = StyleSheet.create({
     fontSize: 12,
     fontFamily: FONT_FAMILY.urbanistMedium,
     color: '#333',
+  },
+  fieldLabel: {
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    color: '#444',
+    marginBottom: 6,
+  },
+  dropdownTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    backgroundColor: '#fff',
+    marginBottom: 4,
+  },
+  dropdownText: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#333',
+    flex: 1,
+  },
+  dropdownPlaceholder: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#999',
+    flex: 1,
+  },
+  dropdownContainer: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    marginBottom: 6,
+    overflow: 'hidden',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#333',
+    paddingVertical: 2,
+    marginLeft: 6,
+  },
+  dropdownItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  dropdownItemSelected: {
+    backgroundColor: COLORS.primaryThemeColor + '15',
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#333',
+  },
+  noResults: {
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#999',
+    textAlign: 'center',
+    padding: 12,
   },
   input: {
     borderWidth: 1,

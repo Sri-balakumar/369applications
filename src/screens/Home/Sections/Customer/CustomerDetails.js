@@ -11,7 +11,7 @@ import { Ionicons, AntDesign, MaterialIcons } from '@expo/vector-icons';
 import { EmptyState } from '@components/common/empty';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
-import { createSaleOrderOdoo, confirmSaleOrderOdoo, createInvoiceFromQuotationOdoo, fetchProductByBarcodeOdoo, fetchSaleOrderDetailOdoo, validateSaleOrderPickingsOdoo } from '@api/services/generalApi';
+import { createSaleOrderOdoo, confirmSaleOrderOdoo, createInvoiceFromQuotationOdoo, fetchProductByBarcodeOdoo, fetchSaleOrderDetailOdoo, validateSaleOrderPickingsOdoo, createBelowCostApprovalLogOdoo } from '@api/services/generalApi';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Toast from 'react-native-toast-message';
 import Text from '@components/Text';
@@ -37,6 +37,7 @@ const CustomerDetails = ({ navigation, route }) => {
   const [showBelowCostModal, setShowBelowCostModal] = useState(false);
   const [belowCostLines, setBelowCostLines] = useState([]);
   const [belowCostAction, setBelowCostAction] = useState(null); // 'place' or 'invoice'
+  const [pendingApproval, setPendingApproval] = useState(null); // { approverId, approverName, reason }
 
   useEffect(() => {
     if (details?.id || details?._id) {
@@ -187,7 +188,7 @@ const CustomerDetails = ({ navigation, route }) => {
     );
   };
 
-  const executePlaceOrder = async () => {
+  const executePlaceOrder = async (approvalInfo = null) => {
     const customerId = details?.id || details?._id || details?.customer_id || null;
     setIsPlacingOrder(true);
     try {
@@ -199,6 +200,24 @@ const CustomerDetails = ({ navigation, route }) => {
       if (!odooOrderId) {
         Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to create sale order in Odoo', position: 'bottom' });
         return;
+      }
+      // Log below-cost approval to Odoo if this was an approved below-cost sale
+      if (approvalInfo) {
+        try {
+          const detailsText = (approvalInfo.belowCostLines || []).map(l =>
+            `Product: ${l.productName} | Price: ${l.unitPrice.toFixed(3)} | Cost: ${l.costPrice.toFixed(3)} | Min Required: ${l.costPrice.toFixed(3)} | Margin: ${l.marginPercent.toFixed(2)}% | Qty: ${l.qty}`
+          ).join('\n');
+          await createBelowCostApprovalLogOdoo({
+            saleOrderId: odooOrderId,
+            approverId: approvalInfo.approverId,
+            reason: approvalInfo.reason || '',
+            action: 'approved',
+            belowCostDetails: detailsText,
+          });
+          console.log('[PlaceOrder] Below-cost approval log saved for SO:', odooOrderId);
+        } catch (logErr) {
+          console.error('[PlaceOrder] Failed to save approval log:', logErr?.message);
+        }
       }
       clearProducts();
       const custId = details?.id || details?._id;
@@ -249,7 +268,7 @@ const CustomerDetails = ({ navigation, route }) => {
     await executePlaceOrder();
   };
 
-  const executeDirectInvoice = async () => {
+  const executeDirectInvoice = async (approvalInfo = null) => {
     const customerId = details?.id || details?._id || details?.customer_id || null;
     setIsDirectInvoicing(true);
     try {
@@ -261,6 +280,24 @@ const CustomerDetails = ({ navigation, route }) => {
       if (!odooOrderId) {
         Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to create sale order', position: 'bottom' });
         return;
+      }
+      // Log below-cost approval to Odoo if this was an approved below-cost sale
+      if (approvalInfo) {
+        try {
+          const detailsText = (approvalInfo.belowCostLines || []).map(l =>
+            `Product: ${l.productName} | Price: ${l.unitPrice.toFixed(3)} | Cost: ${l.costPrice.toFixed(3)} | Min Required: ${l.costPrice.toFixed(3)} | Margin: ${l.marginPercent.toFixed(2)}% | Qty: ${l.qty}`
+          ).join('\n');
+          await createBelowCostApprovalLogOdoo({
+            saleOrderId: odooOrderId,
+            approverId: approvalInfo.approverId,
+            reason: approvalInfo.reason || '',
+            action: 'approved',
+            belowCostDetails: detailsText,
+          });
+          console.log('[DirectInvoice] Below-cost approval log saved for SO:', odooOrderId);
+        } catch (logErr) {
+          console.error('[DirectInvoice] Failed to save approval log:', logErr?.message);
+        }
       }
       console.log('[DirectInvoice] === STARTING INVOICE FLOW for SO:', odooOrderId, '===');
       try { await confirmSaleOrderOdoo(odooOrderId); console.log('[DirectInvoice] SO confirmed'); } catch (e) { console.warn('[DirectInvoice] SO confirm warning:', e?.message); }
@@ -342,18 +379,21 @@ const CustomerDetails = ({ navigation, route }) => {
     await executeDirectInvoice();
   };
 
-  const handleBelowCostApprove = async () => {
+  const handleBelowCostApprove = async (approvalData) => {
+    const approvalInfo = { ...approvalData, belowCostLines: [...belowCostLines] };
+    setPendingApproval(approvalInfo);
     setShowBelowCostModal(false);
     if (belowCostAction === 'place') {
-      await executePlaceOrder();
+      await executePlaceOrder(approvalInfo);
     } else if (belowCostAction === 'invoice') {
-      await executeDirectInvoice();
+      await executeDirectInvoice(approvalInfo);
     }
     setBelowCostLines([]);
     setBelowCostAction(null);
+    setPendingApproval(null);
   };
 
-  const handleBelowCostReject = () => {
+  const handleBelowCostReject = async (rejectData) => {
     setShowBelowCostModal(false);
     Alert.alert('Rejected', 'The below-cost sale has been rejected.');
     setBelowCostLines([]);

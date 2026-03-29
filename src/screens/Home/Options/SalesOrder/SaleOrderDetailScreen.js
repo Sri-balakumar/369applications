@@ -17,6 +17,7 @@ import {
   searchInvoicesByOriginOdoo,
   validateSaleOrderPickingsOdoo,
   cancelSaleOrderOdoo,
+  createBelowCostApprovalLogOdoo,
 } from '@api/services/generalApi';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useCurrencyStore } from '@stores/currency';
@@ -99,37 +100,37 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     }
   }, [orderId]);
 
-  // On focus: check if products were added via POSProducts, then refresh
+  // On focus: check if products were added via POSProducts, then always refresh
   useFocusEffect(useCallback(() => {
     const handleFocus = async () => {
-      if (!initialLoadDone.current) {
-        // First mount — just load the detail
+      const isFirstLoad = !initialLoadDone.current;
+      if (isFirstLoad) {
         initialLoadDone.current = true;
-        await fetchDetail(true);
-        return;
       }
 
       // Returning from product picker — check for added products
-      setCurrentCustomer(SO_CART_KEY);
-      const addedProducts = getCurrentCart();
-      if (addedProducts && addedProducts.length > 0) {
-        try {
-          setSaving(true);
-          const additions = addedProducts.map(p => ({
-            product_id: p.id,
-            qty: p.quantity || 1,
-            price_unit: p.price || 0,
-          }));
-          await updateSaleOrderLinesOdoo(orderId, { additions });
-          clearProducts();
-        } catch (err) {
-          Alert.alert('Error', err?.message || 'Failed to add products.');
-        } finally {
-          setSaving(false);
+      if (!isFirstLoad) {
+        setCurrentCustomer(SO_CART_KEY);
+        const addedProducts = getCurrentCart();
+        if (addedProducts && addedProducts.length > 0) {
+          try {
+            setSaving(true);
+            const additions = addedProducts.map(p => ({
+              product_id: p.id,
+              qty: p.quantity || 1,
+              price_unit: p.price || 0,
+            }));
+            await updateSaleOrderLinesOdoo(orderId, { additions });
+            clearProducts();
+          } catch (err) {
+            Alert.alert('Error', err?.message || 'Failed to add products.');
+          } finally {
+            setSaving(false);
+          }
         }
       }
-      // Refresh without full-screen loader to avoid blank flash
-      await fetchDetail(false);
+      // Always fetch latest data from Odoo
+      await fetchDetail(isFirstLoad);
     };
     handleFocus();
   }, [orderId, fetchDetail]));
@@ -250,38 +251,38 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
       }
       const companyId = record?.company_id ? (Array.isArray(record.company_id) ? record.company_id[0] : record.company_id) : null;
       await confirmSaleOrderOdoo(orderId, companyId);
-      Alert.alert('Order Confirmed', 'Quotation has been confirmed as a Sales Order.', [
-        { text: 'OK', onPress: () => fetchDetail() },
-      ]);
+      console.log('[ConfirmOrder] SO confirmed, proceeding to create invoice...');
+      setConfirming(false);
+      // Automatically create invoice after confirming
+      await executeCreateInvoice();
     } catch (err) {
       Alert.alert('Error', err?.message || 'Failed to confirm order.');
-    } finally {
       setConfirming(false);
     }
   };
 
   const handleConfirmOrder = async () => {
-    // Check for below-cost lines first
-    setConfirming(true);
-    try {
-      const linesToCheck = getOrderLinesToCheck();
-      const result = await checkBelowCostLines(linesToCheck);
-      if (result.hasBelowCost) {
-        setBelowCostLines(result.belowCostLines);
-        setBelowCostAction('confirm');
-        setConfirming(false);
-        setShowBelowCostModal(true);
-        return;
-      }
-    } catch (err) {
-      console.log('[SaleOrderDetail] Below cost check failed, proceeding:', err?.message);
-    }
-    setConfirming(false);
     await executeConfirmOrder();
   };
 
-  const handleBelowCostApprove = async () => {
+  const handleBelowCostApprove = async (approvalData) => {
     setShowBelowCostModal(false);
+    // Log below-cost approval to Odoo
+    try {
+      const detailsText = belowCostLines.map(l =>
+        `Product: ${l.productName} | Price: ${l.unitPrice.toFixed(3)} | Cost: ${l.costPrice.toFixed(3)} | Min Required: ${l.costPrice.toFixed(3)} | Margin: ${l.marginPercent.toFixed(2)}% | Qty: ${l.qty}`
+      ).join('\n');
+      await createBelowCostApprovalLogOdoo({
+        saleOrderId: orderId,
+        approverId: approvalData.approverId,
+        reason: approvalData.reason || '',
+        action: 'approved',
+        belowCostDetails: detailsText,
+      });
+      console.log('[SaleOrderDetail] Below-cost approval log saved for SO:', orderId);
+    } catch (logErr) {
+      console.error('[SaleOrderDetail] Failed to save approval log:', logErr?.message);
+    }
     if (belowCostAction === 'confirm') {
       await executeConfirmOrder();
     } else if (belowCostAction === 'invoice') {
@@ -291,8 +292,23 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     setBelowCostAction(null);
   };
 
-  const handleBelowCostReject = () => {
+  const handleBelowCostReject = async (rejectData) => {
     setShowBelowCostModal(false);
+    // Log rejection to Odoo
+    try {
+      const detailsText = belowCostLines.map(l =>
+        `Product: ${l.productName} | Price: ${l.unitPrice.toFixed(3)} | Cost: ${l.costPrice.toFixed(3)} | Margin: ${l.marginPercent.toFixed(2)}% | Qty: ${l.qty}`
+      ).join('\n');
+      await createBelowCostApprovalLogOdoo({
+        saleOrderId: orderId,
+        approverId: rejectData.approverId,
+        reason: rejectData.reason || '',
+        action: 'rejected',
+        belowCostDetails: detailsText,
+      });
+    } catch (logErr) {
+      console.error('[SaleOrderDetail] Failed to save rejection log:', logErr?.message);
+    }
     Alert.alert('Rejected', 'The below-cost action has been rejected.');
     setBelowCostLines([]);
     setBelowCostAction(null);
@@ -446,6 +462,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const isConfirmed = state === 'sale' || state === 'done';
   const hasInvoice = !!createdInvoiceId || invoiceStatus === 'invoiced' || invoiceCount > 0;
   const canInvoice = isConfirmed && !hasInvoice;
+  console.log('[SaleOrderDetail] state:', state, 'isDraft:', isDraft, 'isConfirmed:', isConfirmed, 'hasInvoice:', hasInvoice, 'invoiceStatus:', invoiceStatus, 'invoiceCount:', invoiceCount, 'createdInvoiceId:', createdInvoiceId);
 
   return (
     <SafeAreaView>
@@ -454,7 +471,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
 
         {/* Status Badge */}
         <View style={styles.statusRow}>
-          {isConfirmed && hasInvoice && (
+          {hasInvoice && (
             <View style={[styles.badge, { backgroundColor: '#009688', marginRight: 6 }]}>
               <Text style={styles.badgeText}>INVOICED</Text>
             </View>
@@ -616,8 +633,8 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
           </View>
         </View>
 
-        {/* Confirm Order Button */}
-        {isDraft && (
+        {/* Confirm Order Button — only if draft AND no invoices yet */}
+        {isDraft && !hasInvoice && (
           <View style={{ marginVertical: 8 }}>
             <Button
               backgroundColor={COLORS.primaryThemeColor}
@@ -628,8 +645,8 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
           </View>
         )}
 
-        {/* Cancel Order Button */}
-        {isDraft && (
+        {/* Cancel Order Button — only if draft AND no invoices yet */}
+        {isDraft && !hasInvoice && (
           <View style={{ marginVertical: 8 }}>
             <Button
               backgroundColor="#F44336"
@@ -652,8 +669,8 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
           </View>
         )}
 
-        {/* View Invoice Button (when invoiced) */}
-        {isConfirmed && hasInvoice && (
+        {/* View Invoice Button — show whenever invoices exist */}
+        {hasInvoice && (
           <View style={{ marginVertical: 8 }}>
             <Button
               backgroundColor="#009688"

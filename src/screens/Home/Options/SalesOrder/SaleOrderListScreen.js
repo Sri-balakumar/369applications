@@ -100,9 +100,9 @@ const SaleOrderListScreen = ({ navigation }) => {
     setLoading(true);
     try {
       const records = await fetchSaleOrdersOdoo({ limit: 100 });
-      // Enrich: for confirmed SOs with no invoice_ids, search by origin
+      // Enrich: for SOs with no invoice_ids, search by origin
       for (const r of (records || [])) {
-        if ((r.state === 'sale' || r.state === 'done') && (!r.invoice_ids || r.invoice_ids.length === 0) && r.name) {
+        if ((!r.invoice_ids || r.invoice_ids.length === 0) && r.name) {
           try {
             const invs = await searchInvoicesByOriginOdoo(r.name);
             if (invs.length > 0) r.invoice_ids = invs.map(i => i.id);
@@ -130,9 +130,8 @@ const SaleOrderListScreen = ({ navigation }) => {
     ? data
     : activeFilter === 'invoiced'
       ? data.filter(i => {
-          const s = (i.state || 'draft').toLowerCase();
           const hasInv = i.invoice_status === 'invoiced' || (i.invoice_ids && i.invoice_ids.length > 0);
-          return (s === 'sale' || s === 'done') && hasInv;
+          return hasInv;
         })
       : activeFilter === 'sale'
         ? data.filter(i => {
@@ -140,7 +139,13 @@ const SaleOrderListScreen = ({ navigation }) => {
             const hasInv = i.invoice_status === 'invoiced' || (i.invoice_ids && i.invoice_ids.length > 0);
             return s === 'sale' && !hasInv;
           })
-        : data.filter(i => (i.state || 'draft').toLowerCase() === activeFilter);
+        : activeFilter === 'draft'
+          ? data.filter(i => {
+              const s = (i.state || 'draft').toLowerCase();
+              const hasInv = i.invoice_status === 'invoiced' || (i.invoice_ids && i.invoice_ids.length > 0);
+              return s === activeFilter && !hasInv;
+            })
+          : data.filter(i => (i.state || 'draft').toLowerCase() === activeFilter);
 
   const renderItem = ({ item }) => {
     if (item.empty) return <EmptyItem />;
@@ -163,19 +168,20 @@ const SaleOrderListScreen = ({ navigation }) => {
         <View style={styles.row}>
           <Text style={styles.head} numberOfLines={1}>{invMap[item.id] || item.name || `SO-${item.id}`}</Text>
           <View style={{ flexDirection: 'row', gap: 6 }}>
-            {state === 'sale' && !hasInvoice && invoiceStatus === 'to_invoice' && (
+            {!hasInvoice && invoiceStatus === 'to_invoice' && (
               <View style={[styles.badge, { backgroundColor: '#FF5722' }]}>
                 <Text style={styles.badgeText}>TO INVOICE</Text>
               </View>
             )}
-            {(state === 'sale' || state === 'done') && hasInvoice && (
+            {hasInvoice ? (
               <View style={[styles.badge, { backgroundColor: '#009688' }]}>
                 <Text style={styles.badgeText}>INVOICED</Text>
               </View>
+            ) : (
+              <View style={[styles.badge, { backgroundColor: stateColor }]}>
+                <Text style={styles.badgeText}>{stateLabel}</Text>
+              </View>
             )}
-            <View style={[styles.badge, { backgroundColor: stateColor }]}>
-              <Text style={styles.badgeText}>{stateLabel}</Text>
-            </View>
           </View>
         </View>
 
