@@ -73,7 +73,7 @@
     "react-native-svg-charts": "^5.4.0",
     "react-native-tab-view": "^3.5.2",
     "react-native-toast-message": "^2.2.0",
-    "react-native-view-shot": "^4.0.3",
+    "react-native-view-shot": "3.8.0",
     "react-native-web": "~0.19.6",
     "react-native-webview": "13.6.4",
     "zustand": "^4.5.1"

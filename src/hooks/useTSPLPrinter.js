@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { NativeModules } from 'react-native';
+import { NativeModules, Platform, PermissionsAndroid } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import pako from 'pako';
 
@@ -238,8 +238,58 @@ export default function useTSPLPrinter() {
       return;
     }
 
+    // Request runtime BLE permissions (required on Android 12+)
+    if (Platform.OS === 'android' && Platform.Version >= 31) {
+      try {
+        const granted = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ]);
+        const allGranted = Object.values(granted).every(
+          v => v === PermissionsAndroid.RESULTS.GRANTED
+        );
+        if (!allGranted) {
+          setError('Bluetooth permissions denied');
+          setIsScanning(false);
+          console.log('[TSPL] Permissions denied:', granted);
+          return;
+        }
+      } catch (err) {
+        setError('Permission request failed');
+        setIsScanning(false);
+        return;
+      }
+    } else if (Platform.OS === 'android') {
+      // Android < 12: only need location permission for BLE scan
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          setError('Location permission denied (needed for BLE scan)');
+          setIsScanning(false);
+          return;
+        }
+      } catch (err) {
+        setError('Permission request failed');
+        setIsScanning(false);
+        return;
+      }
+    }
+
     const BleManager = bleManagerRef.current;
-    const { NativeEventEmitter, NativeModules } = require('react-native');
+
+    // Check if Bluetooth is enabled
+    try {
+      await BleManager.enableBluetooth();
+    } catch (_) {
+      setError('Please turn on Bluetooth');
+      setIsScanning(false);
+      return;
+    }
+
+    const { NativeEventEmitter } = require('react-native');
     const emitter = new NativeEventEmitter(NativeModules.BleManager);
     const found = [];
 
@@ -247,17 +297,27 @@ export default function useTSPLPrinter() {
     eventListenerRef.current = emitter.addListener(
       'BleManagerDiscoverPeripheral',
       (peripheral) => {
-        if (!peripheral.name) return;
-        if (found.some(d => d.id === peripheral.id)) return;
-        const dev = { id: peripheral.id, name: peripheral.name, rssi: peripheral.rssi };
+        const name = peripheral.name || peripheral.localName || null;
+        const id = peripheral.id;
+        // Update existing device if we now have a name
+        const existingIdx = found.findIndex(d => d.id === id);
+        if (existingIdx >= 0) {
+          if (name && !found[existingIdx].name) {
+            found[existingIdx].name = name;
+            found[existingIdx].rssi = peripheral.rssi;
+            setDevices([...found]);
+          }
+          return;
+        }
+        const dev = { id, name: name || `Unknown (${id.slice(-5)})`, rssi: peripheral.rssi };
         found.push(dev);
         setDevices([...found]);
       }
     );
 
     try {
-      await BleManager.scan([], 5, false);
-      await new Promise(r => setTimeout(r, 5500));
+      await BleManager.scan([], 8, true);
+      await new Promise(r => setTimeout(r, 9000));
     } catch (err) {
       setError('Scan failed: ' + err.message);
     } finally {
