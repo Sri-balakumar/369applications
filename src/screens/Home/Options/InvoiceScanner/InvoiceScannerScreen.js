@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Text } from 'react-native';
-import { Camera } from 'expo-camera';
+import { BarCodeScanner } from 'expo-barcode-scanner';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { OverlayLoader } from '@components/Loader';
@@ -11,15 +11,16 @@ import { fetchInvoiceByIdOdoo } from '@api/services/generalApi';
 const InvoiceScannerScreen = ({ navigation, route }) => {
   const onScanCallback = route?.params?.onScan;
   const isCallbackMode = typeof onScanCallback === 'function';
-  const [cameraPermission, requestCameraPermission] = Camera.useCameraPermissions();
+  const [hasPermission, setHasPermission] = useState(null);
   const [scanned, setScanned] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!cameraPermission?.granted) {
-      requestCameraPermission();
-    }
-  }, [cameraPermission]);
+    (async () => {
+      const { status } = await BarCodeScanner.requestPermissionsAsync();
+      setHasPermission(status === 'granted');
+    })();
+  }, []);
 
   const handleBarCodeScanned = async ({ data }) => {
     if (scanned || loading) return;
@@ -63,7 +64,7 @@ const InvoiceScannerScreen = ({ navigation, route }) => {
     }
   };
 
-  if (!cameraPermission) {
+  if (hasPermission === null) {
     return (
       <SafeAreaView backgroundColor={COLORS.white}>
         <NavigationHeader
@@ -79,7 +80,7 @@ const InvoiceScannerScreen = ({ navigation, route }) => {
     );
   }
 
-  if (!cameraPermission.granted) {
+  if (!hasPermission) {
     return (
       <SafeAreaView backgroundColor={COLORS.white}>
         <NavigationHeader
@@ -106,12 +107,9 @@ const InvoiceScannerScreen = ({ navigation, route }) => {
         onBackPress={() => navigation.goBack()}
       />
       <View style={styles.cameraContainer}>
-        <Camera
+        <BarCodeScanner
           style={StyleSheet.absoluteFillObject}
-          type="back"
-          barCodeScannerSettings={{
-            barCodeTypes: ['qr'],
-          }}
+          barCodeTypes={[BarCodeScanner.Constants.BarCodeType.qr]}
           onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
         />
         <View style={styles.overlay}>

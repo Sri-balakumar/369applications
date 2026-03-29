@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { Camera } from 'expo-camera';
+import { BarCodeScanner } from 'expo-barcode-scanner';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
@@ -9,15 +9,16 @@ import { showToastMessage } from '@components/Toast';
 
 const Scanner = ({ navigation, route }) => {
   const onScanCallback = route?.params?.onScan;
-  const [cameraPermission, requestCameraPermission] = Camera.useCameraPermissions();
+  const [hasPermission, setHasPermission] = useState(null);
   const [scanned, setScanned] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!cameraPermission?.granted) {
-      requestCameraPermission();
-    }
-  }, [cameraPermission]);
+    (async () => {
+      const { status } = await BarCodeScanner.requestPermissionsAsync();
+      setHasPermission(status === 'granted');
+    })();
+  }, []);
 
   const handleBarCodeScanned = async ({ data }) => {
     if (scanned || loading) return;
@@ -50,7 +51,7 @@ const Scanner = ({ navigation, route }) => {
     setLoading(false);
   };
 
-  if (!cameraPermission) {
+  if (hasPermission === null) {
     return (
       <SafeAreaView backgroundColor={COLORS.white}>
         <NavigationHeader
@@ -66,7 +67,7 @@ const Scanner = ({ navigation, route }) => {
     );
   }
 
-  if (!cameraPermission.granted) {
+  if (!hasPermission) {
     return (
       <SafeAreaView backgroundColor={COLORS.white}>
         <NavigationHeader
@@ -93,12 +94,17 @@ const Scanner = ({ navigation, route }) => {
         onBackPress={() => navigation.goBack()}
       />
       <View style={styles.cameraContainer}>
-        <Camera
+        <BarCodeScanner
           style={StyleSheet.absoluteFillObject}
-          type="back"
-          barCodeScannerSettings={{
-            barCodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'code39', 'code128', 'qr'],
-          }}
+          barCodeTypes={[
+            BarCodeScanner.Constants.BarCodeType.ean13,
+            BarCodeScanner.Constants.BarCodeType.ean8,
+            BarCodeScanner.Constants.BarCodeType.upc_a,
+            BarCodeScanner.Constants.BarCodeType.upc_e,
+            BarCodeScanner.Constants.BarCodeType.code39,
+            BarCodeScanner.Constants.BarCodeType.code128,
+            BarCodeScanner.Constants.BarCodeType.qr,
+          ]}
           onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
         />
         <View style={styles.overlay}>
