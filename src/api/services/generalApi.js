@@ -10252,14 +10252,24 @@ export const authenticateApproverOdoo = async (login, password) => {
     if (response.data.error) return { success: false, error: 'Authentication failed' };
     const uid = response.data.result?.uid;
     if (!uid) return { success: false, error: 'Invalid credentials' };
-    return { success: true, uid, name: response.data.result?.name || login };
+    // Capture session cookie for approver so we can use their session for privileged operations
+    const setCookieHeader = response.headers['set-cookie'];
+    let sessionId = null;
+    if (setCookieHeader) {
+      const cookies = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+      for (const cookie of cookies) {
+        const match = cookie.match(/session_id=([^;]+)/);
+        if (match) { sessionId = match[1]; break; }
+      }
+    }
+    return { success: true, uid, name: response.data.result?.name || login, sessionId };
   } catch (error) {
     console.error('[authenticateApproverOdoo] error:', error?.message || error);
     return { success: false, error: error?.message || 'Authentication failed' };
   }
 };
 
-// Create a below-cost approval log entry in Odoo
+// Create a below-cost approval log entry in Odoo using sudo via create_from_mobile
 export const createBelowCostApprovalLogOdoo = async ({ saleOrderId, approverId, reason, action, belowCostDetails }) => {
   try {
     const headers = await getOdooAuthHeaders();
@@ -10270,19 +10280,24 @@ export const createBelowCostApprovalLogOdoo = async ({ saleOrderId, approverId, 
       action: action || 'approved',
       below_cost_details: belowCostDetails || '',
     };
+    console.log('[createBelowCostApprovalLogOdoo] Creating log with vals:', JSON.stringify(vals));
     const response = await axios.post(
       `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0', method: 'call',
         params: {
-          model: 'sale.cost.approval.log', method: 'create',
+          model: 'sale.cost.approval.log', method: 'create_from_mobile',
           args: [vals],
-          kwargs: {},
+          kwargs: { context: {} },
         },
       },
       { headers, timeout: 15000 }
     );
-    if (response.data.error) throw new Error('Failed to create approval log');
+    if (response.data.error) {
+      console.error('[createBelowCostApprovalLogOdoo] Odoo error:', JSON.stringify(response.data.error));
+      throw new Error(response.data.error.data?.message || 'Failed to create approval log');
+    }
+    console.log('[createBelowCostApprovalLogOdoo] Success, log ID:', response.data.result);
     return response.data.result;
   } catch (error) {
     console.error('[createBelowCostApprovalLogOdoo] error:', error?.message || error);

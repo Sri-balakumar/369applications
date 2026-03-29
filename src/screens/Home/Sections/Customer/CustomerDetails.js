@@ -380,6 +380,8 @@ const CustomerDetails = ({ navigation, route }) => {
   };
 
   const handleBelowCostApprove = async (approvalData) => {
+    console.log('[BelowCostApprove] approvalData received:', JSON.stringify(approvalData));
+    console.log('[BelowCostApprove] belowCostLines count:', belowCostLines.length, 'action:', belowCostAction);
     const approvalInfo = { ...approvalData, belowCostLines: [...belowCostLines] };
     setPendingApproval(approvalInfo);
     setShowBelowCostModal(false);

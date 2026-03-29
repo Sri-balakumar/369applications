@@ -72,9 +72,9 @@ const BelowCostApprovalModal = ({
         return;
       }
       if (action === 'approve') {
-        await onApprove({ approverId: auth.uid, approverName: auth.name, reason: reason.trim() });
+        await onApprove({ approverId: auth.uid, approverName: auth.name, reason: reason.trim(), sessionId: auth.sessionId });
       } else {
-        await onReject({ approverId: auth.uid, approverName: auth.name, reason: reason.trim() });
+        await onReject({ approverId: auth.uid, approverName: auth.name, reason: reason.trim(), sessionId: auth.sessionId });
       }
       resetFields();
     } catch (err) {

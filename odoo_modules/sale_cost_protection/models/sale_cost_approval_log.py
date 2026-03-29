@@ -65,3 +65,8 @@ class SaleCostApprovalLog(models.Model):
         string="Below Cost Line Details",
         help="Snapshot of below-cost lines at the time of approval.",
     )
+
+    @api.model
+    def create_from_mobile(self, vals):
+        """Create approval log from mobile app - uses sudo to bypass access rules."""
+        return self.sudo().create(vals).id
