@@ -16,6 +16,7 @@ import { INVOICE_LOGO_BASE64 } from '@constants/invoiceLogo';
 import { sendWhatsAppDocument } from '@api/services/whatsappApi';
 import { COUNTRIES, getMaxDigits, parsePhoneCountryCode, CountryCodePicker } from '@screens/Home/Options/WhatsApp/ContactsSheet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import PrintReceiptButton from '@components/TSPLPrinter/PrintReceiptButton';
 
 const INV_COUNTER_KEY = 'inv_counter_s';
 const INV_MAP_KEY = 'inv_map_s';
@@ -574,6 +575,13 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
             loading={sendingWA}
           />
         </View>
+
+        <PrintReceiptButton
+          invoice={invoice}
+          cashierName={cashierName}
+          currency={currency}
+          partnerPhone={partnerPhone}
+        />
 
         {/* Phone Number Modal (shown only when customer has no phone) */}
         <Modal visible={showPhoneModal} transparent animationType="fade">

@@ -44,7 +44,11 @@
         "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.USE_BIOMETRIC",
         "android.permission.USE_FINGERPRINT",
-        "android.permission.DETECT_SCREEN_CAPTURE"
+        "android.permission.DETECT_SCREEN_CAPTURE",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN"
       ],
       "package": "com.danat.alphalize",
       "config": {
@@ -63,6 +67,7 @@
         }
       ],
       "expo-task-manager",
+      "react-native-ble-manager",
       [
         "expo-camera",
         {
