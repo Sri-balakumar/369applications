@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, Alert } from 'react-native';
 import Text from '@components/Text';
 import { BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
@@ -46,10 +46,15 @@ const TSPLPrintSheet = ({ isVisible, onClose, invoice, cashierName, currency, pa
   const handlePrint = useCallback(async () => {
     try {
       await printReceipt(viewShotRef, selectedSize);
-      showToastMessage('Label printed successfully!');
-      setTimeout(() => onClose(), 800);
-    } catch (_) {
-      showToastMessage('Print failed. Please try again.');
+      Alert.alert('Print Successful', 'Label has been printed successfully.', [
+        { text: 'OK', onPress: () => onClose() },
+      ]);
+    } catch (err) {
+      Alert.alert(
+        'Print Failed',
+        `Could not print the label.\n\nError: ${err?.message || 'Unknown error'}\n\nPlease check:\n• Printer is turned on\n• Bluetooth is connected\n• Paper/label is loaded`,
+        [{ text: 'OK' }]
+      );
     }
   }, [printReceipt, selectedSize, onClose]);
 

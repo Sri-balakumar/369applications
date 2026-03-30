@@ -17,6 +17,7 @@ import { sendWhatsAppDocument } from '@api/services/whatsappApi';
 import { COUNTRIES, getMaxDigits, parsePhoneCountryCode, CountryCodePicker } from '@screens/Home/Options/WhatsApp/ContactsSheet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import PrintReceiptButton from '@components/TSPLPrinter/PrintReceiptButton';
+import { WebView } from 'react-native-webview';
 
 const INV_COUNTER_KEY = 'inv_counter_s';
 const INV_MAP_KEY = 'inv_map_s';
@@ -208,6 +209,8 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   const [waCountryCode, setWaCountryCode] = useState('+968');
   const [showPhoneModal, setShowPhoneModal] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
   const buildInvoiceHtml = () => {
     const rowsHtml = (invoice.lines || []).map((line, idx) =>
       `<tr style="border-bottom:1px solid #eee;">
@@ -294,21 +297,13 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
     `;
   };
 
-  const handlePrintInvoice = async () => {
+  const handlePrintInvoice = () => {
     if (!invoice) {
       showToastMessage('Invoice data not available');
       return;
     }
-    setPrinting(true);
-    try {
-      const html = buildInvoiceHtml();
-      await Print.printAsync({ html });
-    } catch (err) {
-      console.error('[Print] error:', err);
-      showToastMessage('Failed to print invoice');
-    } finally {
-      setPrinting(false);
-    }
+    setPreviewHtml(buildInvoiceHtml());
+    setShowPreview(true);
   };
 
   const handleDownloadPdf = async () => {
@@ -625,6 +620,24 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Print Preview Modal */}
+      <Modal visible={showPreview} animationType="slide" onRequestClose={() => setShowPreview(false)}>
+        <View style={{ flex: 1, backgroundColor: '#fff' }}>
+          <View style={s.previewHeader}>
+            <Text style={s.previewTitle}>Print Preview</Text>
+            <TouchableOpacity onPress={() => setShowPreview(false)} style={s.previewCloseBtn}>
+              <Text style={s.previewCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+          <WebView
+            source={{ html: previewHtml }}
+            style={{ flex: 1 }}
+            originWhitelist={['*']}
+            scalesPageToFit={true}
+          />
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -676,6 +689,13 @@ const s = StyleSheet.create({
   modalCountryBtn: { backgroundColor: '#f9fafb', borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 10, paddingVertical: 12, justifyContent: 'center', alignItems: 'center', minWidth: 80 },
   modalCountryText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#1f2937' },
   modalHint: { fontSize: 11, color: '#25D366', fontStyle: 'italic', marginBottom: 16 },
+  previewHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: '#fff',
+  },
+  previewTitle: { fontSize: 18, fontFamily: FONT_FAMILY.urbanistBold, color: '#2e2a4f' },
+  previewCloseBtn: { paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#f0f0f0', borderRadius: 8 },
+  previewCloseText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#333' },
 });
 
 export default SalesInvoiceReceiptScreen;

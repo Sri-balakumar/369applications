@@ -2,7 +2,7 @@
   "expo": {
     "name": "369aiAlphalize",
     "slug": "369aialphalize",
-    "owner": "arun_kumar2003",
+    "owner": "alphalizebuild",
     "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -89,11 +89,18 @@
             "kotlinVersion": "1.8.10"
           }
         }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "neverForLocation": false
+        }
       ]
     ],
     "extra": {
       "eas": {
-        "projectId": "682d6586-809a-4eb7-b53a-cd631bdc0d2a"
+        "projectId": "8b07aa71-947a-4c7f-80bc-9b082e9c615d"
       }
     }
   }

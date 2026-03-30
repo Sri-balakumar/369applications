@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { NativeModules, Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
+import { BleManager } from 'react-native-ble-plx';
 import * as FileSystem from 'expo-file-system';
 import pako from 'pako';
 
@@ -42,6 +43,23 @@ function base64ToUint8Array(b64) {
     if (d !== -1) bytes[p++] = ((c & 0x3) << 6) | d;
   }
   return bytes.slice(0, p);
+}
+
+function uint8ArrayToBase64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  // Hermes-safe btoa
+  let result = '';
+  for (let i = 0; i < binary.length; i += 3) {
+    const a = binary.charCodeAt(i);
+    const b = i + 1 < binary.length ? binary.charCodeAt(i + 1) : 0;
+    const c = i + 2 < binary.length ? binary.charCodeAt(i + 2) : 0;
+    result += B64[(a >> 2) & 0x3f];
+    result += B64[((a & 0x3) << 4) | ((b >> 4) & 0xf)];
+    result += (i + 1 < binary.length) ? B64[((b & 0xf) << 2) | ((c >> 6) & 0x3)] : '=';
+    result += (i + 2 < binary.length) ? B64[c & 0x3f] : '=';
+  }
+  return result;
 }
 
 // ── Minimal PNG decoder (uses pako for IDAT inflate) ───────────────────
@@ -180,9 +198,9 @@ function buildTSPLCommands(bitmap, widthBytes, heightDots, widthMM, heightMM) {
 // Hook
 // ═══════════════════════════════════════════════════════════════════════
 export default function useTSPLPrinter() {
-  const bleManagerRef = useRef(null);
-  const eventListenerRef = useRef(null);
-  const connectedCharRef = useRef(null); // { serviceUUID, characteristicUUID }
+  const managerRef = useRef(null);
+  const connectedCharRef = useRef(null); // { serviceUUID, characteristicUUID, withResponse }
+  const connectedDeviceRef = useRef(null); // ble-plx device object
 
   const [isMockMode, setIsMockMode] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
@@ -193,35 +211,30 @@ export default function useTSPLPrinter() {
   const [printProgress, setPrintProgress] = useState(0);
   const [error, setError] = useState(null);
 
-  // ── BLE initialisation ───────────────────────────────────────────────
+  // ── BLE initialisation (react-native-ble-plx) ───────────────────────
   useEffect(() => {
-    let mounted = true;
-
-    // Guard: only load BLE package when native module is actually linked
-    if (!NativeModules.BleManager) {
-      console.log('[TSPL] BLE native module not available – mock mode');
+    let mgr;
+    try {
+      mgr = new BleManager();
+      managerRef.current = mgr;
+    } catch (e) {
+      console.log('[TSPL] BleManager creation failed – mock mode:', e?.message);
       return;
     }
 
-    try {
-      const BleManager = require('react-native-ble-manager').default;
-      BleManager.start({ showAlert: false })
-        .then(() => {
-          if (mounted) {
-            bleManagerRef.current = BleManager;
-            setIsMockMode(false);
-            console.log('[TSPL] BLE manager started – real mode');
-          }
-        })
-        .catch(() => {
-          if (mounted) {
-            console.log('[TSPL] BLE start failed – mock mode');
-          }
-        });
-    } catch (_) {
-      console.log('[TSPL] BLE require failed – mock mode');
-    }
-    return () => { mounted = false; };
+    const subscription = mgr.onStateChange((state) => {
+      console.log('[TSPL] BLE state:', state);
+      if (state === 'PoweredOn') {
+        setIsMockMode(false);
+        console.log('[TSPL] BLE manager ready – real mode');
+        subscription.remove();
+      }
+    }, true);
+
+    return () => {
+      subscription.remove();
+      if (mgr) mgr.destroy();
+    };
   }, []);
 
   // ── Scan ─────────────────────────────────────────────────────────────
@@ -261,7 +274,6 @@ export default function useTSPLPrinter() {
         return;
       }
     } else if (Platform.OS === 'android') {
-      // Android < 12: only need location permission for BLE scan
       try {
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
@@ -278,52 +290,41 @@ export default function useTSPLPrinter() {
       }
     }
 
-    const BleManager = bleManagerRef.current;
-
-    // Check if Bluetooth is enabled
-    try {
-      await BleManager.enableBluetooth();
-    } catch (_) {
-      setError('Please turn on Bluetooth');
-      setIsScanning(false);
-      return;
-    }
-
-    const { NativeEventEmitter } = require('react-native');
-    const emitter = new NativeEventEmitter(NativeModules.BleManager);
+    const mgr = managerRef.current;
     const found = [];
 
-    if (eventListenerRef.current) eventListenerRef.current.remove();
-    eventListenerRef.current = emitter.addListener(
-      'BleManagerDiscoverPeripheral',
-      (peripheral) => {
-        const name = peripheral.name || peripheral.localName || null;
-        const id = peripheral.id;
-        // Update existing device if we now have a name
-        const existingIdx = found.findIndex(d => d.id === id);
-        if (existingIdx >= 0) {
-          if (name && !found[existingIdx].name) {
-            found[existingIdx].name = name;
-            found[existingIdx].rssi = peripheral.rssi;
-            setDevices([...found]);
-          }
+    mgr.startDeviceScan(null, null, (scanError, device) => {
+      if (scanError) {
+        console.log('[TSPL] Scan error:', scanError.message);
+        return;
+      }
+      const name = device.name || device.localName || null;
+      const id = device.id;
+
+      // Update existing device if we now have a name
+      const existingIdx = found.findIndex(d => d.id === id);
+      if (existingIdx >= 0) {
+        if (name && !found[existingIdx].name?.startsWith('Unknown')) {
           return;
         }
-        const dev = { id, name: name || `Unknown (${id.slice(-5)})`, rssi: peripheral.rssi };
-        found.push(dev);
-        setDevices([...found]);
+        if (name) {
+          found[existingIdx].name = name;
+          found[existingIdx].rssi = device.rssi;
+          setDevices([...found]);
+        }
+        return;
       }
-    );
+      const dev = { id, name: name || `Unknown (${id.slice(-5)})`, rssi: device.rssi };
+      found.push(dev);
+      setDevices([...found]);
+    });
 
-    try {
-      await BleManager.scan([], 8, true);
-      await new Promise(r => setTimeout(r, 9000));
-    } catch (err) {
-      setError('Scan failed: ' + err.message);
-    } finally {
+    // Stop scanning after 8 seconds
+    setTimeout(() => {
+      mgr.stopDeviceScan();
       setIsScanning(false);
-      if (eventListenerRef.current) { eventListenerRef.current.remove(); eventListenerRef.current = null; }
-    }
+      console.log(`[TSPL] Scan complete – found ${found.length} devices`);
+    }, 8000);
   }, [isMockMode]);
 
   // ── Connect ──────────────────────────────────────────────────────────
@@ -340,27 +341,32 @@ export default function useTSPLPrinter() {
       return;
     }
 
-    const BleManager = bleManagerRef.current;
+    const mgr = managerRef.current;
     try {
-      await BleManager.connect(deviceId);
-      const info = await BleManager.retrieveServices(deviceId);
+      const device = await mgr.connectToDevice(deviceId);
+      await device.discoverAllServicesAndCharacteristics();
 
       // Find first writable characteristic
       let charInfo = null;
-      for (const svc of (info.services || [])) {
-        const chars = (info.characteristics || []).filter(c => c.service === (svc.uuid || svc));
+      const services = await device.services();
+      for (const svc of services) {
+        const chars = await svc.characteristics();
         for (const ch of chars) {
-          const props = ch.properties || {};
-          if (props.Write || props.WriteWithoutResponse) {
-            charInfo = { serviceUUID: ch.service, characteristicUUID: ch.characteristic };
+          if (ch.isWritableWithoutResponse || ch.isWritableWithResponse) {
+            charInfo = {
+              serviceUUID: svc.uuid,
+              characteristicUUID: ch.uuid,
+              withResponse: !!ch.isWritableWithResponse && !ch.isWritableWithoutResponse,
+            };
             break;
           }
         }
         if (charInfo) break;
       }
       connectedCharRef.current = charInfo;
+      connectedDeviceRef.current = device;
 
-      const dev = devices.find(d => d.id === deviceId) || { id: deviceId, name: info.name || 'Printer' };
+      const dev = devices.find(d => d.id === deviceId) || { id: deviceId, name: device.name || device.localName || 'Printer' };
       setConnectedDevice(dev);
       console.log('[TSPL] Connected to', dev.name, charInfo ? '(char found)' : '(no writable char)');
     } catch (err) {
@@ -372,15 +378,16 @@ export default function useTSPLPrinter() {
 
   // ── Disconnect ───────────────────────────────────────────────────────
   const disconnect = useCallback(async () => {
-    if (connectedDevice && !isMockMode && bleManagerRef.current) {
-      try { await bleManagerRef.current.disconnect(connectedDevice.id); } catch (_) {}
+    if (connectedDevice && !isMockMode && managerRef.current) {
+      try { await managerRef.current.cancelDeviceConnection(connectedDevice.id); } catch (_) {}
     }
-    setConnectedDevice(null);
+    connectedDeviceRef.current = null;
     connectedCharRef.current = null;
+    setConnectedDevice(null);
     console.log('[TSPL] Disconnected');
   }, [connectedDevice, isMockMode]);
 
-  // ── Send bytes in chunks ─────────────────────────────────────────────
+  // ── Send bytes in chunks (base64 for ble-plx) ───────────────────────
   const sendViaBLE = useCallback(async (commandBytes) => {
     if (isMockMode) {
       console.log(`[TSPL Mock] Sending ${commandBytes.length} bytes to printer...`);
@@ -389,19 +396,29 @@ export default function useTSPLPrinter() {
       return;
     }
 
-    const BleManager = bleManagerRef.current;
+    const device = connectedDeviceRef.current;
     const char = connectedCharRef.current;
-    if (!BleManager || !char || !connectedDevice) throw new Error('Printer not connected');
+    if (!device || !char) throw new Error('Printer not connected');
 
     const total = commandBytes.length;
     for (let offset = 0; offset < total; offset += BLE_CHUNK_SIZE) {
       const end = Math.min(offset + BLE_CHUNK_SIZE, total);
-      const chunk = Array.from(commandBytes.slice(offset, end));
-      await BleManager.write(connectedDevice.id, char.serviceUUID, char.characteristicUUID, chunk);
+      const chunk = commandBytes.slice(offset, end);
+      const base64Chunk = uint8ArrayToBase64(chunk);
+
+      if (char.withResponse) {
+        await device.writeCharacteristicWithResponseForService(
+          char.serviceUUID, char.characteristicUUID, base64Chunk
+        );
+      } else {
+        await device.writeCharacteristicWithoutResponseForService(
+          char.serviceUUID, char.characteristicUUID, base64Chunk
+        );
+      }
       setPrintProgress(Math.round((end / total) * 100));
       await new Promise(r => setTimeout(r, 20));
     }
-  }, [isMockMode, connectedDevice]);
+  }, [isMockMode]);
 
   // ── Print orchestration ──────────────────────────────────────────────
   const printReceipt = useCallback(async (viewShotRef, labelSizeKey = '50x80') => {

@@ -6917,10 +6917,10 @@ react-native-animated-loader@^1.0.0:
   dependencies:
     prop-types "^15.6.2"
 
-react-native-ble-manager@11.5.3:
-  version "11.5.3"
-  resolved "https://registry.npmjs.org/react-native-ble-manager/-/react-native-ble-manager-11.5.3.tgz"
-  integrity sha512-Lbyh9VqE3TcXYEjH6nwAq7LQ4qcrfx3dH0q/W7wKInnneaPdgw23TxiKfLbsyJdNpnRgLWXTIk481PFYGyG+OA==
+react-native-ble-plx@^3.5.1:
+  version "3.5.1"
+  resolved "https://registry.npmjs.org/react-native-ble-plx/-/react-native-ble-plx-3.5.1.tgz"
+  integrity sha512-SxksmrUt9jG6DOarrrdkb5c/HBLSfZOKauo/9VQSSi3WJA4bmF78GkrtXrgSoGNk0m1ksacFTjB5DuL39xZq/g==
 
 react-native-calendars@^1.1306.0:
   version "1.1313.0"
