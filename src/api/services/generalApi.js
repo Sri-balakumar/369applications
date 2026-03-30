@@ -10576,7 +10576,7 @@ function _extractName(line, reportType) {
 // PARTNER LEDGER DYNAMIC
 // =============================================
 
-export const generatePartnerLedgerOdoo = async ({ partnerType = 'customer_supplier', period, dateFrom, dateTo, targetMove = 'posted' } = {}) => {
+export const generatePartnerLedgerOdoo = async ({ partnerType = 'customer_supplier', period, dateFrom, dateTo, targetMove = 'posted', partnerIds } = {}) => {
   try {
     const { headers, baseUrl } = await authenticateOdoo();
 
@@ -10588,6 +10588,9 @@ export const generatePartnerLedgerOdoo = async ({ partnerType = 'customer_suppli
       with_currency: true,
       company_scope: 'all_companies',
     };
+    if (partnerIds && partnerIds.length > 0) {
+      wizardVals.partner_ids = [[6, 0, partnerIds]];
+    }
     if (period && period !== 'custom') wizardVals.period = period;
     if (period === 'custom' && dateFrom) wizardVals.date_from = dateFrom;
     if (period === 'custom' && dateTo) wizardVals.date_to = dateTo;

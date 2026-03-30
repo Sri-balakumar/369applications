@@ -552,7 +552,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
         <View style={{ marginTop: 20 }}>
           <Button
             backgroundColor="#1E88E5"
-            title={printing ? "Printing..." : "Print Invoice"}
+            title={printing ? "Loading..." : "Print Preview"}
             onPress={handlePrintInvoice}
             loading={printing}
           />

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, FlatList, Platform, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, TouchableOpacity, FlatList, Platform, ActivityIndicator, TextInput } from 'react-native';
 import { SafeAreaView, RoundedScrollContainer } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { LoadingButton } from '@components/common/Button';
@@ -8,7 +8,7 @@ import { showToastMessage } from '@components/Toast';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { MaterialIcons } from '@expo/vector-icons';
-import { generatePartnerLedgerOdoo, fetchPartnerLedgerLinesOdoo } from '@api/services/generalApi';
+import { generatePartnerLedgerOdoo, fetchPartnerLedgerLinesOdoo, fetchCustomersOdoo } from '@api/services/generalApi';
 import { useCurrencyStore } from '@stores/currency';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { format } from 'date-fns';
@@ -53,6 +53,40 @@ const PartnerLedgerScreen = ({ navigation }) => {
   const [loadingLines, setLoadingLines] = useState(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
+  // Partners filter state
+  const [selectedPartners, setSelectedPartners] = useState([]);
+  const [showPartnerDropdown, setShowPartnerDropdown] = useState(false);
+  const [partnerSearchText, setPartnerSearchText] = useState('');
+  const [availablePartners, setAvailablePartners] = useState([]);
+  const [fetchingPartners, setFetchingPartners] = useState(false);
+
+  useEffect(() => {
+    if (!showPartnerDropdown) return;
+    const timeout = setTimeout(() => loadPartners(partnerSearchText), 300);
+    return () => clearTimeout(timeout);
+  }, [showPartnerDropdown, partnerSearchText]);
+
+  const loadPartners = async (search = '') => {
+    setFetchingPartners(true);
+    try {
+      const result = await fetchCustomersOdoo({ searchText: search, limit: 30 });
+      setAvailablePartners(result || []);
+    } catch (err) {
+      console.error('[PartnerLedger] fetchCustomersOdoo error:', err?.message);
+      setAvailablePartners([]);
+    } finally {
+      setFetchingPartners(false);
+    }
+  };
+
+  const togglePartner = (partner) => {
+    setSelectedPartners(prev => {
+      const exists = prev.find(p => p.id === partner.id);
+      if (exists) return prev.filter(p => p.id !== partner.id);
+      return [...prev, { id: partner.id, name: partner.name || partner.customer_name || '' }];
+    });
+  };
+
   const handleGenerate = async () => {
     setLoading(true);
     setReportData(null);
@@ -64,6 +98,9 @@ const PartnerLedgerScreen = ({ navigation }) => {
       if (period === 'custom') {
         params.dateFrom = format(dateFrom, 'yyyy-MM-dd');
         params.dateTo = format(dateTo, 'yyyy-MM-dd');
+      }
+      if (selectedPartners.length > 0) {
+        params.partnerIds = selectedPartners.map(p => p.id);
       }
       const result = await generatePartnerLedgerOdoo(params);
       setReportData(result);
@@ -309,6 +346,70 @@ const PartnerLedgerScreen = ({ navigation }) => {
           ))}
         </View>
 
+        {/* Partners Filter */}
+        <Text style={s.sectionTitle}>Partners</Text>
+        <TouchableOpacity
+          style={s.partnerDropdownTrigger}
+          onPress={() => setShowPartnerDropdown(!showPartnerDropdown)}
+        >
+          <MaterialIcons name="people" size={18} color="#666" />
+          <Text style={selectedPartners.length > 0 ? s.partnerDropdownText : s.partnerDropdownPlaceholder} numberOfLines={1}>
+            {selectedPartners.length > 0
+              ? selectedPartners.map(p => p.name).join(', ')
+              : 'All Partners'}
+          </Text>
+          <MaterialIcons name={showPartnerDropdown ? 'arrow-drop-up' : 'arrow-drop-down'} size={24} color="#666" />
+        </TouchableOpacity>
+        {selectedPartners.length > 0 && (
+          <TouchableOpacity style={s.clearBtn} onPress={() => setSelectedPartners([])}>
+            <MaterialIcons name="clear" size={14} color="#999" />
+            <Text style={s.clearBtnText}>Clear selection</Text>
+          </TouchableOpacity>
+        )}
+        {showPartnerDropdown && (
+          <View style={s.partnerDropdownContainer}>
+            <View style={s.partnerSearchRow}>
+              <MaterialIcons name="search" size={18} color="#999" />
+              <TextInput
+                style={s.partnerSearchInput}
+                placeholder="Search partners..."
+                placeholderTextColor="#999"
+                value={partnerSearchText}
+                onChangeText={setPartnerSearchText}
+                autoCapitalize="none"
+              />
+            </View>
+            {fetchingPartners ? (
+              <ActivityIndicator size="small" color={COLORS.primaryThemeColor} style={{ padding: 12 }} />
+            ) : availablePartners.length === 0 ? (
+              <Text style={s.noPartnerResults}>No partners found</Text>
+            ) : (
+              <FlatList
+                data={availablePartners}
+                keyExtractor={(item) => String(item.id)}
+                style={{ maxHeight: 200 }}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="always"
+                renderItem={({ item }) => {
+                  const isSelected = selectedPartners.some(p => p.id === item.id);
+                  return (
+                    <TouchableOpacity style={s.partnerDropdownItem} onPress={() => togglePartner(item)}>
+                      <MaterialIcons
+                        name={isSelected ? 'check-box' : 'check-box-outline-blank'}
+                        size={20}
+                        color={isSelected ? COLORS.primaryThemeColor : '#ccc'}
+                      />
+                      <Text style={[s.partnerDropdownItemText, isSelected && { color: COLORS.primaryThemeColor }]}>
+                        {item.name || item.customer_name || '-'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            )}
+          </View>
+        )}
+
         {/* Generate Button */}
         <LoadingButton title="Generate Report" onPress={handleGenerate} loading={loading} marginTop={14} />
 
@@ -541,6 +642,91 @@ const s = StyleSheet.create({
     fontSize: 11,
     fontFamily: FONT_FAMILY.urbanistMedium,
     color: '#333',
+  },
+  // Partners dropdown
+  partnerDropdownTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    gap: 8,
+  },
+  partnerDropdownText: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    color: '#333',
+  },
+  partnerDropdownPlaceholder: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#999',
+  },
+  clearBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 6,
+    alignSelf: 'flex-start',
+  },
+  clearBtnText: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#999',
+  },
+  partnerDropdownContainer: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    marginTop: 6,
+    overflow: 'hidden',
+    ...Platform.select({
+      android: { elevation: 3 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+    }),
+  },
+  partnerSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  partnerSearchInput: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#333',
+    paddingVertical: 2,
+    marginLeft: 6,
+  },
+  partnerDropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+    gap: 10,
+  },
+  partnerDropdownItemText: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#333',
+    flex: 1,
+  },
+  noPartnerResults: {
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#999',
+    textAlign: 'center',
+    padding: 12,
   },
 });
 

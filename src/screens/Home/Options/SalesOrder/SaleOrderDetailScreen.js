@@ -462,6 +462,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const isConfirmed = state === 'sale' || state === 'done';
   const hasInvoice = !!createdInvoiceId || invoiceStatus === 'invoiced' || invoiceCount > 0;
   const canInvoice = isConfirmed && !hasInvoice;
+  const isEditable = false; // Order lines are read-only after place order; editing is only in CustomerDetails before placing
   console.log('[SaleOrderDetail] state:', state, 'isDraft:', isDraft, 'isConfirmed:', isConfirmed, 'hasInvoice:', hasInvoice, 'invoiceStatus:', invoiceStatus, 'invoiceCount:', invoiceCount, 'createdInvoiceId:', createdInvoiceId);
 
   return (
@@ -524,7 +525,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
         <View style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Order Lines</Text>
-            {isDraft && (
+            {isEditable && (
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TouchableOpacity style={styles.addProductBtn} onPress={handleBarcodeScan}>
                   <Icon name="barcode-scan" size={14} color="#fff" />
@@ -560,7 +561,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
               const discount = line.discount || 0;
               const isDeleted = deletedLineIds.includes(line.id);
 
-              if (isDraft) {
+              if (isEditable) {
                 return (
                   <View key={line.id || idx} style={styles.editLineItem}>
                     <View style={styles.editLineHeader}>
