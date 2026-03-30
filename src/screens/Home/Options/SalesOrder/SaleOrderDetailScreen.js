@@ -262,6 +262,19 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   };
 
   const handleConfirmOrder = async () => {
+    // Check for below-cost lines before confirming
+    try {
+      const linesToCheck = getOrderLinesToCheck();
+      const result = await checkBelowCostLines(linesToCheck);
+      if (result.hasBelowCost) {
+        setBelowCostLines(result.belowCostLines);
+        setBelowCostAction('confirm');
+        setShowBelowCostModal(true);
+        return;
+      }
+    } catch (err) {
+      console.log('[SaleOrderDetail] Below cost check failed, proceeding:', err?.message);
+    }
     await executeConfirmOrder();
   };
 
@@ -462,7 +475,6 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const isConfirmed = state === 'sale' || state === 'done';
   const hasInvoice = !!createdInvoiceId || invoiceStatus === 'invoiced' || invoiceCount > 0;
   const canInvoice = isConfirmed && !hasInvoice;
-  const isEditable = false; // Order lines are read-only after place order; editing is only in CustomerDetails before placing
   console.log('[SaleOrderDetail] state:', state, 'isDraft:', isDraft, 'isConfirmed:', isConfirmed, 'hasInvoice:', hasInvoice, 'invoiceStatus:', invoiceStatus, 'invoiceCount:', invoiceCount, 'createdInvoiceId:', createdInvoiceId);
 
   return (
@@ -525,7 +537,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
         <View style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Order Lines</Text>
-            {isEditable && (
+            {isDraft && (
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TouchableOpacity style={styles.addProductBtn} onPress={handleBarcodeScan}>
                   <Icon name="barcode-scan" size={14} color="#fff" />
@@ -561,7 +573,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
               const discount = line.discount || 0;
               const isDeleted = deletedLineIds.includes(line.id);
 
-              if (isEditable) {
+              if (isDraft) {
                 return (
                   <View key={line.id || idx} style={styles.editLineItem}>
                     <View style={styles.editLineHeader}>

@@ -223,7 +223,7 @@ const CustomerDetails = ({ navigation, route }) => {
       const custId = details?.id || details?._id;
       if (custId) await clearCartFromStorage(custId);
       Alert.alert('Order Created', `Sale Order created successfully.\nOrder ID: ${odooOrderId}`, [
-        { text: 'OK', onPress: () => navigation.goBack() },
+        { text: 'OK', onPress: () => navigation.navigate('SaleOrderListScreen') },
       ]);
     } catch (err) {
       const errMsg = err?.message || 'Failed to create sale order';
@@ -246,25 +246,7 @@ const CustomerDetails = ({ navigation, route }) => {
       Toast.show({ type: 'error', text1: 'Missing Data', text2: 'Customer ID is required', position: 'bottom' });
       return;
     }
-    // Check for below-cost lines
-    const linesToCheck = products.map(p => ({
-      product_id: p.id, product_name: p.name || p.display_name || '', price_unit: parseFloat(p.price) || 0, qty: p.quantity || 1,
-    }));
-    console.log('[PlaceOrder] Checking below cost for lines:', JSON.stringify(linesToCheck));
-    try {
-      const result = await checkBelowCostLines(linesToCheck);
-      console.log('[PlaceOrder] Below cost result:', JSON.stringify(result));
-      if (result.hasBelowCost) {
-        console.log('[PlaceOrder] BELOW COST DETECTED - showing modal');
-        setBelowCostLines(result.belowCostLines);
-        setBelowCostAction('place');
-        setShowBelowCostModal(true);
-        return;
-      }
-      console.log('[PlaceOrder] No below cost lines, proceeding');
-    } catch (err) {
-      console.error('[PlaceOrder] Below cost check ERROR:', err?.message, err);
-    }
+    // No below-cost check here — it will be checked on Confirm Order in SaleOrderDetailScreen
     await executePlaceOrder();
   };
 
