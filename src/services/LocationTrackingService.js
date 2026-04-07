@@ -48,7 +48,7 @@ export const saveUserLocationToOdoo = async (userId, locationData) => {
     // First, check if user already has a location record
     console.log('[LocationTracking] Searching for existing record...');
     const searchResponse = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -84,7 +84,7 @@ export const saveUserLocationToOdoo = async (userId, locationData) => {
       // Update existing record
       console.log('[LocationTracking] Updating existing record ID:', existingRecords[0].id);
       const updateResponse = await axios.post(
-        `${ODOO_BASE_URL}/web/dataset/call_kw`,
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
@@ -102,7 +102,7 @@ export const saveUserLocationToOdoo = async (userId, locationData) => {
       // Create new record
       console.log('[LocationTracking] Creating NEW record...');
       const createResponse = await axios.post(
-        `${ODOO_BASE_URL}/web/dataset/call_kw`,
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
@@ -156,7 +156,7 @@ export const fetchUserLocationFromOdoo = async (userId) => {
     console.log('[LocationTracking] Request body:', JSON.stringify(requestBody, null, 2));
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       requestBody,
       { headers }
     );
@@ -195,7 +195,7 @@ export const fetchAllUsersLocationsFromOdoo = async () => {
     const headers = await getOdooAuthHeaders();
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',

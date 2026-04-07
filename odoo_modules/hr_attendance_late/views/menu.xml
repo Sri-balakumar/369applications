@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Parent menu under Attendance -->
+    <menuitem id="menu_late_tracking_root"
+              name="Late Tracking"
+              parent="hr_attendance.menu_hr_attendance_root"
+              sequence="30"/>
+
+    <!-- Late Records -->
+    <menuitem id="menu_late_attendance_records"
+              name="Late Records"
+              parent="menu_late_tracking_root"
+              action="action_late_attendance"
+              sequence="10"/>
+
+    <!-- Monthly Summary -->
+    <menuitem id="menu_late_summary"
+              name="Monthly Summary"
+              parent="menu_late_tracking_root"
+              action="action_late_summary_wizard"
+              sequence="20"/>
+
+    <!-- Late Waiver Requests (Manager) -->
+    <menuitem id="menu_late_waiver_requests"
+              name="Waiver Requests"
+              parent="menu_late_tracking_root"
+              action="action_late_waiver_request"
+              sequence="25"
+              groups="hr.group_hr_manager,base.group_system"/>
+
+    <!-- My Waiver Requests (Employee) -->
+    <menuitem id="menu_my_late_waiver_requests"
+              name="My Waiver Requests"
+              parent="menu_late_tracking_root"
+              action="action_my_late_waiver_requests"
+              sequence="26"/>
+
+    <!-- Configuration submenu -->
+    <menuitem id="menu_late_config_root"
+              name="Configuration"
+              parent="menu_late_tracking_root"
+              sequence="50"/>
+
+    <menuitem id="menu_late_config_settings"
+              name="Office Hours &amp; Working Days"
+              parent="menu_late_config_root"
+              action="action_late_config"
+              sequence="10"/>
+
+    <menuitem id="menu_late_deduction_slabs"
+              name="Deduction Slabs"
+              parent="menu_late_config_root"
+              action="action_late_deduction_slab"
+              sequence="20"/>
+
+    <menuitem id="menu_public_holidays"
+              name="Public Holidays"
+              parent="menu_late_config_root"
+              action="action_public_holiday"
+              sequence="30"/>
+
+</odoo>

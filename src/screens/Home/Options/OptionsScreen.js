@@ -68,6 +68,17 @@ const OptionsScreen = ({ navigation }) => {
     { title: 'WhatsApp', image: require('@assets/icons/common/watsapp.png'), onPress: () => navigation.navigate('WhatsAppScreen') },
     { title: 'Contacts', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => setShowContacts(true) },
     { title: 'Cost Protection', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('SaleCostApprovalLogsScreen') },
+    { title: 'User Attendance', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('UserAttendanceScreen') },
+    { title: 'Product Enquiry', image: require('@assets/images/Home/options/product_enquiry.png'), onPress: () => navigation.navigate('PriceEnquiryScreen') },
+    { title: 'Transaction Auditing', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('AuditScreen') },
+    { title: 'CRM', image: require('@assets/images/Home/options/crm.png'), onPress: () => navigation.navigate('CRM') },
+    { title: 'Task Manager', image: require('@assets/images/Home/options/tasK_manager_1.png'), onPress: () => navigation.navigate('TaskManagerScreen') },
+    { title: 'Market Study', image: require('@assets/images/Home/options/market_study_1.png'), onPress: () => navigation.navigate('MarketStudyScreen') },
+    { title: 'Spare Management', image: require('@assets/images/Home/options/inventory_management.png'), onPress: () => navigation.navigate('SpareManagementScreen') },
+    { title: 'Mobile Repair', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('MobileRepairDashboard') },
+    { title: 'Inventory Management', image: require('@assets/images/Home/options/inventory_management_1.png'), onPress: () => navigation.navigate('InventoryScreen') },
+    { title: 'Box Inspection', image: require('@assets/images/Home/options/box_inspection.png'), onPress: () => setIsConfirmationModalVisible(true) },
+    { title: 'Late Records', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('LateRecordsScreen') },
   ];
 
   // Add Staff Tracking option for admin users, My Location for non-admin users

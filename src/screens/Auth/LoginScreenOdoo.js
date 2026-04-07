@@ -133,6 +133,20 @@ const LoginScreenOdoo = () => {
     }
   }, []);
 
+  // Pre-fill the Server URL from AsyncStorage on first mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem('odoo_base_url');
+        if (saved) {
+          setInputs((prev) => (prev.baseUrl ? prev : { ...prev, baseUrl: saved }));
+        }
+      } catch (e) {
+        console.log('Failed to read saved odoo_base_url:', e?.message);
+      }
+    })();
+  }, []);
+
   // Debounce URL changes to fetch databases
   useEffect(() => {
     const trimmedUrl = inputs.baseUrl?.trim();
@@ -223,8 +237,13 @@ const LoginScreenOdoo = () => {
       handleError("Please input password", "password");
       isValid = false;
     }
-    // Require DB selection when using Odoo URL
+    // Require Server URL
     const baseUrlTrimmed = inputs.baseUrl?.trim();
+    if (!baseUrlTrimmed) {
+      handleError("Please enter the server URL", "baseUrl");
+      isValid = false;
+    }
+    // Require DB selection when using Odoo URL
     if (baseUrlTrimmed && isOdooUrl(baseUrlTrimmed) && !inputs.db?.trim()) {
       handleError("Please select a database", "db");
       isValid = false;
@@ -394,27 +413,40 @@ const LoginScreenOdoo = () => {
 
             {/* Server URL */}
             <TextInput
-              value={'*'.repeat(inputs.baseUrl?.length || 0)}
+              value={inputs.baseUrl}
+              onChangeText={(text) => handleOnchange(text, "baseUrl")}
+              onFocus={() => handleError(null, "baseUrl")}
               iconName="server-network"
               label="Server URL"
-              placeholder=""
+              placeholder="https://your-odoo-server.com"
               error={errors.baseUrl}
               column={true}
               login={true}
-              editable={false}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
             />
 
             {/* Database */}
-            <TextInput
-              value={inputs.db}
-              iconName="database"
-              label="Database"
-              placeholder="Database"
-              error={errors.db}
-              column={true}
-              login={true}
-              editable={false}
-            />
+            <TouchableOpacity
+              onPress={() => {
+                if (dbList.length > 0) setDbDropdownVisible(true);
+              }}
+              activeOpacity={0.7}
+            >
+              <View pointerEvents="none">
+                <TextInput
+                  value={dbLoading ? "Loading databases..." : (inputs.db || "")}
+                  iconName="database"
+                  label="Database"
+                  placeholder={dbError || "Select a database"}
+                  error={errors.db || dbError}
+                  column={true}
+                  login={true}
+                  editable={false}
+                />
+              </View>
+            </TouchableOpacity>
 
             {/* DB Dropdown Modal */}
             {dbDropdownVisible && (

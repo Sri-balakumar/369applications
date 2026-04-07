@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Late Waiver Request - List View -->
+    <record id="view_late_waiver_request_list" model="ir.ui.view">
+        <field name="name">hr.late.waiver.request.list</field>
+        <field name="model">hr.late.waiver.request</field>
+        <field name="arch" type="xml">
+            <list string="Late Waiver Requests"
+                  decoration-success="state == 'approved'"
+                  decoration-warning="state == 'pending'"
+                  decoration-danger="state == 'rejected'"
+                  decoration-muted="state == 'draft'">
+                <field name="employee_id"/>
+                <field name="late_date"/>
+                <field name="check_in_time" string="Check In"/>
+                <field name="late_minutes_display" string="Late Time"/>
+                <field name="original_deduction" string="Deduction"/>
+                <field name="original_late_reason" string="Late Reason"/>
+                <field name="reason" string="Waiver Reason"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'approved'"
+                       decoration-warning="state == 'pending'"
+                       decoration-danger="state == 'rejected'"
+                       decoration-muted="state == 'draft'"/>
+                <field name="approved_by"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Late Waiver Request - Form View -->
+    <record id="view_late_waiver_request_form" model="ir.ui.view">
+        <field name="name">hr.late.waiver.request.form</field>
+        <field name="model">hr.late.waiver.request</field>
+        <field name="arch" type="xml">
+            <form string="Late Waiver Request">
+                <header>
+                    <!-- Employee Actions -->
+                    <button name="action_submit" type="object"
+                            string="Submit for Approval"
+                            class="btn-primary"
+                            invisible="state != 'draft'"/>
+
+                    <button name="action_reset_to_draft" type="object"
+                            string="Reset to Draft"
+                            class="btn-secondary"
+                            invisible="state != 'rejected'"/>
+
+                    <!-- Manager Actions -->
+                    <button name="action_approve" type="object"
+                            string="Approve Waiver"
+                            class="btn-success"
+                            invisible="state != 'pending'"
+                            groups="hr.group_hr_manager,base.group_system"/>
+
+                    <button name="action_reject" type="object"
+                            string="Reject"
+                            class="btn-danger"
+                            invisible="state != 'pending'"
+                            groups="hr.group_hr_manager,base.group_system"/>
+
+                    <!-- Status Bar -->
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="draft,pending,approved"/>
+                </header>
+
+                <sheet>
+                    <group>
+                        <group string="Employee &amp; Late Info">
+                            <field name="employee_id"
+                                   readonly="state != 'draft'"/>
+                            <field name="attendance_id"
+                                   readonly="state != 'draft'"
+                                   options="{'no_create': True}"/>
+                            <field name="late_date"/>
+                            <field name="check_in_time" string="Check In Time"/>
+                            <field name="late_minutes_display" string="Late Duration"/>
+                            <field name="original_deduction" string="Deduction Amount"/>
+                            <field name="original_late_reason" string="Late Reason (Employee)"/>
+                        </group>
+                        <group string="Approval Info">
+                            <field name="approved_by" readonly="1"/>
+                            <field name="approval_date" readonly="1"/>
+                            <field name="rejection_reason" readonly="1"
+                                   invisible="state != 'rejected'"/>
+                        </group>
+                    </group>
+
+                    <group string="Reason for Waiver">
+                        <field name="reason" nolabel="1"
+                               readonly="state != 'draft'"
+                               placeholder="Explain why the late deduction should be waived (e.g., went to buy office supplies, client meeting ran late, etc.)"/>
+                    </group>
+
+                    <div class="text-muted mt-2" invisible="state != 'draft'">
+                        <p><b>How it works:</b></p>
+                        <ul>
+                            <li>Select your late attendance record and provide the reason.</li>
+                            <li>Click "Submit for Approval" to send to your manager.</li>
+                            <li>If approved, the salary deduction for that late day will be waived (set to zero).</li>
+                            <li>The late record will still show, but marked as "Waived" with no deduction.</li>
+                        </ul>
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Late Waiver Request - Search View -->
+    <record id="view_late_waiver_request_search" model="ir.ui.view">
+        <field name="name">hr.late.waiver.request.search</field>
+        <field name="model">hr.late.waiver.request</field>
+        <field name="arch" type="xml">
+            <search string="Late Waiver Requests">
+                <field name="employee_id"/>
+                <field name="late_date"/>
+                <field name="reason"/>
+                <separator/>
+                <filter string="Pending" name="pending" domain="[('state', '=', 'pending')]"/>
+                <filter string="Approved" name="approved" domain="[('state', '=', 'approved')]"/>
+                <filter string="Rejected" name="rejected" domain="[('state', '=', 'rejected')]"/>
+                <separator/>
+                <filter string="My Requests" name="my_requests"
+                        domain="[('employee_id.user_id', '=', uid)]"/>
+                <separator/>
+                <filter string="Date" name="date_filter" date="late_date"/>
+                <group>
+                    <filter string="Employee" name="group_employee"
+                            context="{'group_by': 'employee_id'}"/>
+                    <filter string="Status" name="group_state"
+                            context="{'group_by': 'state'}"/>
+                    <filter string="Month" name="group_month"
+                            context="{'group_by': 'late_date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action: All Waiver Requests (Manager) -->
+    <record id="action_late_waiver_request" model="ir.actions.act_window">
+        <field name="name">Late Waiver Requests</field>
+        <field name="res_model">hr.late.waiver.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_late_waiver_request_search"/>
+        <field name="context">{'search_default_pending': 1}</field>
+    </record>
+
+    <!-- Action: My Waiver Requests (Employee) -->
+    <record id="action_my_late_waiver_requests" model="ir.actions.act_window">
+        <field name="name">My Waiver Requests</field>
+        <field name="res_model">hr.late.waiver.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_late_waiver_request_search"/>
+        <field name="domain">[('employee_id.user_id', '=', uid)]</field>
+    </record>
+
+</odoo>

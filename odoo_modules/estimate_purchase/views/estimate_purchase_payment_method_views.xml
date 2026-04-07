@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="estimate_purchase_payment_method_form_view" model="ir.ui.view">
+        <field name="name">estimate.purchase.payment.method.form</field>
+        <field name="model">estimate.purchase.payment.method</field>
+        <field name="arch" type="xml">
+            <form string="Payment Method">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name" string="Payment Method"/>
+                        <h1><field name="name" placeholder="e.g. Cash, Bank Transfer, Vendor Credit"/></h1>
+                    </div>
+                    <group>
+                        <group string="Payment Configuration">
+                            <field name="is_vendor_account"/>
+                            <field name="journal_id" invisible="is_vendor_account" required="not is_vendor_account"/>
+                            <field name="journal_type" invisible="1"/>
+                            <field name="is_default"/>
+                        </group>
+                        <group string="Settings">
+                            <field name="sequence"/>
+                            <field name="active"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <field name="notes" placeholder="Internal notes..."/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="estimate_purchase_payment_method_list_view" model="ir.ui.view">
+        <field name="name">estimate.purchase.payment.method.list</field>
+        <field name="model">estimate.purchase.payment.method</field>
+        <field name="arch" type="xml">
+            <list string="Payment Methods">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="is_vendor_account" string="Credit Purchase"/>
+                <field name="journal_id"/>
+                <field name="is_default"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="estimate_purchase_payment_method_action" model="ir.actions.act_window">
+        <field name="name">Payment Methods</field>
+        <field name="res_model">estimate.purchase.payment.method</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('company_id', '=', allowed_company_ids[0])]</field>
+        <field name="context">{'default_company_id': allowed_company_ids[0]}</field>
+    </record>
+</odoo>

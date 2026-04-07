@@ -95,7 +95,7 @@ export const getWorkplaceLocation = async (userId) => {
 
     // First try to get employee's work location
     const employeeResponse = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -120,7 +120,7 @@ export const getWorkplaceLocation = async (userId) => {
     // Try to get work location coordinates
     if (employee.work_location_id) {
       const workLocationResponse = await axios.post(
-        `${ODOO_BASE_URL}/web/dataset/call_kw`,
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
@@ -141,7 +141,7 @@ export const getWorkplaceLocation = async (userId) => {
       if (workLocation?.address_id) {
         // Get partner address with coordinates
         const partnerResponse = await axios.post(
-          `${ODOO_BASE_URL}/web/dataset/call_kw`,
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
           {
             jsonrpc: '2.0',
             method: 'call',
@@ -173,7 +173,7 @@ export const getWorkplaceLocation = async (userId) => {
     // Fallback: Try to get company address coordinates
     if (employee.company_id) {
       const companyResponse = await axios.post(
-        `${ODOO_BASE_URL}/web/dataset/call_kw`,
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
@@ -193,7 +193,7 @@ export const getWorkplaceLocation = async (userId) => {
       const company = companyResponse.data?.result?.[0];
       if (company?.partner_id) {
         const partnerResponse = await axios.post(
-          `${ODOO_BASE_URL}/web/dataset/call_kw`,
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
           {
             jsonrpc: '2.0',
             method: 'call',
@@ -303,7 +303,7 @@ export const getEmployeeIdFromUserId = async (userId) => {
     const headers = await getOdooAuthHeaders();
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -344,7 +344,7 @@ export const debugListAllEmployees = async () => {
     console.log('[Attendance] Auth headers:', JSON.stringify(headers, null, 2));
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -393,7 +393,7 @@ export const getEmployeeByDeviceId = async (deviceId) => {
 
     // Fetch all employees that have registered devices
     const empResponse = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -424,7 +424,7 @@ export const getEmployeeByDeviceId = async (deviceId) => {
 
     // Fetch device records to find matching device_id
     const deviceResponse = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -485,7 +485,7 @@ export const verifyEmployeePin = async (userId, enteredBadgeId) => {
 
     // First try searching by 'pin' field
     let response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -508,7 +508,7 @@ export const verifyEmployeePin = async (userId, enteredBadgeId) => {
     if (employees.length === 0) {
       console.log('[Attendance] Not found by pin field, trying barcode (Badge ID) field...');
       response = await axios.post(
-        `${ODOO_BASE_URL}/web/dataset/call_kw`,
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
@@ -576,7 +576,7 @@ export const checkInToOdoo = async (userId) => {
     // First check for any open attendance (no check_out) for this employee
     // Odoo has a constraint preventing overlapping attendance records
     const openCheckResponse = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -604,7 +604,7 @@ export const checkInToOdoo = async (userId) => {
       console.log('[Attendance] Found open attendance ID:', openRecord.id, '- auto-closing it');
 
       await axios.post(
-        `${ODOO_BASE_URL}/web/dataset/call_kw`,
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
@@ -623,7 +623,7 @@ export const checkInToOdoo = async (userId) => {
     }
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -681,7 +681,7 @@ export const checkInByEmployeeId = async (employeeId, employeeName) => {
     // First check for any open attendance (no check_out) for this employee
     // Odoo has a constraint preventing overlapping attendance records
     const openCheckResponse = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -709,7 +709,7 @@ export const checkInByEmployeeId = async (employeeId, employeeName) => {
       console.log('[Attendance] Found open attendance ID:', openRecord.id, '- auto-closing it');
 
       await axios.post(
-        `${ODOO_BASE_URL}/web/dataset/call_kw`,
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
@@ -729,7 +729,7 @@ export const checkInByEmployeeId = async (employeeId, employeeName) => {
 
     // Now create the new check-in
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -784,7 +784,7 @@ export const checkOutToOdoo = async (attendanceId) => {
     console.log('[Attendance] Check-out time:', checkOutTime);
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -832,7 +832,7 @@ export const getTodayAttendance = async (userId) => {
     const today = getTodayDateString();
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -883,7 +883,7 @@ export const getTodayAttendanceByEmployeeId = async (employeeId, employeeName) =
     const today = getTodayDateString();
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -943,7 +943,7 @@ export const uploadAttendancePhoto = async (attendanceId, base64Image, type = 'c
 
     // Create attachment in Odoo
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -993,7 +993,7 @@ export const submitWfhRequest = async (userId, requestDate, reason) => {
 
     // Step 1: Create the WFH request
     const createResponse = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -1026,7 +1026,7 @@ export const submitWfhRequest = async (userId, requestDate, reason) => {
 
     // Step 2: Submit for approval (action_submit)
     const submitResponse = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -1063,7 +1063,7 @@ export const getTodayApprovedWfh = async (userId) => {
     const today = getTodayDateString();
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -1121,7 +1121,7 @@ export const wfhCheckIn = async (requestId) => {
     const headers = await getOdooAuthHeaders();
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -1161,7 +1161,7 @@ export const wfhCheckOut = async (requestId) => {
     const headers = await getOdooAuthHeaders();
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -1201,7 +1201,7 @@ export const getMyWfhRequests = async (userId) => {
     const headers = await getOdooAuthHeaders();
 
     const response = await axios.post(
-      `${ODOO_BASE_URL}/web/dataset/call_kw`,
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -1236,6 +1236,469 @@ export const getMyWfhRequests = async (userId) => {
   }
 };
 
+// =============================================
+// LATE TRACKING FUNCTIONS
+// =============================================
+
+// Get late tracking configuration for an employee
+export const getLateConfig = async (employeeId) => {
+  console.log('[Attendance] Getting late config for employee:', employeeId);
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.attendance.late.config',
+          method: 'get_config_for_employee',
+          args: [employeeId],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    const result = response.data?.result;
+    if (result) {
+      console.log('[Attendance] Late config:', JSON.stringify(result));
+      return {
+        success: true,
+        officeStartHour: result.office_start_hour || 8.0,
+        lateThresholdMinutes: result.late_threshold_minutes || 15,
+        graceLateDays: result.grace_late_days || 5,
+      };
+    }
+    return { success: true, officeStartHour: 8.0, lateThresholdMinutes: 15, graceLateDays: 5 };
+  } catch (error) {
+    console.error('[Attendance] Get late config error:', error?.message);
+    return { success: false, error: error?.message };
+  }
+};
+
+// Submit late reason for an attendance record
+export const submitLateReason = async (attendanceId, reason) => {
+  console.log('[Attendance] Submitting late reason for attendance:', attendanceId);
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.attendance',
+          method: 'write',
+          args: [[attendanceId], { late_reason: reason }],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    if (response.data?.error) {
+      return { success: false, error: response.data.error.data?.message || 'Failed to submit late reason' };
+    }
+    console.log('[Attendance] Late reason submitted successfully');
+    return { success: true };
+  } catch (error) {
+    console.error('[Attendance] Submit late reason error:', error?.message);
+    return { success: false, error: error?.message };
+  }
+};
+
+// Get today's attendance with late tracking info
+export const getTodayAttendanceWithLateInfo = async (employeeId) => {
+  console.log('[Attendance] Getting today attendance with late info for employee:', employeeId);
+  try {
+    const headers = await getOdooAuthHeaders();
+    const today = getTodayDateString();
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.attendance',
+          method: 'search_read',
+          args: [[
+            ['employee_id', '=', employeeId],
+            ['check_in', '>=', `${today} 00:00:00`],
+            ['check_in', '<=', `${today} 23:59:59`],
+          ]],
+          kwargs: {
+            fields: [
+              'id', 'check_in', 'check_out',
+              'is_late', 'late_minutes', 'late_minutes_display', 'expected_start_time',
+              'late_reason', 'deduction_amount', 'late_sequence',
+              'daily_total_hours', 'is_first_checkin_of_day',
+            ],
+            order: 'check_in asc',
+          },
+        },
+      },
+      { headers }
+    );
+
+    const records = response.data?.result || [];
+    return {
+      success: true,
+      records: records.map(r => ({
+        id: r.id,
+        checkIn: r.check_in ? odooUtcToLocalDisplay(r.check_in) : null,
+        checkOut: r.check_out ? odooUtcToLocalDisplay(r.check_out) : null,
+        isLate: r.is_late,
+        lateMinutes: r.late_minutes,
+        lateMinutesDisplay: r.late_minutes_display || '',
+        expectedStartTime: r.expected_start_time,
+        lateReason: r.late_reason || '',
+        deductionAmount: r.deduction_amount,
+        lateSequence: r.late_sequence,
+        dailyTotalHours: r.daily_total_hours,
+        isFirstCheckinOfDay: r.is_first_checkin_of_day,
+      })),
+    };
+  } catch (error) {
+    console.error('[Attendance] Get late info error:', error?.message);
+    return { success: false, error: error?.message, records: [] };
+  }
+};
+
+// =============================================
+// LEAVE REQUEST FUNCTIONS
+// =============================================
+
+// Submit a leave request
+export const submitLeaveRequest = async (userId, leaveType, fromDate, toDate, reason, employeeId, isHalfDay = false) => {
+  console.log('[Leave] Submitting leave request for user:', userId, 'employee:', employeeId, 'halfDay:', isHalfDay);
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    // Build create values
+    const createVals = {
+      leave_type: leaveType,
+      from_date: fromDate,
+      to_date: isHalfDay ? false : (toDate || false),
+      is_half_day: isHalfDay,
+      reason: reason,
+    };
+    // Set employee - hr_employee_id is the primary field now
+    if (employeeId) {
+      createVals.hr_employee_id = employeeId;
+    }
+
+    // Create leave request
+    const createResponse = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.leave.request',
+          method: 'create',
+          args: [createVals],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    if (createResponse.data?.error) {
+      const errMsg = createResponse.data.error.data?.message || 'Failed to create leave request';
+      return { success: false, error: errMsg };
+    }
+
+    const requestId = createResponse.data?.result;
+    if (!requestId) {
+      return { success: false, error: 'Failed to create leave request' };
+    }
+
+    // Auto-submit for approval
+    await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.leave.request',
+          method: 'action_submit',
+          args: [[requestId]],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    console.log('[Leave] Request submitted successfully, ID:', requestId);
+    return { success: true, requestId };
+  } catch (error) {
+    console.error('[Leave] Submit error:', error?.message);
+    return { success: false, error: error?.message };
+  }
+};
+
+// Get my leave requests (by hr_employee_id for device-based lookup)
+export const getMyLeaveRequests = async (userId, employeeId) => {
+  console.log('[Leave] Getting leave requests for employee:', employeeId, 'user:', userId);
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    // Filter by hr_employee_id if available, otherwise by user_id
+    const domain = employeeId
+      ? [['hr_employee_id', '=', employeeId]]
+      : [['employee_user_id', '=', userId]];
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.leave.request',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: [
+              'id', 'leave_type', 'from_date', 'to_date',
+              'number_of_days', 'reason', 'state',
+              'approved_by', 'approval_date', 'rejection_reason',
+            ],
+            order: 'from_date desc',
+            limit: 30,
+          },
+        },
+      },
+      { headers }
+    );
+
+    const records = response.data?.result || [];
+    return records.map(r => ({
+      id: r.id,
+      leaveType: r.leave_type,
+      fromDate: r.from_date || '',
+      toDate: r.to_date || '',
+      numberOfDays: r.number_of_days,
+      reason: r.reason || '',
+      state: r.state,
+      approvedBy: r.approved_by ? r.approved_by[1] : '',
+      approvalDate: r.approval_date || '',
+      rejectionReason: r.rejection_reason || '',
+    }));
+  } catch (error) {
+    console.error('[Leave] Get requests error:', error?.message);
+    return [];
+  }
+};
+
+// Cancel a leave request
+export const cancelLeaveRequest = async (requestId) => {
+  console.log('[Leave] Cancelling leave request:', requestId);
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.leave.request',
+          method: 'action_cancel',
+          args: [[requestId]],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    if (response.data?.error) {
+      return { success: false, error: response.data.error.data?.message || 'Failed to cancel' };
+    }
+    return { success: true };
+  } catch (error) {
+    console.error('[Leave] Cancel error:', error?.message);
+    return { success: false, error: error?.message };
+  }
+};
+
+// =============================================
+// LATE WAIVER REQUEST FUNCTIONS
+// =============================================
+
+// Get all late attendance records (last 30 days) eligible for waiver
+export const getEligibleLateAttendances = async (employeeId) => {
+  console.log('[Waiver] Getting eligible late attendances for employee:', employeeId);
+  try {
+    const headers = await getOdooAuthHeaders();
+    // Last 30 days
+    const today = new Date();
+    const past = new Date();
+    past.setDate(past.getDate() - 30);
+    const fromStr = past.toISOString().slice(0, 10);
+    const toStr = today.toISOString().slice(0, 10);
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.attendance',
+          method: 'search_read',
+          args: [[
+            ['employee_id', '=', employeeId],
+            ['is_late', '=', true],
+            ['is_first_checkin_of_day', '=', true],
+            ['date', '>=', fromStr],
+            ['date', '<=', toStr],
+          ]],
+          kwargs: {
+            fields: [
+              'id', 'date', 'check_in', 'late_minutes', 'late_minutes_display',
+              'deduction_amount', 'late_reason', 'is_waived',
+            ],
+            order: 'date desc',
+            limit: 60,
+          },
+        },
+      },
+      { headers }
+    );
+
+    const records = response.data?.result || [];
+    return records.map(r => ({
+      id: r.id,
+      date: r.date || '',
+      checkInTime: r.check_in ? odooUtcToLocalDisplay(r.check_in) : '',
+      lateMinutes: r.late_minutes || 0,
+      lateMinutesDisplay: r.late_minutes_display || '',
+      deductionAmount: r.deduction_amount || 0,
+      lateReason: r.late_reason || '',
+      isWaived: !!r.is_waived,
+    }));
+  } catch (error) {
+    console.error('[Waiver] Get eligible late error:', error?.message);
+    return [];
+  }
+};
+
+// Submit a new waiver request (creates draft + auto-submits)
+export const submitWaiverRequest = async (employeeId, attendanceId, reason) => {
+  console.log('[Waiver] Submitting waiver request for attendance:', attendanceId);
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    const createResponse = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.late.waiver.request',
+          method: 'create',
+          args: [{
+            employee_id: employeeId,
+            attendance_id: attendanceId,
+            reason: reason,
+          }],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    if (createResponse.data?.error) {
+      const errMsg = createResponse.data.error.data?.message || 'Failed to create waiver request';
+      return { success: false, error: errMsg };
+    }
+
+    const requestId = createResponse.data?.result;
+    if (!requestId) {
+      return { success: false, error: 'Failed to create waiver request' };
+    }
+
+    // Auto-submit (draft -> pending)
+    const submitResponse = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.late.waiver.request',
+          method: 'action_submit',
+          args: [[requestId]],
+          kwargs: {},
+        },
+      },
+      { headers }
+    );
+
+    if (submitResponse.data?.error) {
+      const errMsg = submitResponse.data.error.data?.message || 'Failed to submit waiver request';
+      return { success: false, error: errMsg };
+    }
+
+    console.log('[Waiver] Waiver request submitted, ID:', requestId);
+    return { success: true, requestId };
+  } catch (error) {
+    console.error('[Waiver] Submit error:', error?.message);
+    return { success: false, error: error?.message };
+  }
+};
+
+// Get my waiver requests
+export const getMyWaiverRequests = async (employeeId) => {
+  console.log('[Waiver] Getting waiver requests for employee:', employeeId);
+  try {
+    const headers = await getOdooAuthHeaders();
+
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.late.waiver.request',
+          method: 'search_read',
+          args: [[['employee_id', '=', employeeId]]],
+          kwargs: {
+            fields: [
+              'id', 'late_date', 'late_minutes', 'late_minutes_display',
+              'original_deduction', 'original_late_reason', 'reason',
+              'state', 'approved_by', 'approval_date', 'rejection_reason',
+              'attendance_id',
+            ],
+            order: 'create_date desc',
+            limit: 30,
+          },
+        },
+      },
+      { headers }
+    );
+
+    const records = response.data?.result || [];
+    return records.map(r => ({
+      id: r.id,
+      lateDate: r.late_date || '',
+      lateMinutes: r.late_minutes || 0,
+      lateMinutesDisplay: r.late_minutes_display || '',
+      originalDeduction: r.original_deduction || 0,
+      originalLateReason: r.original_late_reason || '',
+      reason: r.reason || '',
+      state: r.state,
+      approvedBy: r.approved_by ? r.approved_by[1] : '',
+      approvalDate: r.approval_date || '',
+      rejectionReason: r.rejection_reason || '',
+      attendanceId: r.attendance_id ? r.attendance_id[0] : null,
+    }));
+  } catch (error) {
+    console.error('[Waiver] Get requests error:', error?.message);
+    return [];
+  }
+};
+
 export default {
   checkInToOdoo,
   checkInByEmployeeId,
@@ -1254,4 +1717,13 @@ export default {
   wfhCheckIn,
   wfhCheckOut,
   getMyWfhRequests,
+  getLateConfig,
+  submitLateReason,
+  getTodayAttendanceWithLateInfo,
+  submitLeaveRequest,
+  getMyLeaveRequests,
+  cancelLeaveRequest,
+  getEligibleLateAttendances,
+  submitWaiverRequest,
+  getMyWaiverRequests,
 };

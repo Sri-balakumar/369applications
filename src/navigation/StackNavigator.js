@@ -43,6 +43,7 @@ import { AttendanceScreen } from "@screens/Home/Options/Attendance";
 import { MarkAttendance, PunchingScreen } from "@screens/Home/Options/Attendance/Punching";
 import { CashCollectionScreen, CashCollectionForm } from "@screens/Home/Options/CashCollection";
 import { UserAttendanceScreen, UserAttendanceForm } from "@screens/Home/Options/UserAttendance";
+import { LateRecordsScreen } from "@screens/Home/Options/LateRecords";
 import { InvoiceScannerScreen, InvoiceDetailsScreen } from "@screens/Home/Options/InvoiceScanner";
 import { AddParticipants, KPIActionDetails, KPIDashboardScreen, KPIListingScreen } from "@screens/KPIDashboard";
 import { ServicesScreen } from "@screens/Home/Sections/Services";
@@ -310,6 +311,13 @@ const StackNavigator = () => {
       <Stack.Screen
         name="MyLocation"
         component={MyLocation}
+        options={{ headerShown: false }}
+      />
+
+      {/* Late Records */}
+      <Stack.Screen
+        name="LateRecordsScreen"
+        component={LateRecordsScreen}
         options={{ headerShown: false }}
       />
 

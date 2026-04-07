@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Late Config - Tree View -->
+    <record id="view_late_config_tree" model="ir.ui.view">
+        <field name="name">hr.attendance.late.config.tree</field>
+        <field name="model">hr.attendance.late.config</field>
+        <field name="arch" type="xml">
+            <list string="Late Tracking Configuration">
+                <field name="company_id"/>
+                <field name="department_id"/>
+                <field name="shift_type"/>
+                <field name="office_start_hour" widget="float_time"/>
+                <field name="office_end_hour" widget="float_time"/>
+                <field name="late_threshold_minutes"/>
+                <field name="grace_late_times" string="Grace Times"/>
+                <field name="deduction_mode"/>
+                <field name="half_day_friday_enabled"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Late Config - Form View -->
+    <record id="view_late_config_form" model="ir.ui.view">
+        <field name="name">hr.attendance.late.config.form</field>
+        <field name="model">hr.attendance.late.config</field>
+        <field name="arch" type="xml">
+            <form string="Late Tracking Configuration">
+                <sheet>
+                    <group>
+                        <group string="Scope">
+                            <field name="company_id"/>
+                            <field name="department_id"
+                                   placeholder="Leave empty for company-wide"/>
+                        </group>
+                        <group string="Late Settings">
+                            <field name="late_threshold_minutes"/>
+                            <field name="grace_late_times" string="Grace Late Times/Month"/>
+                        </group>
+                    </group>
+
+                    <group string="Office Hours">
+                        <group>
+                            <field name="shift_type" widget="radio"/>
+                        </group>
+                    </group>
+
+                    <group>
+                        <group string="Session 1">
+                            <field name="office_start_hour" widget="float_time"
+                                   string="Start Time"/>
+                            <field name="office_end_hour" widget="float_time"
+                                   string="End Time"/>
+                        </group>
+                        <group string="Session 2" invisible="shift_type != 'split'">
+                            <field name="office_start_hour_2" widget="float_time"
+                                   string="Start Time"/>
+                            <field name="office_end_hour_2" widget="float_time"
+                                   string="End Time"/>
+                        </group>
+                    </group>
+
+                    <group string="Deduction Settings">
+                        <group>
+                            <field name="deduction_mode" widget="radio"/>
+                        </group>
+                        <group invisible="deduction_mode != 'hourly'">
+                            <field name="daily_work_hours" readonly="1"
+                                   string="Daily Hours (auto-calculated)"/>
+                        </group>
+                    </group>
+
+                    <group string="Working Days">
+                        <group>
+                            <field name="work_monday"/>
+                            <field name="work_tuesday"/>
+                            <field name="work_wednesday"/>
+                            <field name="work_thursday"/>
+                        </group>
+                        <group>
+                            <field name="work_friday"/>
+                            <field name="work_saturday"/>
+                            <field name="work_sunday"/>
+                        </group>
+                    </group>
+
+                    <group string="Half-Day Friday Settings">
+                        <group>
+                            <field name="half_day_friday_enabled"/>
+                            <field name="half_day_friday_positions"
+                                   invisible="not half_day_friday_enabled"
+                                   placeholder="e.g., 2,4"/>
+                        </group>
+                        <group invisible="not half_day_friday_enabled">
+                            <field name="half_day_start_hour" widget="float_time"/>
+                            <field name="half_day_end_hour" widget="float_time"/>
+                        </group>
+                    </group>
+
+                    <div class="text-muted mt-3">
+                        <p><b>How it works:</b></p>
+                        <ul>
+                            <li><b>Single Shift:</b> One work period per day. Late is checked on first check-in.</li>
+                            <li><b>Split Shift:</b> Two work periods (e.g., 8AM-12PM + 2PM-6PM).
+                            Late is checked on first check-in of EACH session. Each late counts as 1 time.</li>
+                            <li><b>Grace Times:</b> Number of late times per month before deductions apply.
+                            With split shift, being late twice in one day = 2 times used.</li>
+                            <li><b>Fixed Deduction:</b> Uses the Deduction Slabs amounts.</li>
+                            <li><b>Hourly Deduction:</b> Auto-calculates from employee wage.
+                            Formula: hourly_rate = wage / working_days_in_month / daily_hours.
+                            Working days are auto-computed from your working days config and public holidays.
+                            Each started hour of lateness = 1 hour deduction.
+                            E.g., wage 30000, 26 working days, 10 hrs → hourly rate = 115.38.
+                            Late 45min = 115.38 deducted. Late 65min = 230.77 deducted.</li>
+                        </ul>
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Late Config - Action -->
+    <record id="action_late_config" model="ir.actions.act_window">
+        <field name="name">Office Hours &amp; Working Days</field>
+        <field name="res_model">hr.attendance.late.config</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+</odoo>

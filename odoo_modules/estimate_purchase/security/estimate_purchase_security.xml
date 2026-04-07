@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="estimate_purchase_comp_rule" model="ir.rule">
+        <field name="name">Estimate Purchase multi-company</field>
+        <field name="model_id" ref="model_estimate_purchase"/>
+        <field name="domain_force">['|',('company_id','=',False),('company_id','in',company_ids)]</field>
+    </record>
+    <record id="estimate_purchase_line_comp_rule" model="ir.rule">
+        <field name="name">Estimate Purchase Line multi-company</field>
+        <field name="model_id" ref="model_estimate_purchase_line"/>
+        <field name="domain_force">['|',('purchase_id.company_id','=',False),('purchase_id.company_id','in',company_ids)]</field>
+    </record>
+    <record id="estimate_purchase_payment_method_comp_rule" model="ir.rule">
+        <field name="name">Estimate Purchase Payment Method multi-company</field>
+        <field name="model_id" ref="model_estimate_purchase_payment_method"/>
+        <field name="domain_force">['|',('company_id','=',False),('company_id','in',company_ids)]</field>
+    </record>
+</odoo>

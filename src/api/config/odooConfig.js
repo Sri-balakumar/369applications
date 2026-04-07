@@ -2,7 +2,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Fallback Odoo server URL (used if no URL was saved from login)
-const FALLBACK_ODOO_BASE_URL = "http://115.246.240.218:2309";
+const FALLBACK_ODOO_BASE_URL = "";
 
 // In-memory cache for the active Odoo URL (avoids async reads on every call)
 let _cachedOdooUrl = null;

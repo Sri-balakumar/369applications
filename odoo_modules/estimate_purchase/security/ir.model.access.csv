@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_estimate_purchase_user,estimate.purchase.user,model_estimate_purchase,purchase.group_purchase_user,1,1,1,0
+access_estimate_purchase_manager,estimate.purchase.manager,model_estimate_purchase,purchase.group_purchase_manager,1,1,1,1
+access_estimate_purchase_line_user,estimate.purchase.line.user,model_estimate_purchase_line,purchase.group_purchase_user,1,1,1,0
+access_estimate_purchase_line_manager,estimate.purchase.line.manager,model_estimate_purchase_line,purchase.group_purchase_manager,1,1,1,1
+access_estimate_purchase_payment_method_user,estimate.purchase.payment.method.user,model_estimate_purchase_payment_method,purchase.group_purchase_user,1,0,0,0
+access_estimate_purchase_payment_method_manager,estimate.purchase.payment.method.manager,model_estimate_purchase_payment_method,purchase.group_purchase_manager,1,1,1,1

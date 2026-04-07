@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Root Menu under Attendance -->
+    <menuitem id="menu_employee_report_root"
+              name="Employee Report"
+              parent="hr_attendance.menu_hr_attendance_root"
+              sequence="60"/>
+
+    <!-- Generate Report Wizard -->
+    <menuitem id="menu_employee_report_generate"
+              name="Generate Report"
+              parent="menu_employee_report_root"
+              action="action_employee_report_wizard"
+              sequence="10"/>
+
+    <!-- Browse Past Reports -->
+    <menuitem id="menu_employee_report_browse"
+              name="Past Reports"
+              parent="menu_employee_report_root"
+              action="action_employee_report_list"
+              sequence="20"/>
+
+</odoo>

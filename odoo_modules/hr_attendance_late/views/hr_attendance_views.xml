@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Inherit hr.attendance LIST view to add late columns -->
+    <record id="view_attendance_list_inherit_late" model="ir.ui.view">
+        <field name="name">hr.attendance.list.inherit.late</field>
+        <field name="model">hr.attendance</field>
+        <field name="inherit_id" ref="hr_attendance.view_attendance_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='check_out']" position="after">
+                <field name="is_late"/>
+                <field name="late_minutes" optional="hide"/>
+                <field name="late_minutes_display" string="Late Time"/>
+                <field name="checkin_session" string="Session" optional="show"/>
+                <field name="is_half_day" optional="show"/>
+                <field name="late_reason"/>
+                <field name="late_sequence" string="Late #"/>
+                <field name="deduction_amount"/>
+                <field name="is_waived" string="Waived"/>
+                <field name="daily_total_hours" widget="float_time"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Inherit hr.attendance FORM view to add late fields -->
+    <record id="view_attendance_form_inherit_late" model="ir.ui.view">
+        <field name="name">hr.attendance.form.inherit.late</field>
+        <field name="model">hr.attendance</field>
+        <field name="inherit_id" ref="hr_attendance.hr_attendance_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="inside">
+                <group string="Late Tracking">
+                    <group>
+                        <field name="is_first_checkin_of_day" invisible="1"/>
+                        <field name="is_second_checkin_of_day" invisible="1"/>
+                        <field name="checkin_session" string="Session" readonly="1"/>
+                        <field name="expected_start_time" widget="float_time"/>
+                        <field name="is_late" readonly="1"/>
+                        <field name="late_minutes" readonly="1"/>
+                        <field name="late_minutes_display" string="Late Time" readonly="1"/>
+                        <field name="is_half_day" readonly="1"/>
+                    </group>
+                    <group>
+                        <field name="late_reason"/>
+                        <field name="late_sequence" string="Late # in Month" readonly="1"/>
+                        <field name="deduction_amount" readonly="1"/>
+                        <field name="is_waived" readonly="1"/>
+                        <field name="waiver_reason" readonly="1"
+                               invisible="not is_waived"/>
+                        <field name="daily_total_hours" widget="float_time" readonly="1"/>
+                    </group>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Inherit hr.attendance SEARCH view to add late filters -->
+    <record id="view_attendance_search_inherit_late" model="ir.ui.view">
+        <field name="name">hr.attendance.search.inherit.late</field>
+        <field name="model">hr.attendance</field>
+        <field name="inherit_id" ref="hr_attendance.hr_attendance_view_filter"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='employee_id']" position="after">
+                <field name="late_reason" string="Late Reason"/>
+            </xpath>
+            <xpath expr="//filter[@name='archivedemployees']" position="after">
+                <separator/>
+                <filter name="filter_late" string="Late Only" domain="[('is_late', '=', True)]"/>
+                <filter name="filter_not_late" string="On Time" domain="[('is_late', '=', False)]"/>
+                <separator/>
+                <filter name="filter_half_day" string="Half Day" domain="[('is_half_day', '=', True)]"/>
+                <filter name="filter_late_deduction" string="With Deduction" domain="[('deduction_amount', '&gt;', 0)]"/>
+                <filter name="filter_first_checkin" string="First Check-in Only" domain="[('is_first_checkin_of_day', '=', True)]"/>
+                <separator/>
+                <filter name="filter_has_reason" string="Has Late Reason" domain="[('late_reason', '!=', False)]"/>
+                <filter name="filter_no_reason" string="No Late Reason" domain="[('late_reason', '=', False), ('is_late', '=', True)]"/>
+            </xpath>
+            <xpath expr="//filter[@name='groupby_name']" position="after">
+                <filter name="group_late_date" string="Date" context="{'group_by': 'date'}"/>
+                <filter name="group_late_month" string="Month" context="{'group_by': 'date:month'}"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- DEDICATED Late Records search view -->
+    <record id="late_attendance_search_view" model="ir.ui.view">
+        <field name="name">late.attendance.search</field>
+        <field name="model">hr.attendance</field>
+        <field name="arch" type="xml">
+            <search string="Late Attendance">
+                <field name="employee_id"/>
+                <field name="department_id" operator="child_of"/>
+                <field name="late_reason"/>
+                <field name="check_in"/>
+                <separator/>
+                <filter string="Late Only" name="late_only" domain="[('is_late', '=', True)]"/>
+                <filter string="On Time" name="on_time" domain="[('is_late', '=', False)]"/>
+                <separator/>
+                <filter string="Half Day" name="half_day" domain="[('is_half_day', '=', True)]"/>
+                <filter string="With Deduction" name="with_deduction" domain="[('deduction_amount', '&gt;', 0)]"/>
+                <filter string="No Deduction" name="no_deduction" domain="[('is_late', '=', True), ('deduction_amount', '=', 0)]"/>
+                <separator/>
+                <filter string="Has Reason" name="has_reason" domain="[('late_reason', '!=', False)]"/>
+                <filter string="Missing Reason" name="missing_reason" domain="[('late_reason', '=', False), ('is_late', '=', True)]"/>
+                <separator/>
+                <filter string="Date" name="date_filter" date="check_in"/>
+                <group>
+                    <filter string="Employee" name="group_employee" context="{'group_by': 'employee_id'}"/>
+                    <filter string="Department" name="group_department" context="{'group_by': 'department_id'}"/>
+                    <filter string="Date" name="group_date" context="{'group_by': 'date'}"/>
+                    <filter string="Month" name="group_month" context="{'group_by': 'date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Dedicated Late Attendance action -->
+    <record id="action_late_attendance" model="ir.actions.act_window">
+        <field name="name">Late Attendance Records</field>
+        <field name="res_model">hr.attendance</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('is_late', '=', True), ('is_first_checkin_of_day', '=', True)]</field>
+        <field name="search_view_id" ref="late_attendance_search_view"/>
+        <field name="context">{'search_default_late_only': 1}</field>
+    </record>
+
+</odoo>

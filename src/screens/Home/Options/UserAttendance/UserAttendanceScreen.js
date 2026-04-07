@@ -7,7 +7,8 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { OverlayLoader } from '@components/Loader';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
-import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests } from '@services/AttendanceService';
+import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests } from '@services/AttendanceService';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { MaterialIcons, Feather, Ionicons } from '@expo/vector-icons';
 import { Camera } from 'expo-camera';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -15,7 +16,15 @@ import * as Application from 'expo-application';
 
 const { width, height } = Dimensions.get('window');
 const isSmall = width < 360;
-const scale = (size) => Math.round((width / 390) * size);
+// Cap effective width so the UI doesn't blow up on tablets / large screens.
+// Phones <= 430px scale linearly; anything wider (tablets) uses the same base
+// scale as a 430px phone, so fonts, icons and paddings stay phone-sized.
+const BASE_WIDTH = 390;
+const MAX_SCALE_WIDTH = 430;
+const effectiveWidth = Math.min(width, MAX_SCALE_WIDTH);
+const scale = (size) => Math.round((effectiveWidth / BASE_WIDTH) * size);
+// Content column width — phones use full width, tablets get a centered column.
+const CONTENT_MAX_WIDTH = MAX_SCALE_WIDTH;
 
 const UserAttendanceScreen = ({ navigation }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -36,6 +45,30 @@ const UserAttendanceScreen = ({ navigation }) => {
   const [wfhReason, setWfhReason] = useState('');
   const [todayWfhRequest, setTodayWfhRequest] = useState(null);
   const [wfhRequests, setWfhRequests] = useState([]);
+
+  // Leave request state
+  const [leaveType, setLeaveType] = useState('casual');
+  const [leaveFromDate, setLeaveFromDate] = useState(new Date());
+  const [leaveToDate, setLeaveToDate] = useState(null);
+  const [leaveReason, setLeaveReason] = useState('');
+  const [showLeaveFromPicker, setShowLeaveFromPicker] = useState(false);
+  const [showLeaveToPicker, setShowLeaveToPicker] = useState(false);
+  const [isHalfDay, setIsHalfDay] = useState(false);
+  const [leaveRequests, setLeaveRequests] = useState([]);
+  const [leaveTab, setLeaveTab] = useState('form'); // 'form' | 'history'
+
+  // Late reason state
+  const [showLateReasonModal, setShowLateReasonModal] = useState(false);
+  const [lateReasonText, setLateReasonText] = useState('');
+  const [pendingLateAttendanceId, setPendingLateAttendanceId] = useState(null);
+  const [lateInfo, setLateInfo] = useState(null); // { isLate, lateMinutes, lateSequence }
+
+  // Waiver request state
+  const [waiverTab, setWaiverTab] = useState('form'); // 'form' | 'history'
+  const [eligibleLateAttendances, setEligibleLateAttendances] = useState([]);
+  const [selectedWaiverAttendanceId, setSelectedWaiverAttendanceId] = useState(null);
+  const [waiverReason, setWaiverReason] = useState('');
+  const [waiverRequests, setWaiverRequests] = useState([]);
 
   // Camera state
   const [cameraPermission, requestCameraPermission] = Camera.useCameraPermissions();
@@ -265,7 +298,7 @@ const UserAttendanceScreen = ({ navigation }) => {
             setTodayWfhRequest(wfhReq);
             // Also load WFH request history
             const requests = await getMyWfhRequests(userId);
-            setWfhRequests(requests);
+            setWfhRequests(requests);  
           }
         }
       } else {
@@ -395,6 +428,27 @@ const UserAttendanceScreen = ({ navigation }) => {
           checkOut: null,
           employeeName: result.employeeName,
         });
+
+        // Check if employee is late and prompt for reason
+        try {
+          const lateResult = await getTodayAttendanceWithLateInfo(verifiedEmployee.id);
+          if (lateResult.success && lateResult.records.length > 0) {
+            const firstCheckin = lateResult.records.find(r => r.isFirstCheckinOfDay);
+            if (firstCheckin && firstCheckin.isLate) {
+              setLateInfo({
+                isLate: true,
+                lateMinutes: firstCheckin.lateMinutes,
+                lateMinutesDisplay: firstCheckin.lateMinutesDisplay,
+                lateSequence: firstCheckin.lateSequence,
+                deductionAmount: firstCheckin.deductionAmount,
+              });
+              setPendingLateAttendanceId(firstCheckin.id);
+              setShowLateReasonModal(true);
+            }
+          }
+        } catch (lateErr) {
+          console.log('[Attendance] Late check skipped:', lateErr?.message);
+        }
       } else {
         Alert.alert('Check-in Failed', result.error || 'Check-in failed');
       }
@@ -497,8 +551,9 @@ const UserAttendanceScreen = ({ navigation }) => {
         }
 
         showToastMessage('Check-out successful!');
-        // Reset so user can check-in again (multiple check-in/out per day)
-        setTodayAttendance(null);
+        // Keep the record visible in this session — show the checkout time in the box.
+        // The whole record is cleared when the user leaves the screen via handleBackPress.
+        setTodayAttendance((prev) => prev ? { ...prev, checkOut: result.checkOutTime } : prev);
       } else {
         Alert.alert('Check-out Failed', result.error || 'Check-out failed');
       }
@@ -659,13 +714,32 @@ const UserAttendanceScreen = ({ navigation }) => {
   // =============================================
   const userName = verifiedEmployee?.name || currentUser?.name || currentUser?.user_name || currentUser?.login || 'User';
   const hasCheckedIn = todayAttendance && !todayAttendance.checkOut;
-  const hasCheckedOut = false; // Allow multiple check-in/out per day
+  const hasCheckedOut = !!(todayAttendance && todayAttendance.checkOut);
 
   const getGreeting = () => {
     const hour = currentTime.getHours();
     if (hour < 12) return 'Good Morning';
     if (hour < 17) return 'Good Afternoon';
     return 'Good Evening';
+  };
+
+  // Convert late minutes to "Hh Mm" format matching the Odoo module's minutes_to_hm.
+  // Examples: 30 -> "30m", 60 -> "1h 00m", 90 -> "1h 30m", 145 -> "2h 25m"
+  const formatLateDuration = (minutes, preformatted) => {
+    // Prefer the server-formatted value (H:MM) if present, but display it as "Xh YYm".
+    if (preformatted && typeof preformatted === 'string' && preformatted.includes(':')) {
+      const [h, m] = preformatted.split(':');
+      const hh = parseInt(h, 10) || 0;
+      const mm = parseInt(m, 10) || 0;
+      if (hh <= 0) return `${mm}m`;
+      return `${hh}h ${String(mm).padStart(2, '0')}m`;
+    }
+    const total = parseInt(minutes, 10) || 0;
+    if (total <= 0) return '0m';
+    const hh = Math.floor(total / 60);
+    const mm = total % 60;
+    if (hh <= 0) return `${mm}m`;
+    return `${hh}h ${String(mm).padStart(2, '0')}m`;
   };
 
   const getStateLabel = (state) => {
@@ -746,6 +820,36 @@ const UserAttendanceScreen = ({ navigation }) => {
         <View style={styles.modeTextContainer}>
           <Text style={styles.modeCardTitle}>Work From Home</Text>
           <Text style={styles.modeCardSubtitle}>Request WFH or check in if approved</Text>
+        </View>
+        <Feather name="chevron-right" size={scale(20)} color={COLORS.gray} />
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.modeCard}
+        onPress={() => setAttendanceMode('leave')}
+        activeOpacity={0.8}
+      >
+        <View style={[styles.modeIconContainer, { backgroundColor: '#FFF3E0' }]}>
+          <MaterialIcons name="event-busy" size={scale(32)} color="#FF9800" />
+        </View>
+        <View style={styles.modeTextContainer}>
+          <Text style={styles.modeCardTitle}>Leave Request</Text>
+          <Text style={styles.modeCardSubtitle}>Apply for leave with manager approval</Text>
+        </View>
+        <Feather name="chevron-right" size={scale(20)} color={COLORS.gray} />
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.modeCard}
+        onPress={() => setAttendanceMode('waiver')}
+        activeOpacity={0.8}
+      >
+        <View style={[styles.modeIconContainer, { backgroundColor: '#F3E5F5' }]}>
+          <MaterialIcons name="gavel" size={scale(32)} color="#9C27B0" />
+        </View>
+        <View style={styles.modeTextContainer}>
+          <Text style={styles.modeCardTitle}>Late Waiver Request</Text>
+          <Text style={styles.modeCardSubtitle}>Request waiver for a late arrival deduction</Text>
         </View>
         <Feather name="chevron-right" size={scale(20)} color={COLORS.gray} />
       </TouchableOpacity>
@@ -935,6 +1039,611 @@ const UserAttendanceScreen = ({ navigation }) => {
   };
 
   // =============================================
+  // RENDER: LEAVE REQUEST SECTION
+  // =============================================
+  const LEAVE_TYPES = [
+    { value: 'sick', label: 'Sick Leave', icon: 'local-hospital', color: '#E74C3C' },
+    { value: 'casual', label: 'Casual Leave', icon: 'event-available', color: '#FF9800' },
+    { value: 'annual', label: 'Annual Leave', icon: 'beach-access', color: '#2196F3' },
+    { value: 'personal', label: 'Personal Leave', icon: 'person', color: '#9C27B0' },
+    { value: 'emergency', label: 'Emergency Leave', icon: 'warning', color: '#F44336' },
+    { value: 'other', label: 'Other', icon: 'more-horiz', color: '#607D8B' },
+  ];
+
+  const fetchLeaveHistory = async () => {
+    const uid = verifiedEmployee?.userId || currentUser?.uid;
+    const empId = verifiedEmployee?.id || null;
+    if (!uid && !empId) return;
+    const requests = await getMyLeaveRequests(uid, empId);
+    setLeaveRequests(requests);
+  };
+
+  const formatLeaveDate = (date) => {
+    if (!date) return '';
+    const d = date instanceof Date ? date : new Date(date);
+    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  };
+
+  // Imperative date picker openers — bypass show/hide state bugs on Android.
+  // The OS dialog only fires onChange once per interaction so the picked date
+  // never gets clobbered by a stray dismiss event.
+  const openLeaveFromPicker = () => {
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: leaveFromDate || new Date(),
+        mode: 'date',
+        minimumDate: new Date(),
+        onChange: (event, date) => {
+          if (event?.type === 'set' && date instanceof Date) {
+            setLeaveFromDate(date);
+            if (leaveToDate && date > leaveToDate) setLeaveToDate(null);
+          }
+        },
+      });
+    } else {
+      setShowLeaveFromPicker(true);
+    }
+  };
+
+  const openLeaveToPicker = () => {
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: leaveToDate || leaveFromDate || new Date(),
+        mode: 'date',
+        minimumDate: leaveFromDate || new Date(),
+        onChange: (event, date) => {
+          if (event?.type === 'set' && date instanceof Date) {
+            setLeaveToDate(date);
+          }
+        },
+      });
+    } else {
+      setShowLeaveToPicker(true);
+    }
+  };
+
+  const formatLeaveDateForOdoo = (date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const getLeaveStateColor = (state) => {
+    switch (state) {
+      case 'draft': return '#9E9E9E';
+      case 'pending': return '#FF9800';
+      case 'approved': return '#4CAF50';
+      case 'rejected': return '#F44336';
+      case 'cancelled': return '#9E9E9E';
+      default: return '#9E9E9E';
+    }
+  };
+
+  const getLeaveStateLabel = (state) => {
+    switch (state) { case 'draft': return 'Draft'; case 'pending': return 'Pending'; case 'approved': return 'Approved'; case 'rejected': return 'Rejected'; case 'cancelled': return 'Cancelled'; default: return state; }
+  };
+
+  const handleLeaveSubmit = () => {
+    if (!leaveReason.trim()) {
+      showToastMessage('Please enter a reason for leave');
+      return;
+    }
+    const fromStr = formatLeaveDateForOdoo(leaveFromDate);
+    const toStr = leaveToDate ? formatLeaveDateForOdoo(leaveToDate) : null;
+    const typeLabel = LEAVE_TYPES.find(t => t.value === leaveType)?.label || leaveType;
+
+    Alert.alert(
+      'Submit Leave Request',
+      `Type: ${typeLabel}\nFrom: ${formatLeaveDate(leaveFromDate)}\n${leaveToDate ? `To: ${formatLeaveDate(leaveToDate)}` : '(Single day)'}\n\nReason: ${leaveReason.trim()}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Submit',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const uid = verifiedEmployee?.userId || currentUser?.uid;
+              const empId = verifiedEmployee?.id || null;
+              const result = await submitLeaveRequest(uid, leaveType, fromStr, isHalfDay ? null : toStr, leaveReason.trim(), empId, isHalfDay);
+              if (result.success) {
+                showToastMessage('Leave request submitted for approval!');
+                setLeaveReason('');
+                setLeaveToDate(null);
+                setLeaveFromDate(new Date());
+                setLeaveType('casual');
+                setIsHalfDay(false);
+                await fetchLeaveHistory();
+                setLeaveTab('history');
+              } else {
+                Alert.alert('Error', result.error || 'Failed to submit');
+              }
+            } catch (error) {
+              Alert.alert('Error', error?.message || 'Failed to submit');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleLeaveCancel = (requestId) => {
+    Alert.alert('Cancel Leave', 'Are you sure?', [
+      { text: 'No', style: 'cancel' },
+      {
+        text: 'Yes', style: 'destructive',
+        onPress: async () => {
+          setLoading(true);
+          const result = await cancelLeaveRequest(requestId);
+          if (result.success) { showToastMessage('Cancelled'); await fetchLeaveHistory(); }
+          else { showToastMessage(result.error || 'Failed'); }
+          setLoading(false);
+        },
+      },
+    ]);
+  };
+
+  const renderLeaveSection = () => (
+    <View style={{ flex: 1 }}>
+      {/* Tab Bar */}
+      <View style={{ flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F0F0F0', marginBottom: scale(8) }}>
+        <TouchableOpacity
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: scale(10), gap: scale(4), borderBottomWidth: leaveTab === 'form' ? 2 : 0, borderBottomColor: '#FF9800' }}
+          onPress={() => setLeaveTab('form')}
+        >
+          <MaterialIcons name="add-circle-outline" size={scale(16)} color={leaveTab === 'form' ? '#FF9800' : '#999'} />
+          <Text style={{ fontSize: scale(12), fontFamily: leaveTab === 'form' ? FONT_FAMILY.urbanistBold : FONT_FAMILY.urbanistMedium, color: leaveTab === 'form' ? '#FF9800' : '#999' }}>New Request</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: scale(10), gap: scale(4), borderBottomWidth: leaveTab === 'history' ? 2 : 0, borderBottomColor: '#FF9800' }}
+          onPress={() => { setLeaveTab('history'); fetchLeaveHistory(); }}
+        >
+          <MaterialIcons name="history" size={scale(16)} color={leaveTab === 'history' ? '#FF9800' : '#999'} />
+          <Text style={{ fontSize: scale(12), fontFamily: leaveTab === 'history' ? FONT_FAMILY.urbanistBold : FONT_FAMILY.urbanistMedium, color: leaveTab === 'history' ? '#FF9800' : '#999' }}>My Requests</Text>
+        </TouchableOpacity>
+      </View>
+
+      {leaveTab === 'form' ? (
+        <View style={{ paddingHorizontal: scale(4) }}>
+          {/* Leave Type */}
+          <Text style={{ fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginBottom: scale(6) }}>Leave Type *</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: scale(6), marginBottom: scale(10) }}>
+            {LEAVE_TYPES.map(type => (
+              <TouchableOpacity
+                key={type.value}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', paddingHorizontal: scale(10), paddingVertical: scale(6),
+                  borderRadius: scale(16), borderWidth: 1, gap: scale(4),
+                  borderColor: leaveType === type.value ? type.color : '#E0E0E0',
+                  backgroundColor: leaveType === type.value ? type.color + '20' : '#FAFAFA',
+                }}
+                onPress={() => setLeaveType(type.value)}
+              >
+                <MaterialIcons name={type.icon} size={scale(14)} color={leaveType === type.value ? type.color : '#999'} />
+                <Text style={{ fontSize: scale(11), fontFamily: leaveType === type.value ? FONT_FAMILY.urbanistBold : FONT_FAMILY.urbanistMedium, color: leaveType === type.value ? type.color : '#666' }}>{type.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* From Date */}
+          <Text style={{ fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginBottom: scale(6) }}>From Date *</Text>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: scale(10), padding: scale(10), gap: scale(8), marginBottom: scale(10) }}
+            onPress={openLeaveFromPicker}
+          >
+            <MaterialIcons name="event" size={scale(18)} color="#FF9800" />
+            <Text style={{ flex: 1, fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistMedium, color: '#333' }}>{formatLeaveDate(leaveFromDate)}</Text>
+            <MaterialIcons name="arrow-drop-down" size={scale(18)} color="#999" />
+          </TouchableOpacity>
+          {Platform.OS === 'ios' && showLeaveFromPicker && (
+            <DateTimePicker
+              value={leaveFromDate || new Date()}
+              mode="date"
+              display="inline"
+              minimumDate={new Date()}
+              onChange={(event, date) => {
+                if (event?.type === 'set' && date instanceof Date) {
+                  setLeaveFromDate(date);
+                  if (leaveToDate && date > leaveToDate) setLeaveToDate(null);
+                  setShowLeaveFromPicker(false);
+                } else if (event?.type === 'dismissed') {
+                  setShowLeaveFromPicker(false);
+                }
+              }}
+            />
+          )}
+
+          {/* Half Day Toggle */}
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: isHalfDay ? '#FFF3E0' : '#fff', borderWidth: 1, borderColor: isHalfDay ? '#FF9800' : '#E0E0E0', borderRadius: scale(10), padding: scale(12), gap: scale(10), marginBottom: scale(10) }}
+            onPress={() => { setIsHalfDay(!isHalfDay); if (!isHalfDay) setLeaveToDate(null); }}
+          >
+            <MaterialIcons name={isHalfDay ? 'check-box' : 'check-box-outline-blank'} size={scale(22)} color={isHalfDay ? '#FF9800' : '#999'} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistBold, color: isHalfDay ? '#FF9800' : '#333' }}>Half Day Leave</Text>
+              <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#888' }}>Apply for 0.5 day leave</Text>
+            </View>
+          </TouchableOpacity>
+
+          {/* To Date (hidden when half day) */}
+          {!isHalfDay && (
+          <>
+          <Text style={{ fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginBottom: scale(6) }}>To Date (optional)</Text>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: scale(10), padding: scale(10), gap: scale(8), marginBottom: scale(6) }}
+            onPress={openLeaveToPicker}
+          >
+            <MaterialIcons name="event" size={scale(18)} color={leaveToDate ? '#FF9800' : '#CCC'} />
+            <Text style={{ flex: 1, fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistMedium, color: leaveToDate ? '#333' : '#999' }}>{leaveToDate ? formatLeaveDate(leaveToDate) : 'Single day leave'}</Text>
+            {leaveToDate && (
+              <TouchableOpacity onPress={() => setLeaveToDate(null)} style={{ marginRight: scale(4) }}>
+                <MaterialIcons name="close" size={scale(16)} color="#999" />
+              </TouchableOpacity>
+            )}
+            <MaterialIcons name="arrow-drop-down" size={scale(18)} color="#999" />
+          </TouchableOpacity>
+          {Platform.OS === 'ios' && showLeaveToPicker && (
+            <DateTimePicker
+              value={leaveToDate || leaveFromDate || new Date()}
+              mode="date"
+              display="inline"
+              minimumDate={leaveFromDate || new Date()}
+              onChange={(event, date) => {
+                if (event?.type === 'set' && date instanceof Date) {
+                  setLeaveToDate(date);
+                  setShowLeaveToPicker(false);
+                } else if (event?.type === 'dismissed') {
+                  setShowLeaveToPicker(false);
+                }
+              }}
+            />
+          )}
+          </>
+          )}
+
+          {/* Days count */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF3E0', borderRadius: scale(8), padding: scale(8), gap: scale(6), marginBottom: scale(10) }}>
+            <MaterialIcons name="date-range" size={scale(16)} color="#FF9800" />
+            <Text style={{ fontSize: scale(12), fontFamily: FONT_FAMILY.urbanistBold, color: '#FF9800' }}>
+              {isHalfDay ? '0.5 day' : leaveToDate && leaveToDate >= leaveFromDate ? `${Math.ceil((leaveToDate - leaveFromDate) / (1000 * 60 * 60 * 24)) + 1} day(s)` : '1 day'}
+            </Text>
+          </View>
+
+          {/* Reason */}
+          <Text style={{ fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginBottom: scale(6) }}>Reason *</Text>
+          <TextInput
+            style={{ borderWidth: 1, borderColor: '#E0E0E0', borderRadius: scale(10), padding: scale(10), fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistMedium, color: '#333', backgroundColor: '#fff', minHeight: scale(80) }}
+            placeholder="Enter the reason for your leave..."
+            placeholderTextColor="#999"
+            multiline
+            numberOfLines={3}
+            value={leaveReason}
+            onChangeText={setLeaveReason}
+            textAlignVertical="top"
+          />
+
+          {/* Submit */}
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: !leaveReason.trim() ? '#CCC' : '#FF9800', borderRadius: scale(10), padding: scale(12), marginTop: scale(12), gap: scale(6) }}
+            disabled={!leaveReason.trim() || loading}
+            onPress={handleLeaveSubmit}
+          >
+            <MaterialIcons name="send" size={scale(18)} color="#fff" />
+            <Text style={{ fontSize: scale(14), fontFamily: FONT_FAMILY.urbanistBold, color: '#fff' }}>Submit Request</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        /* History Tab */
+        <View>
+          {leaveRequests.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingTop: scale(40) }}>
+              <MaterialIcons name="event-available" size={scale(40)} color="#4CAF50" />
+              <Text style={{ fontSize: scale(14), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginTop: scale(10) }}>No leave requests</Text>
+            </View>
+          ) : (
+            leaveRequests.map(req => {
+              const stateColor = getLeaveStateColor(req.state);
+              const typeInfo = LEAVE_TYPES.find(t => t.value === req.leaveType);
+              const canCancel = ['draft', 'pending', 'approved'].includes(req.state);
+              return (
+                <View key={req.id} style={{ backgroundColor: '#fff', borderRadius: scale(10), padding: scale(12), marginBottom: scale(8), elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: scale(8) }}>
+                    <View style={{ paddingHorizontal: scale(8), paddingVertical: scale(3), borderRadius: scale(10), backgroundColor: (typeInfo?.color || '#607D8B') + '20' }}>
+                      <Text style={{ fontSize: scale(10), fontFamily: FONT_FAMILY.urbanistBold, color: typeInfo?.color || '#607D8B' }}>{typeInfo?.label || req.leaveType}</Text>
+                    </View>
+                    <View style={{ paddingHorizontal: scale(8), paddingVertical: scale(3), borderRadius: scale(10), backgroundColor: stateColor + '20' }}>
+                      <Text style={{ fontSize: scale(10), fontFamily: FONT_FAMILY.urbanistBold, color: stateColor }}>{getLeaveStateLabel(req.state)}</Text>
+                    </View>
+                  </View>
+                  <View style={{ backgroundColor: '#FAFAFA', borderRadius: scale(6), padding: scale(8), gap: scale(4) }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(6) }}>
+                      <Feather name="calendar" size={scale(12)} color="#888" />
+                      <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#555' }}>
+                        {formatLeaveDate(req.fromDate)}{req.toDate ? ` → ${formatLeaveDate(req.toDate)}` : ' (Single day)'}
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(6) }}>
+                      <Feather name="clock" size={scale(12)} color="#888" />
+                      <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#555' }}>{req.numberOfDays} day(s)</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(6) }}>
+                      <Feather name="file-text" size={scale(12)} color="#888" />
+                      <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#555' }} numberOfLines={2}>{req.reason}</Text>
+                    </View>
+                    {req.approvedBy ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(6) }}>
+                        <Feather name="user-check" size={scale(12)} color="#888" />
+                        <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#555' }}>By: {req.approvedBy}</Text>
+                      </View>
+                    ) : null}
+                    {req.rejectionReason ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(6) }}>
+                        <Feather name="x-circle" size={scale(12)} color="#E74C3C" />
+                        <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#E74C3C' }}>{req.rejectionReason}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  {canCancel && (
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: scale(8), paddingTop: scale(6), borderTopWidth: 1, borderTopColor: '#F0F0F0', gap: scale(4) }}
+                      onPress={() => handleLeaveCancel(req.id)}
+                    >
+                      <MaterialIcons name="cancel" size={scale(14)} color="#E74C3C" />
+                      <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistSemiBold, color: '#E74C3C' }}>Cancel Request</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })
+          )}
+        </View>
+      )}
+    </View>
+  );
+
+  // =============================================
+  // WAIVER REQUEST: helpers, fetchers & handler
+  // =============================================
+  const fetchEligibleLateAttendances = async () => {
+    const empId = verifiedEmployee?.id;
+    if (!empId) return;
+    const records = await getEligibleLateAttendances(empId);
+    setEligibleLateAttendances(records);
+  };
+
+  const fetchWaiverRequests = async () => {
+    const empId = verifiedEmployee?.id;
+    if (!empId) return;
+    const records = await getMyWaiverRequests(empId);
+    setWaiverRequests(records);
+  };
+
+  const handleWaiverSubmit = () => {
+    if (!selectedWaiverAttendanceId) {
+      showToastMessage('Please select a late attendance record');
+      return;
+    }
+    if (!waiverReason.trim()) {
+      showToastMessage('Please enter a reason for the waiver');
+      return;
+    }
+    const selected = eligibleLateAttendances.find(r => r.id === selectedWaiverAttendanceId);
+    Alert.alert(
+      'Submit Waiver Request',
+      `Date: ${selected?.date || ''}\nLate: ${formatLateDuration(selected?.lateMinutes, selected?.lateMinutesDisplay)}\nDeduction: ${selected?.deductionAmount || 0}\n\nReason: ${waiverReason.trim()}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Submit',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const empId = verifiedEmployee?.id;
+              const result = await submitWaiverRequest(empId, selectedWaiverAttendanceId, waiverReason.trim());
+              if (result.success) {
+                showToastMessage('Waiver request submitted for approval!');
+                setWaiverReason('');
+                setSelectedWaiverAttendanceId(null);
+                await fetchWaiverRequests();
+                await fetchEligibleLateAttendances();
+                setWaiverTab('history');
+              } else {
+                Alert.alert('Error', result.error || 'Failed to submit');
+              }
+            } catch (error) {
+              Alert.alert('Error', error?.message || 'Failed to submit');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Auto-fetch eligible records & waiver list when entering waiver mode
+  useEffect(() => {
+    if (attendanceMode === 'waiver' && isVerified && verifiedEmployee?.id) {
+      fetchEligibleLateAttendances();
+      fetchWaiverRequests();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attendanceMode, isVerified, verifiedEmployee]);
+
+  const getWaiverStateColor = (state) => {
+    switch (state) {
+      case 'draft': return '#9E9E9E';
+      case 'pending': return '#FF9800';
+      case 'approved': return '#4CAF50';
+      case 'rejected': return '#F44336';
+      default: return '#9E9E9E';
+    }
+  };
+
+  const getWaiverStateLabel = (state) => {
+    switch (state) {
+      case 'draft': return 'Draft';
+      case 'pending': return 'Pending';
+      case 'approved': return 'Approved';
+      case 'rejected': return 'Rejected';
+      default: return state;
+    }
+  };
+
+  const renderWaiverSection = () => (
+    <View style={{ flex: 1 }}>
+      {/* Tab Bar */}
+      <View style={{ flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F0F0F0', marginBottom: scale(8) }}>
+        <TouchableOpacity
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: scale(10), gap: scale(4), borderBottomWidth: waiverTab === 'form' ? 2 : 0, borderBottomColor: '#9C27B0' }}
+          onPress={() => { setWaiverTab('form'); fetchEligibleLateAttendances(); }}
+        >
+          <MaterialIcons name="add-circle-outline" size={scale(16)} color={waiverTab === 'form' ? '#9C27B0' : '#999'} />
+          <Text style={{ fontSize: scale(12), fontFamily: waiverTab === 'form' ? FONT_FAMILY.urbanistBold : FONT_FAMILY.urbanistMedium, color: waiverTab === 'form' ? '#9C27B0' : '#999' }}>New Request</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: scale(10), gap: scale(4), borderBottomWidth: waiverTab === 'history' ? 2 : 0, borderBottomColor: '#9C27B0' }}
+          onPress={() => { setWaiverTab('history'); fetchWaiverRequests(); }}
+        >
+          <MaterialIcons name="history" size={scale(16)} color={waiverTab === 'history' ? '#9C27B0' : '#999'} />
+          <Text style={{ fontSize: scale(12), fontFamily: waiverTab === 'history' ? FONT_FAMILY.urbanistBold : FONT_FAMILY.urbanistMedium, color: waiverTab === 'history' ? '#9C27B0' : '#999' }}>My Requests</Text>
+        </TouchableOpacity>
+      </View>
+
+      {waiverTab === 'form' ? (
+        <View style={{ paddingHorizontal: scale(4) }}>
+          <Text style={{ fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginBottom: scale(6) }}>Select Late Attendance *</Text>
+          <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#888', marginBottom: scale(8) }}>Last 30 days · only un-waived records</Text>
+
+          {eligibleLateAttendances.length === 0 ? (
+            <View style={{ alignItems: 'center', backgroundColor: '#FAFAFA', borderRadius: scale(10), padding: scale(20), marginBottom: scale(10) }}>
+              <MaterialIcons name="check-circle" size={scale(36)} color="#4CAF50" />
+              <Text style={{ fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginTop: scale(8) }}>No late records found</Text>
+              <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#888', marginTop: scale(4), textAlign: 'center' }}>You have no eligible late attendances to waive.</Text>
+            </View>
+          ) : (
+            <View style={{ marginBottom: scale(10) }}>
+              {eligibleLateAttendances.map(rec => {
+                const isSelected = selectedWaiverAttendanceId === rec.id;
+                const isDisabled = rec.isWaived;
+                return (
+                  <TouchableOpacity
+                    key={rec.id}
+                    disabled={isDisabled}
+                    activeOpacity={0.7}
+                    onPress={() => setSelectedWaiverAttendanceId(rec.id)}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center', backgroundColor: isSelected ? '#F3E5F5' : '#fff',
+                      borderWidth: 1, borderColor: isSelected ? '#9C27B0' : '#E0E0E0',
+                      borderRadius: scale(10), padding: scale(10), gap: scale(10), marginBottom: scale(6),
+                      opacity: isDisabled ? 0.5 : 1,
+                    }}
+                  >
+                    <MaterialIcons name={isSelected ? 'radio-button-checked' : 'radio-button-unchecked'} size={scale(20)} color={isSelected ? '#9C27B0' : '#999'} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: scale(12), fontFamily: FONT_FAMILY.urbanistBold, color: '#333' }}>
+                        {rec.date} · {rec.checkInTime}
+                      </Text>
+                      <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#888', marginTop: scale(2) }}>
+                        Late {formatLateDuration(rec.lateMinutes, rec.lateMinutesDisplay)} · Deduction: {rec.deductionAmount}
+                      </Text>
+                      {rec.lateReason ? (
+                        <Text style={{ fontSize: scale(10), fontFamily: FONT_FAMILY.urbanistMedium, color: '#666', marginTop: scale(2) }} numberOfLines={1}>
+                          "{rec.lateReason}"
+                        </Text>
+                      ) : null}
+                    </View>
+                    {rec.isWaived && (
+                      <View style={{ paddingHorizontal: scale(6), paddingVertical: scale(2), borderRadius: scale(8), backgroundColor: '#E8F5E9' }}>
+                        <Text style={{ fontSize: scale(9), fontFamily: FONT_FAMILY.urbanistBold, color: '#4CAF50' }}>WAIVED</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Reason */}
+          <Text style={{ fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginBottom: scale(6) }}>Reason for Waiver *</Text>
+          <TextInput
+            style={{ borderWidth: 1, borderColor: '#E0E0E0', borderRadius: scale(10), padding: scale(10), fontSize: scale(13), fontFamily: FONT_FAMILY.urbanistMedium, color: '#333', backgroundColor: '#fff', minHeight: scale(80) }}
+            placeholder="e.g., office errand, client visit, traffic incident..."
+            placeholderTextColor="#999"
+            multiline
+            numberOfLines={3}
+            value={waiverReason}
+            onChangeText={setWaiverReason}
+            textAlignVertical="top"
+          />
+
+          {/* Submit */}
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: (!selectedWaiverAttendanceId || !waiverReason.trim()) ? '#CCC' : '#9C27B0', borderRadius: scale(10), padding: scale(12), marginTop: scale(12), gap: scale(6) }}
+            disabled={!selectedWaiverAttendanceId || !waiverReason.trim() || loading}
+            onPress={handleWaiverSubmit}
+          >
+            <MaterialIcons name="send" size={scale(18)} color="#fff" />
+            <Text style={{ fontSize: scale(14), fontFamily: FONT_FAMILY.urbanistBold, color: '#fff' }}>Submit Waiver Request</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        /* History Tab */
+        <View>
+          {waiverRequests.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingTop: scale(40) }}>
+              <MaterialIcons name="gavel" size={scale(40)} color="#9C27B0" />
+              <Text style={{ fontSize: scale(14), fontFamily: FONT_FAMILY.urbanistBold, color: '#333', marginTop: scale(10) }}>No waiver requests</Text>
+            </View>
+          ) : (
+            waiverRequests.map(req => {
+              const stateColor = getWaiverStateColor(req.state);
+              return (
+                <View key={req.id} style={{ backgroundColor: '#fff', borderRadius: scale(10), padding: scale(12), marginBottom: scale(8), elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: scale(8) }}>
+                    <Text style={{ fontSize: scale(12), fontFamily: FONT_FAMILY.urbanistBold, color: '#333' }}>
+                      {req.lateDate}
+                    </Text>
+                    <View style={{ paddingHorizontal: scale(8), paddingVertical: scale(3), borderRadius: scale(10), backgroundColor: stateColor + '20' }}>
+                      <Text style={{ fontSize: scale(10), fontFamily: FONT_FAMILY.urbanistBold, color: stateColor }}>{getWaiverStateLabel(req.state)}</Text>
+                    </View>
+                  </View>
+                  <View style={{ backgroundColor: '#FAFAFA', borderRadius: scale(6), padding: scale(8), gap: scale(4) }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(6) }}>
+                      <Feather name="clock" size={scale(12)} color="#888" />
+                      <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#555' }}>
+                        Late {formatLateDuration(req.lateMinutes, req.lateMinutesDisplay)} · Deduction: {req.originalDeduction}
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: scale(6) }}>
+                      <Feather name="file-text" size={scale(12)} color="#888" style={{ marginTop: scale(2) }} />
+                      <Text style={{ flex: 1, fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#555' }}>{req.reason}</Text>
+                    </View>
+                    {req.approvedBy ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: scale(6) }}>
+                        <Feather name="user-check" size={scale(12)} color="#888" />
+                        <Text style={{ fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#555' }}>By: {req.approvedBy}</Text>
+                      </View>
+                    ) : null}
+                    {req.rejectionReason ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: scale(6) }}>
+                        <Feather name="x-circle" size={scale(12)} color="#E74C3C" style={{ marginTop: scale(2) }} />
+                        <Text style={{ flex: 1, fontSize: scale(11), fontFamily: FONT_FAMILY.urbanistMedium, color: '#E74C3C' }}>{req.rejectionReason}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })
+          )}
+        </View>
+      )}
+    </View>
+  );
+
+  // =============================================
   // RENDER: OFFICE SECTION (existing flow)
   // =============================================
   const renderOfficeSection = () => (
@@ -1069,7 +1778,7 @@ const UserAttendanceScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <NavigationHeader
-        title={attendanceMode === 'wfh' ? 'Work From Home' : attendanceMode === 'office' ? 'Office Attendance' : 'Attendance'}
+        title={attendanceMode === 'wfh' ? 'Work From Home' : attendanceMode === 'office' ? 'Office Attendance' : attendanceMode === 'leave' ? 'Leave Request' : attendanceMode === 'waiver' ? 'Late Waiver Request' : 'Attendance'}
         color={COLORS.black}
         backgroundColor={COLORS.white}
         onBackPress={handleBackPress}
@@ -1116,7 +1825,7 @@ const UserAttendanceScreen = ({ navigation }) => {
                   disabled={loading}
                   activeOpacity={0.7}
                 >
-                  <MaterialIcons name="fingerprint" size={scale(56)} color={attendanceMode === 'wfh' ? '#2196F3' : COLORS.primaryThemeColor} />
+                  <MaterialIcons name="fingerprint" size={scale(56)} color={attendanceMode === 'wfh' ? '#2196F3' : attendanceMode === 'leave' ? '#FF9800' : COLORS.primaryThemeColor} />
                 </TouchableOpacity>
                 <Text style={styles.pinTitle}>Scan Fingerprint</Text>
                 <Text style={styles.pinSubtitle}>Tap to verify your identity</Text>
@@ -1132,7 +1841,7 @@ const UserAttendanceScreen = ({ navigation }) => {
               {/* PIN Input */}
               <View style={styles.pinInputSection}>
                 <View style={styles.pinInputHeader}>
-                  <MaterialIcons name="dialpad" size={scale(20)} color={attendanceMode === 'wfh' ? '#2196F3' : COLORS.primaryThemeColor} />
+                  <MaterialIcons name="dialpad" size={scale(20)} color={attendanceMode === 'wfh' ? '#2196F3' : attendanceMode === 'leave' ? '#FF9800' : COLORS.primaryThemeColor} />
                   <Text style={styles.pinInputTitle}>Enter PIN</Text>
                 </View>
                 <TextInput
@@ -1168,6 +1877,8 @@ const UserAttendanceScreen = ({ navigation }) => {
           {/* Verified Content */}
           {attendanceMode === 'office' && isVerified && renderOfficeSection()}
           {attendanceMode === 'wfh' && isVerified && renderWfhSection()}
+          {attendanceMode === 'leave' && isVerified && renderLeaveSection()}
+          {attendanceMode === 'waiver' && isVerified && renderWaiverSection()}
         </RoundedScrollContainer>
       </KeyboardAvoidingView>
 
@@ -1224,6 +1935,63 @@ const UserAttendanceScreen = ({ navigation }) => {
               </View>
             </View>
           </Camera>
+        </View>
+      </Modal>
+
+      {/* Late Reason Modal */}
+      <Modal
+        visible={showLateReasonModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {}}
+      >
+        <View style={styles.lateModalOverlay}>
+          <View style={styles.lateModalContainer}>
+            <View style={styles.lateModalHeader}>
+              <MaterialIcons name="schedule" size={scale(28)} color="#E74C3C" />
+              <Text style={styles.lateModalTitle}>You're Late</Text>
+            </View>
+            <Text style={styles.lateModalSubtitle}>
+              You are {formatLateDuration(lateInfo?.lateMinutes, lateInfo?.lateMinutesDisplay)} late today
+              {lateInfo?.lateSequence ? ` (Late #${lateInfo.lateSequence} this month)` : ''}
+            </Text>
+            {lateInfo?.deductionAmount > 0 && (
+              <Text style={styles.lateDeductionText}>
+                Salary deduction: {lateInfo.deductionAmount}
+              </Text>
+            )}
+            <Text style={styles.lateReasonLabel}>Please provide a reason:</Text>
+            <TextInput
+              style={styles.lateReasonInput}
+              placeholder="Enter your reason for being late..."
+              placeholderTextColor="#999"
+              multiline
+              numberOfLines={3}
+              value={lateReasonText}
+              onChangeText={setLateReasonText}
+              textAlignVertical="top"
+            />
+            <TouchableOpacity
+              style={[styles.lateSubmitButton, !lateReasonText.trim() && styles.lateSubmitButtonDisabled]}
+              disabled={!lateReasonText.trim()}
+              onPress={async () => {
+                if (!lateReasonText.trim() || !pendingLateAttendanceId) return;
+                setLoading(true);
+                try {
+                  await submitLateReason(pendingLateAttendanceId, lateReasonText.trim());
+                  showToastMessage('Late reason submitted');
+                } catch (err) {
+                  console.log('[Attendance] Late reason submit error:', err?.message);
+                }
+                setShowLateReasonModal(false);
+                setLateReasonText('');
+                setPendingLateAttendanceId(null);
+                setLoading(false);
+              }}
+            >
+              <Text style={styles.lateSubmitButtonText}>Submit Reason</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -1361,6 +2129,19 @@ const styles = StyleSheet.create({
   countdownContainer: { alignItems: 'center', paddingBottom: scale(80) },
   countdownNumber: { fontSize: scale(64), fontWeight: 'bold', color: COLORS.white, fontFamily: FONT_FAMILY.urbanistBold },
   countdownText: { fontSize: scale(16), color: COLORS.white, fontFamily: FONT_FAMILY.urbanistMedium, marginTop: 8 },
+
+  // Late Reason Modal
+  lateModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: scale(20) },
+  lateModalContainer: { backgroundColor: COLORS.white, borderRadius: scale(16), padding: scale(20), width: '100%', maxWidth: 400, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 },
+  lateModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: scale(8) },
+  lateModalTitle: { fontSize: scale(20), fontWeight: 'bold', color: '#E74C3C', fontFamily: FONT_FAMILY.urbanistBold, marginLeft: scale(8) },
+  lateModalSubtitle: { fontSize: scale(14), color: COLORS.gray, fontFamily: FONT_FAMILY.urbanistMedium, textAlign: 'center', marginBottom: scale(6) },
+  lateDeductionText: { fontSize: scale(13), color: '#E74C3C', fontFamily: FONT_FAMILY.urbanistBold, textAlign: 'center', marginBottom: scale(10), backgroundColor: '#FDE8E8', paddingVertical: scale(6), paddingHorizontal: scale(12), borderRadius: scale(8) },
+  lateReasonLabel: { fontSize: scale(13), fontWeight: '600', color: COLORS.black, fontFamily: FONT_FAMILY.urbanistBold, marginBottom: scale(6), marginTop: scale(4) },
+  lateReasonInput: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: scale(10), padding: scale(12), fontSize: scale(14), fontFamily: FONT_FAMILY.urbanistMedium, color: COLORS.black, backgroundColor: '#FAFAFA', minHeight: scale(80), marginBottom: scale(14) },
+  lateSubmitButton: { backgroundColor: COLORS.primaryThemeColor, borderRadius: scale(10), padding: scale(14), alignItems: 'center' },
+  lateSubmitButtonDisabled: { backgroundColor: '#CCC' },
+  lateSubmitButtonText: { fontSize: scale(15), fontWeight: 'bold', color: COLORS.white, fontFamily: FONT_FAMILY.urbanistBold },
 });
 
 export default UserAttendanceScreen;

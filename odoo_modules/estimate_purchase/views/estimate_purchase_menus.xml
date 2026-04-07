@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="estimate_purchase_menu_root" name="Estimate Purchase" sequence="49" web_icon="estimate_purchase,static/description/icon.png" groups="purchase.group_purchase_user"/>
+    <menuitem id="estimate_purchase_menu_purchases" name="Purchases" parent="estimate_purchase_menu_root" sequence="10"/>
+    <menuitem id="estimate_purchase_menu_action" name="Estimate Purchase Entry" parent="estimate_purchase_menu_purchases" action="estimate_purchase_action" sequence="10"/>
+    <menuitem id="estimate_purchase_menu_configuration" name="Configuration" parent="estimate_purchase_menu_root" sequence="90" groups="purchase.group_purchase_manager"/>
+    <menuitem id="estimate_purchase_menu_payment_methods" name="Payment Methods" parent="estimate_purchase_menu_configuration" action="estimate_purchase_payment_method_action" sequence="10"/>
+    <menuitem id="estimate_purchase_menu_in_purchase" name="Estimate Purchase" parent="purchase.menu_purchase_root" action="estimate_purchase_action" sequence="7"/>
+</odoo>

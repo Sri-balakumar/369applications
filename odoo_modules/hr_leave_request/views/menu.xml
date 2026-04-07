@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Root Menu under Attendance -->
+    <menuitem id="menu_leave_root"
+              name="Leave Requests"
+              parent="hr_attendance.menu_hr_attendance_root"
+              sequence="40"/>
+
+    <!-- All Leave Requests (Manager only) -->
+    <menuitem id="menu_leave_all_requests"
+              name="All Leave Requests"
+              parent="menu_leave_root"
+              action="action_leave_request"
+              sequence="10"
+              groups="hr_leave_request.group_leave_manager,base.group_system"/>
+
+    <!-- My Leave Requests (All users) -->
+    <menuitem id="menu_my_leave_requests"
+              name="My Leave Requests"
+              parent="menu_leave_root"
+              action="action_my_leave_requests"
+              sequence="20"/>
+
+    <!-- Approved Leaves Report -->
+    <menuitem id="menu_approved_leaves_report"
+              name="Approved Leaves Report"
+              parent="menu_leave_root"
+              action="action_approved_leaves_report"
+              sequence="30"/>
+
+    <!-- Configuration -->
+    <menuitem id="menu_leave_config_root"
+              name="Configuration"
+              parent="menu_leave_root"
+              sequence="50"/>
+
+    <menuitem id="menu_leave_policy_config"
+              name="Leave Policy"
+              parent="menu_leave_config_root"
+              action="action_leave_config"
+              sequence="10"
+              groups="hr_leave_request.group_leave_manager,base.group_system"/>
+
+</odoo>

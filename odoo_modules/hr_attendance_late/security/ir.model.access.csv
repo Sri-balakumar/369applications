@@ -1,0 +1,12 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_late_config_manager,hr.attendance.late.config.manager,model_hr_attendance_late_config,hr.group_hr_manager,1,1,1,1
+access_late_config_user,hr.attendance.late.config.user,model_hr_attendance_late_config,base.group_user,1,0,0,0
+access_deduction_slab_manager,hr.late.deduction.slab.manager,model_hr_late_deduction_slab,hr.group_hr_manager,1,1,1,1
+access_deduction_slab_user,hr.late.deduction.slab.user,model_hr_late_deduction_slab,base.group_user,1,0,0,0
+access_late_summary_wizard_manager,hr.attendance.late.summary.wizard.manager,model_hr_attendance_late_summary_wizard,hr.group_hr_manager,1,1,1,1
+access_late_summary_line_manager,hr.attendance.late.summary.line.manager,model_hr_attendance_late_summary_line,hr.group_hr_manager,1,1,1,1
+access_late_summary_line_user,hr.attendance.late.summary.line.user,model_hr_attendance_late_summary_line,base.group_user,1,0,0,0
+access_public_holiday_manager,hr.public.holiday.manager,model_hr_public_holiday,hr.group_hr_manager,1,1,1,1
+access_public_holiday_user,hr.public.holiday.user,model_hr_public_holiday,base.group_user,1,0,0,0
+access_late_waiver_manager,hr.late.waiver.request.manager,model_hr_late_waiver_request,hr.group_hr_manager,1,1,1,1
+access_late_waiver_user,hr.late.waiver.request.user,model_hr_late_waiver_request,base.group_user,1,1,1,0
