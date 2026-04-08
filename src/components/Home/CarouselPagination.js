@@ -1,37 +1,59 @@
-import { View, StyleSheet, Dimensions, Image } from 'react-native'
+import { View, StyleSheet, Dimensions, Image, TouchableOpacity } from 'react-native'
 import React, { useState, useCallback } from 'react'
 import Carousel, { Pagination } from 'react-native-snap-carousel';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { fetchAppBannersOdoo } from '@api/services/generalApi';
 import { COLORS } from '@constants/theme';
 
 const { width: screenWidth } = Dimensions.get('window');
 
-const FALLBACK_DATA = [
-    { image: require('@assets/images/Home/Banner/banner_phone_1.jpg') },
-    { image: require('@assets/images/Home/Banner/banner_phone_2.jpg') },
-    { image: require('@assets/images/Home/Banner/banner_phone_3.jpg') },
-    { image: require('@assets/images/Home/Banner/banner_phone_4.jpg') },
-    { image: require('@assets/images/Home/Banner/banner_phone_5.jpg') }
-];
-
 const CarouselPagination = () => {
+    const navigation = useNavigation();
     const [activeSlide, setActiveSlide] = useState(0);
-    const [data, setData] = useState(FALLBACK_DATA);
+    const [data, setData] = useState([]);
+    const [loaded, setLoaded] = useState(false);
 
     useFocusEffect(useCallback(() => {
-        fetchAppBannersOdoo().then(banners => {
-            if (banners && banners.length > 0) {
-                setData(banners.map(b => ({
-                    id: b.id,
-                    image: { uri: `data:image/png;base64,${b.image}` },
-                })));
-            }
-        }).catch(() => {});
+        fetchAppBannersOdoo()
+            .then(banners => {
+                if (banners && banners.length > 0) {
+                    setData(banners.map(b => ({
+                        id: b.id,
+                        image: { uri: `data:image/png;base64,${b.image}` },
+                    })));
+                } else {
+                    setData([]);
+                }
+            })
+            .catch(() => { setData([]); })
+            .finally(() => { setLoaded(true); });
     }, []));
 
     const sliderWidth = screenWidth - 24;
 
+    // Until the first fetch completes, render nothing — avoids flashing the
+    // plus button before real banners arrive.
+    if (!loaded) {
+        return <View style={styles.wrapper} />;
+    }
+
+    // No banners → show only a plus tile that opens Banner Management.
+    if (data.length === 0) {
+        return (
+            <View style={styles.wrapper}>
+                <TouchableOpacity
+                    style={styles.addBannerCard}
+                    activeOpacity={0.7}
+                    onPress={() => navigation.navigate('BannerManagementScreen')}
+                >
+                    <MaterialIcons name="add" size={48} color={COLORS.primaryThemeColor} />
+                </TouchableOpacity>
+            </View>
+        );
+    }
+
+    // Banners exist → carousel only, no plus button.
     return (
         <View style={styles.wrapper}>
             <Carousel
@@ -83,6 +105,17 @@ const styles = StyleSheet.create({
         height: 170,
         borderRadius: 14,
         resizeMode: 'cover',
+    },
+    addBannerCard: {
+        marginHorizontal: 12,
+        height: 170,
+        borderRadius: 14,
+        borderWidth: 2,
+        borderStyle: 'dashed',
+        borderColor: COLORS.primaryThemeColor,
+        backgroundColor: '#f5f6fa',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     paginationContainer: {
         paddingVertical: 8,

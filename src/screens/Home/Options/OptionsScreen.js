@@ -49,6 +49,7 @@ const OptionsScreen = ({ navigation }) => {
   const baseOptions = [
     { title: 'Search Products', image: require('@assets/images/Home/options/search_product.png'), onPress: () => navigation.navigate('Products') },
     { title: 'Scan Barcode', image: require('@assets/images/Home/options/scan_barcode.png'), onPress: () => navigation.navigate('Scanner') },
+    { title: 'User Attendance', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('UserAttendanceScreen') },
     { title: 'Customers', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('CustomersPage1Screen') },
     { title: 'Purchases', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('PurchasesScreen') },
     { title: 'Easy Sales', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('EasySalesListScreen') },
@@ -68,7 +69,6 @@ const OptionsScreen = ({ navigation }) => {
     { title: 'WhatsApp', image: require('@assets/icons/common/watsapp.png'), onPress: () => navigation.navigate('WhatsAppScreen') },
     { title: 'Contacts', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => setShowContacts(true) },
     { title: 'Cost Protection', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('SaleCostApprovalLogsScreen') },
-    { title: 'User Attendance', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('UserAttendanceScreen') },
     { title: 'Product Enquiry', image: require('@assets/images/Home/options/product_enquiry.png'), onPress: () => navigation.navigate('PriceEnquiryScreen') },
     { title: 'Transaction Auditing', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('AuditScreen') },
     { title: 'CRM', image: require('@assets/images/Home/options/crm.png'), onPress: () => navigation.navigate('CRM') },

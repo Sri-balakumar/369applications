@@ -811,21 +811,6 @@ const UserAttendanceScreen = ({ navigation }) => {
 
       <TouchableOpacity
         style={styles.modeCard}
-        onPress={() => setAttendanceMode('wfh')}
-        activeOpacity={0.8}
-      >
-        <View style={[styles.modeIconContainer, { backgroundColor: '#E3F2FD' }]}>
-          <MaterialIcons name="home-work" size={scale(32)} color="#2196F3" />
-        </View>
-        <View style={styles.modeTextContainer}>
-          <Text style={styles.modeCardTitle}>Work From Home</Text>
-          <Text style={styles.modeCardSubtitle}>Request WFH or check in if approved</Text>
-        </View>
-        <Feather name="chevron-right" size={scale(20)} color={COLORS.gray} />
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={styles.modeCard}
         onPress={() => setAttendanceMode('leave')}
         activeOpacity={0.8}
       >
