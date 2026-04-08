@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Root menu -->
+    <menuitem id="menu_offline_sync_root"
+              name="Offline Sync"
+              web_icon="offline_sync,static/description/icon.png"
+              groups="group_offline_sync_user"
+              sequence="105"/>
+
+    <!-- Sync Queue -->
+    <menuitem id="menu_offline_sync_queue"
+              name="Sync Queue"
+              parent="menu_offline_sync_root"
+              action="action_offline_sync_queue"
+              groups="group_offline_sync_user"
+              sequence="10"/>
+
+    <!-- Configuration -->
+    <menuitem id="menu_offline_sync_config"
+              name="Configuration"
+              parent="menu_offline_sync_root"
+              groups="group_offline_sync_manager"
+              sequence="90"/>
+
+    <menuitem id="menu_offline_sync_config_settings"
+              name="Settings"
+              parent="menu_offline_sync_config"
+              action="action_offline_sync_config_server"
+              groups="group_offline_sync_manager"
+              sequence="10"/>
+
+</odoo>

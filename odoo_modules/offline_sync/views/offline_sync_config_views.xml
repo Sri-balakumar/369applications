@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ════════════════════════════════════════════════════════
+         CONFIG FORM
+         ════════════════════════════════════════════════════════ -->
+    <record id="view_offline_sync_config_form" model="ir.ui.view">
+        <field name="name">offline.sync.config.form</field>
+        <field name="model">offline.sync.config</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_enable_all_installed_modules" type="object"
+                            string="Enable Offline for All Installed Modules"
+                            class="btn-primary"
+                            icon="fa-bolt"
+                            confirm="This will enable offline sync (LOCAL mode) for every installed module's models. Continue?"/>
+                    <button name="action_sync_all" type="object"
+                            string="Sync All to Online"
+                            class="btn-secondary"
+                            confirm="This will sync ALL pending local records to Odoo. Continue?"/>
+                    <button name="action_delete_all_local" type="object"
+                            string="Delete All Local Data"
+                            class="btn-danger"
+                            confirm="This will permanently delete ALL local JSON files and synced queue entries. Continue?"/>
+                    <button name="action_cross_check_all" type="object"
+                            string="Cross-Check All"
+                            class="btn-secondary"/>
+                    <button name="action_auto_add_models" type="object"
+                            string="Auto-Add Models"
+                            class="btn-secondary"
+                            icon="fa-magic"/>
+                    <button name="action_dedupe_model_lines" type="object"
+                            string="Dedupe Model Lines"
+                            class="btn-secondary"
+                            icon="fa-compress"
+                            help="Remove duplicate model line rows. Run if you see 'Expected singleton' errors."/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1>Offline Sync Settings</h1>
+                    </div>
+
+                    <group>
+                        <field name="company_id" groups="base.group_multi_company"/>
+                    </group>
+
+                    <separator string="Module Filter"/>
+                    <p class="text-muted">
+                        Select installed apps/modules to narrow the model list.
+                        Click "Auto-Add Models" to automatically add all relevant
+                        models from the selected modules.
+                    </p>
+                    <group>
+                        <field name="module_ids" widget="many2many_tags"
+                               placeholder="Select installed modules to filter..."/>
+                    </group>
+
+                    <separator string="Model Configuration"/>
+                    <field name="line_ids">
+                        <list editable="bottom">
+                            <field name="model_id"/>
+                            <field name="model_name" optional="hide"/>
+                            <field name="mode" widget="badge"
+                                   decoration-success="mode == 'online'"
+                                   decoration-warning="mode == 'local'"/>
+                            <field name="local_record_count" string="Local"/>
+                            <field name="online_record_count" string="Online"/>
+                            <field name="last_sync_date" optional="hide"/>
+                            <field name="cross_check_status" widget="badge"
+                                   decoration-success="cross_check_status == 'match'"
+                                   decoration-danger="cross_check_status == 'mismatch'"
+                                   decoration-info="cross_check_status == 'pending'"/>
+                            <button name="action_toggle_mode" type="object"
+                                    string="Toggle" icon="fa-exchange"
+                                    title="Switch between Local and Online"/>
+                            <button name="action_sync_to_online" type="object"
+                                    string="Sync" icon="fa-cloud-upload"
+                                    title="Sync local data to Odoo"/>
+                            <button name="action_delete_local" type="object"
+                                    string="Delete" icon="fa-trash"
+                                    title="Delete local data"
+                                    confirm="Delete all local files and synced queue entries for this model?"/>
+                            <button name="action_cross_check" type="object"
+                                    string="Check" icon="fa-check-circle"
+                                    title="Run cross-check"/>
+                        </list>
+                    </field>
+
+                    <separator string="Storage Settings"/>
+                    <group>
+                        <group>
+                            <field name="storage_path"
+                                   placeholder="Leave empty for default path"/>
+                            <field name="effective_storage_path" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="cross_check_interval_hours"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ════════════════════════════════════════════════════════
+         MODEL LINE FORM (popup when clicking a line)
+         ════════════════════════════════════════════════════════ -->
+    <record id="view_offline_sync_model_line_form" model="ir.ui.view">
+        <field name="name">offline.sync.model.line.form</field>
+        <field name="model">offline.sync.model.line</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_toggle_mode" type="object"
+                            string="Toggle Mode" class="btn-primary"/>
+                    <button name="action_sync_to_online" type="object"
+                            string="Sync to Online" class="btn-primary"
+                            confirm="Sync all pending local records for this model?"/>
+                    <button name="action_delete_local" type="object"
+                            string="Delete Local Data" class="btn-danger"
+                            confirm="Delete all local files and synced queue entries?"/>
+                    <button name="action_cross_check" type="object"
+                            string="Cross-Check" class="btn-secondary"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="model_id"/>
+                            <field name="model_name"/>
+                            <field name="mode"/>
+                        </group>
+                        <group>
+                            <field name="local_record_count"/>
+                            <field name="online_record_count"/>
+                            <field name="last_sync_date"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group>
+                            <field name="last_cross_check_date"/>
+                            <field name="cross_check_status" widget="badge"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="cross_check_detail"
+                               invisible="not cross_check_detail"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ════════════════════════════════════════════════════════
+         SERVER ACTION (singleton access)
+         ════════════════════════════════════════════════════════ -->
+    <record id="action_offline_sync_config_server" model="ir.actions.server">
+        <field name="name">Offline Sync Settings</field>
+        <field name="model_id" ref="model_offline_sync_config"/>
+        <field name="state">code</field>
+        <field name="code">
+config = env['offline.sync.config'].sudo().get_config()
+action = {
+    'type': 'ir.actions.act_window',
+    'name': 'Offline Sync Settings',
+    'res_model': 'offline.sync.config',
+    'view_mode': 'form',
+    'res_id': config.id,
+    'target': 'current',
+    'context': {'form_view_initial_mode': 'edit'},
+}
+        </field>
+    </record>
+
+</odoo>

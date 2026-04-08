@@ -2,7 +2,7 @@
   "expo": {
     "name": "369aiAlphalize",
     "slug": "369aialphalize",
-    "owner": "alphalizebuild",
+    "owner": "worarim",
     "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -100,7 +100,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "8b07aa71-947a-4c7f-80bc-9b082e9c615d"
+        "projectId": "8f16840e-61b3-42fb-8bb0-e20b2dfca396"
       }
     }
   }

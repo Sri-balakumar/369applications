@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="offline_sync.OfflineStatusSystray">
+        <Dropdown menuClass="'o_offline_sync_dropdown p-3'" position="'bottom-end'">
+            <button class="btn d-flex align-items-center px-1" title="Offline Sync Status">
+                <i t-attf-class="fa #{statusIcon}"/>
+                <span t-if="state.pendingCount > 0"
+                      t-attf-class="o_offline_sync_badge badge rounded-pill ms-1 #{isOnline ? 'bg-warning' : 'bg-danger'}">
+                    <t t-esc="state.pendingCount"/>
+                </span>
+            </button>
+            <t t-set-slot="content">
+                <div style="min-width: 260px;">
+                    <!-- Status -->
+                    <div class="d-flex align-items-center mb-3">
+                        <i t-attf-class="fa #{statusIcon} me-2" style="font-size: 1.2em;"/>
+                        <strong t-esc="statusLabel"/>
+                    </div>
+
+                    <!-- Pending count -->
+                    <div class="mb-2 text-muted" t-if="state.pendingCount > 0">
+                        <i class="fa fa-database me-1"/>
+                        <t t-esc="state.pendingCount"/> record(s) pending in local storage
+                    </div>
+                    <div class="mb-2 text-muted" t-else="">
+                        <i class="fa fa-check-circle me-1 text-success"/>
+                        No pending records
+                    </div>
+
+                    <!-- Sync progress -->
+                    <div t-if="isSyncing" class="mb-2">
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                 t-att-style="'width: ' + Math.round(((syncProgress.completed + syncProgress.failed) / Math.max(syncProgress.total, 1)) * 100) + '%'">
+                                <t t-esc="syncProgress.completed + syncProgress.failed"/>/<t t-esc="syncProgress.total"/>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr class="my-2"/>
+
+                    <!-- Actions -->
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-sm btn-primary flex-grow-1"
+                                t-on-click="onSyncNow"
+                                t-att-disabled="!isOnline || isSyncing || state.pendingCount === 0">
+                            <i class="fa fa-refresh me-1"/>Sync Now
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary flex-grow-1"
+                                t-on-click="onViewQueue">
+                            <i class="fa fa-list me-1"/>View Queue
+                        </button>
+                    </div>
+                </div>
+            </t>
+        </Dropdown>
+    </t>
+
+</templates>

@@ -1,0 +1,21 @@
+{
+  "_comment": "Vendor Bill — submit to /offline_sync/api/submit_invoice",
+  "move_type": "in_invoice",
+  "partner": {"ref": "SUP001", "name": "Supplier Ltd"},
+  "journal": {"code": "BILL"},
+  "invoice_date": "2026-04-06",
+  "ref": "SUP-INV-2026-0042",
+  "lines": [
+    {
+      "product": {"default_code": "RAW_001"},
+      "quantity": 100,
+      "price_unit": 12.50,
+      "taxes": [{"name": "Tax 15.00%"}]
+    },
+    {
+      "name": "Freight charges",
+      "quantity": 1,
+      "price_unit": 350.00
+    }
+  ]
+}

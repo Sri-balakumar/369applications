@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_offline_sync_config_user,offline.sync.config.user,model_offline_sync_config,group_offline_sync_user,1,0,0,0
+access_offline_sync_config_manager,offline.sync.config.manager,model_offline_sync_config,group_offline_sync_manager,1,1,1,1
+access_offline_sync_model_line_user,offline.sync.model.line.user,model_offline_sync_model_line,group_offline_sync_user,1,0,0,0
+access_offline_sync_model_line_manager,offline.sync.model.line.manager,model_offline_sync_model_line,group_offline_sync_manager,1,1,1,1
+access_offline_sync_queue_user,offline.sync.queue.user,model_offline_sync_queue,group_offline_sync_user,1,0,0,0
+access_offline_sync_queue_manager,offline.sync.queue.manager,model_offline_sync_queue,group_offline_sync_manager,1,1,1,1

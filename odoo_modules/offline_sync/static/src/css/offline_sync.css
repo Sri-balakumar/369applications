@@ -1,0 +1,33 @@
+/* Offline Sync - Systray Indicator */
+
+.o_offline_sync_systray {
+    cursor: pointer;
+}
+
+.o_offline_sync_indicator {
+    position: relative;
+    font-size: 1.1em;
+}
+
+.o_offline_sync_badge {
+    font-size: 0.65em;
+    min-width: 18px;
+    padding: 2px 5px;
+}
+
+.o_offline_sync_dropdown {
+    font-size: 0.9em;
+}
+
+.o_offline_sync_dropdown .progress {
+    border-radius: 4px;
+}
+
+.o_offline_sync_dropdown .progress-bar {
+    font-size: 0.75em;
+    line-height: 20px;
+}
+
+.o_offline_sync_dropdown hr {
+    border-color: #dee2e6;
+}
