@@ -418,7 +418,7 @@ const LoginScreenOdoo = () => {
               onFocus={() => handleError(null, "baseUrl")}
               iconName="server-network"
               label="Server URL"
-              placeholder="https://your-odoo-server.com"
+              placeholder="https://your-server.com"
               error={errors.baseUrl}
               column={true}
               login={true}
