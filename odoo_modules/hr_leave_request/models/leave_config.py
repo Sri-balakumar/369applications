@@ -31,14 +31,12 @@ class LeaveConfig(models.Model):
     )
 
     # --- Unpaid Leave Configuration ---
-    unpaid_leave_deduction_per_day = fields.Float(
-        string='Unpaid Leave Deduction / Day',
-        default=500.0,
-        help='Amount deducted per day when employee takes unpaid leave (exceeded paid quota).',
-    )
     unpaid_leave_deduction_enabled = fields.Boolean(
         string='Enable Unpaid Leave Deduction',
         default=True,
+        help='When enabled, unpaid leave deduction is calculated as: '
+             'Employee Monthly Wage ÷ Calendar Days in Month. '
+             'Half day = half of that daily rate.',
     )
 
     # --- Grace / Carry Forward ---
@@ -69,7 +67,6 @@ class LeaveConfig(models.Model):
                 'paid_leave_enabled': True,
                 'paid_leave_days_per_year': 12,
                 'paid_leave_days_per_month': 1.0,
-                'unpaid_leave_deduction_per_day': 500.0,
                 'unpaid_leave_deduction_enabled': True,
                 'carry_forward_enabled': False,
                 'max_carry_forward_days': 5,
@@ -79,7 +76,6 @@ class LeaveConfig(models.Model):
             'paid_leave_enabled': config.paid_leave_enabled,
             'paid_leave_days_per_year': config.paid_leave_days_per_year,
             'paid_leave_days_per_month': config.paid_leave_days_per_month,
-            'unpaid_leave_deduction_per_day': config.unpaid_leave_deduction_per_day,
             'unpaid_leave_deduction_enabled': config.unpaid_leave_deduction_enabled,
             'carry_forward_enabled': config.carry_forward_enabled,
             'max_carry_forward_days': config.max_carry_forward_days,
@@ -112,5 +108,5 @@ class LeaveConfig(models.Model):
             'total_used': total_used,
             'remaining': max(0, total_allowed - total_used),
             'per_month': config.paid_leave_days_per_month,
-            'unpaid_deduction_per_day': config.unpaid_leave_deduction_per_day if config.unpaid_leave_deduction_enabled else 0,
+            'unpaid_deduction_enabled': config.unpaid_leave_deduction_enabled,
         }

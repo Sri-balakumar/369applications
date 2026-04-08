@@ -11,7 +11,6 @@
                 <field name="paid_leave_enabled"/>
                 <field name="paid_leave_days_per_year"/>
                 <field name="paid_leave_days_per_month"/>
-                <field name="unpaid_leave_deduction_per_day"/>
                 <field name="unpaid_leave_deduction_enabled"/>
             </list>
         </field>
@@ -44,8 +43,6 @@
                     <group string="Unpaid Leave / Deduction Settings">
                         <group>
                             <field name="unpaid_leave_deduction_enabled"/>
-                            <field name="unpaid_leave_deduction_per_day"
-                                   invisible="not unpaid_leave_deduction_enabled"/>
                         </group>
                     </group>
 
@@ -54,7 +51,8 @@
                         <ul>
                             <li>Each employee gets the configured paid leave days per year.</li>
                             <li>When an employee exceeds their paid leave quota, the leave becomes unpaid.</li>
-                            <li>Unpaid leave deduction is applied per day at the configured rate.</li>
+                            <li>Unpaid leave deduction = Employee Monthly Wage ÷ Calendar Days in Month.</li>
+                            <li>Half day unpaid = half the daily rate.</li>
                             <li>Admin can change these settings at any time.</li>
                         </ul>
                     </div>

@@ -230,6 +230,27 @@ class EmployeeReport(models.Model):
                 else:
                     return _Slab.get_deduction_for_minutes(late_minutes, company_id=_emp.company_id.id)
 
+            def calc_leave_deduction_live(leave_record, _emp=emp):
+                """Calculate leave deduction live using salary-based formula — never trust stale stored value."""
+                import calendar as _cal
+                if leave_record.unpaid_days <= 0:
+                    return 0.0
+                leave_cfg = self.env['hr.leave.config'].search(
+                    [('company_id', '=', _emp.company_id.id)], limit=1
+                )
+                if not leave_cfg or not leave_cfg.unpaid_leave_deduction_enabled:
+                    return 0.0
+                try:
+                    _wage = _emp.contract_wage or 0.0
+                except Exception:
+                    _wage = 0.0
+                if _wage <= 0:
+                    return 0.0
+                _from = leave_record.from_date
+                _days_in_month = _cal.monthrange(_from.year, _from.month)[1]
+                daily_rate = _wage / _days_in_month
+                return round(leave_record.unpaid_days * daily_rate, 2)
+
             # ── Calculate working days in the month ──────────
             total_working_days = 0
             current_date = d_from
@@ -310,7 +331,7 @@ class EmployeeReport(models.Model):
             for lr in leave_records:
                 total_paid_days += lr.paid_days
                 total_unpaid_days += lr.unpaid_days
-                total_leave_deduction += lr.deduction_amount
+                total_leave_deduction += calc_leave_deduction_live(lr)
 
                 # Map leave to each day it covers
                 lr_start = lr.from_date
@@ -320,6 +341,69 @@ class EmployeeReport(models.Model):
                     if d_from <= lr_current <= d_to:
                         leave_date_info[lr_current] = lr
                     lr_current += timedelta(days=1)
+
+            # ── AUTO HALF-DAY DETECTION (split shift only) ───
+            # For each working day, check if only one session has attendance
+            # S1 present + S2 absent = auto half-day PM
+            # S2 present + S1 absent = auto half-day AM
+            auto_half_day_info = {}  # date -> {'session': 'am'|'pm', 'label': str, 'reason': str, 'deduction': float}
+            shift_type = config_data.get('shift_type', 'single')
+            if shift_type == 'split':
+                session1_end = config_data.get('office_end_hour', 14.0)
+                import pytz as _pytz
+                _tz = _pytz.timezone(emp.tz or 'UTC')
+                # Group attendance by date and session
+                att_by_date = {}
+                for att in all_attendance:
+                    if not att.date or not att.check_in:
+                        continue
+                    _local = _pytz.utc.localize(att.check_in).astimezone(_tz)
+                    _hour = _local.hour + _local.minute / 60.0
+                    _sess = 'S1' if _hour < session1_end else 'S2'
+                    if att.date not in att_by_date:
+                        att_by_date[att.date] = set()
+                    att_by_date[att.date].add(_sess)
+
+                # Calculate leave deduction rate for auto half-day
+                _leave_config = self.env['hr.leave.config'].search(
+                    [('company_id', '=', emp.company_id.id)], limit=1
+                )
+                def _half_day_deduction(check_date):
+                    if not _leave_config or not _leave_config.unpaid_leave_deduction_enabled:
+                        return 0.0
+                    import calendar as _cal
+                    try:
+                        _wage = emp.contract_wage or 0.0
+                    except Exception:
+                        _wage = 0.0
+                    _days_in_month = _cal.monthrange(check_date.year, check_date.month)[1]
+                    if _wage > 0 and _days_in_month > 0:
+                        return round(_wage / _days_in_month / 2.0, 2)
+                    return 0.0
+
+                for _date, _sessions in att_by_date.items():
+                    if _date not in leave_date_info:  # don't override explicit leave requests
+                        if 'S1' in _sessions and 'S2' not in _sessions:
+                            # Morning only → missed afternoon session
+                            auto_half_day_info[_date] = {
+                                'session': 'pm',
+                                'label': 'Half Day - Afternoon Absent',
+                                'reason': 'Auto-detected: No check-in for afternoon session',
+                                'deduction': _half_day_deduction(_date),
+                            }
+                        elif 'S2' in _sessions and 'S1' not in _sessions:
+                            # Afternoon only → missed morning session
+                            auto_half_day_info[_date] = {
+                                'session': 'am',
+                                'label': 'Half Day - Morning Absent',
+                                'reason': 'Auto-detected: No check-in for morning session',
+                                'deduction': _half_day_deduction(_date),
+                            }
+
+                # Add auto half-day deductions to leave totals
+                for _date, _info in auto_half_day_info.items():
+                    total_unpaid_days += 0.5
+                    total_leave_deduction += _info['deduction']
 
             # ── BUILD DAY-WISE DETAIL LINES ──────────────────
             current_date = d_from
@@ -409,7 +493,7 @@ class EmployeeReport(models.Model):
                         'leave_paid_type': paid_type,
                         'leave_reason': lr.reason or '',
                         'late_deduction': late_ded,
-                        'leave_deduction': lr.deduction_amount if current_date == lr.from_date else 0,
+                        'leave_deduction': calc_leave_deduction_live(lr) if current_date == lr.from_date else 0,
                         'is_half_day': lr.is_half_day or is_half_day_fri,
                     })
                 elif has_late:
@@ -466,6 +550,13 @@ class EmployeeReport(models.Model):
                             first_att, first_att.check_in
                         ).strftime('%I:%M %p')
 
+                    # Check if this is an auto-detected half day (split shift missing one session)
+                    auto_hd = auto_half_day_info.get(current_date)
+                    is_auto_half = auto_hd is not None
+                    auto_hd_label = auto_hd['label'] if auto_hd else ''
+                    auto_hd_ded = auto_hd['deduction'] if auto_hd else 0.0
+                    auto_hd_reason = auto_hd['reason'] if auto_hd else ''
+
                     detail_vals.append({
                         'report_id': self.id,
                         'employee_id': emp.id,
@@ -473,17 +564,18 @@ class EmployeeReport(models.Model):
                         'department_name': dept_name,
                         'entry_date': current_date,
                         'day_type': 'present',
-                        'description': 'Present' + (' (Half Day)' if is_half_day_fri else ''),
+                        'description': (auto_hd_label if is_auto_half else 'Present') +
+                                       (' (Half Day)' if is_half_day_fri else ''),
                         'check_in_time': check_in_str,
                         'late_minutes': 0,
                         'late_minutes_display': '',
                         'late_reason': '',
                         'leave_type': False,
-                        'leave_paid_type': '',
-                        'leave_reason': '',
+                        'leave_paid_type': 'Unpaid' if is_auto_half and auto_hd_ded > 0 else '',
+                        'leave_reason': auto_hd_reason,
                         'late_deduction': 0,
-                        'leave_deduction': 0,
-                        'is_half_day': is_half_day_fri,
+                        'leave_deduction': auto_hd_ded,
+                        'is_half_day': is_half_day_fri or is_auto_half,
                     })
                 elif is_working and not is_holiday:
                     # Absent — working day but no attendance and no leave

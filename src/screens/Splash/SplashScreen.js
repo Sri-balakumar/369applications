@@ -46,23 +46,40 @@ const SplashScreen = () => {
 
     useEffect(() => {
         async function checkUserData() {
+            console.log('[Splash] checkUserData start');
             // Restore saved Odoo URL into memory before any API calls
             await loadOdooBaseUrl();
+            console.log('[Splash] odoo url loaded');
             const storedUserData = await AsyncStorage.getItem('userData');
+            console.log('[Splash] userData read:', !!storedUserData);
             if (storedUserData) {
                 const userData = JSON.parse(storedUserData);
                 setLoggedInUser(userData);
-                // Fetch company currency from Odoo
+                console.log('[Splash] user logged in, fetching currency...');
+                // Fetch company currency from Odoo with a 2s timeout so a slow/unreachable
+                // Odoo server can never block navigation past the splash screen.
                 try {
-                    const companyCurrency = await fetchCompanyCurrencyOdoo();
+                    const companyCurrency = await Promise.race([
+                        fetchCompanyCurrencyOdoo(),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('currency fetch timeout')), 2000)),
+                    ]);
                     if (companyCurrency) setCurrencyFromOdoo(companyCurrency);
-                } catch (e) { console.warn('Could not fetch company currency:', e?.message); }
+                    console.log('[Splash] currency done');
+                } catch (e) {
+                    console.warn('[Splash] currency failed/timeout:', e?.message);
+                    // Retry in background — navigation must not wait.
+                    fetchCompanyCurrencyOdoo()
+                        .then((c) => { if (c) setCurrencyFromOdoo(c); })
+                        .catch(() => {});
+                }
+                console.log('[Splash] navigating to AppNavigator');
                 // Reset the navigation stack to prevent going back to the splash screen
                 navigation.reset({
                     index: 0,
                     routes: [{ name: 'AppNavigator' }],
                 });
             } else {
+                console.log('[Splash] navigating to LoginScreenOdoo');
                 navigation.reset({
                     index: 0,
                     routes: [{ name: 'LoginScreenOdoo' }],
@@ -71,7 +88,11 @@ const SplashScreen = () => {
         }
         if (fontsLoaded) {
             const timeout = setTimeout(() => {
-                checkUserData()
+                checkUserData().catch((err) => {
+                    console.error('[Splash] checkUserData fatal:', err?.message);
+                    // Even on fatal error, force navigation so user is never stuck
+                    navigation.reset({ index: 0, routes: [{ name: 'LoginScreenOdoo' }] });
+                });
             }, 300);
             return () => clearTimeout(timeout);
         }

@@ -1,4 +1,5 @@
 from odoo import models, fields, api, exceptions
+import calendar
 from datetime import datetime, timedelta
 import logging
 
@@ -225,7 +226,19 @@ class LeaveRequest(models.Model):
                 rec.unpaid_days = rec.number_of_days - remaining
                 rec.is_paid = rec.unpaid_days == 0
                 if config.unpaid_leave_deduction_enabled:
-                    rec.deduction_amount = rec.unpaid_days * config.unpaid_leave_deduction_per_day
+                    # Salary-based: wage ÷ calendar days in month × unpaid days
+                    try:
+                        emp_wage = rec.hr_employee_id.contract_wage or 0.0
+                    except Exception:
+                        emp_wage = 0.0
+                    days_in_month = calendar.monthrange(
+                        rec.from_date.year, rec.from_date.month
+                    )[1]
+                    if emp_wage > 0 and days_in_month > 0:
+                        daily_rate = emp_wage / days_in_month
+                        rec.deduction_amount = round(rec.unpaid_days * daily_rate, 2)
+                    else:
+                        rec.deduction_amount = 0.0
                 else:
                     rec.deduction_amount = 0.0
 
