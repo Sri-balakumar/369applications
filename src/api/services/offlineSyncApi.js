@@ -93,3 +93,22 @@ export const triggerOfflineSyncNow = async (modelName) => {
 export const fetchOfflineSyncEnabledModels = async () => {
   return callOfflineSync('enabled_models');
 };
+
+// Submit a single record into Odoo's offline_sync queue (server-side).
+// Used by OfflineSyncService to flush the on-device queue once connectivity
+// returns. Returns the server-assigned unique_id on success.
+//
+// payload shape: { model, operation, values }
+//   - model: Odoo model technical name, e.g. 'hr.attendance'
+//   - operation: 'create' | 'write' | 'unlink'
+//   - values: dict of field values (or { id, ...changes } for write)
+export const submitOfflineRecord = async ({ model, operation, values }) => {
+  if (!model || !operation) {
+    throw new Error('submitOfflineRecord: model and operation are required');
+  }
+  return callOfflineSync('submit', {
+    model_name: model,
+    operation,
+    values: values || {},
+  });
+};

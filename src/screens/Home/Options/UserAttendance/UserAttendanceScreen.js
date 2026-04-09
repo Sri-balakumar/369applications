@@ -7,12 +7,14 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { OverlayLoader } from '@components/Loader';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
-import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests } from '@services/AttendanceService';
+import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests, getWorkplaceLocation } from '@services/AttendanceService';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { MaterialIcons, Feather, Ionicons } from '@expo/vector-icons';
 import { Camera } from 'expo-camera';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as Application from 'expo-application';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import networkStatus from '@utils/networkStatus';
 
 const { width, height } = Dimensions.get('window');
 const isSmall = width < 360;
@@ -78,6 +80,21 @@ const UserAttendanceScreen = ({ navigation }) => {
   const [isCapturing, setIsCapturing] = useState(false);
   const cameraRef = useRef(null);
 
+  // Track device connectivity so we can show an OFFLINE banner and disable
+  // network-only features. Subscribes via the same poll-based helper used by
+  // OfflineSyncService — fires when state flips between online/offline.
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    networkStatus.isOnline().then((online) => {
+      if (mounted) setOffline(!online);
+    });
+    const unsubscribe = networkStatus.subscribe((online) => {
+      if (mounted) setOffline(!online);
+    });
+    return () => { mounted = false; unsubscribe && unsubscribe(); };
+  }, []);
+
   // Update time every second
   useEffect(() => {
     const timer = setInterval(() => {
@@ -109,7 +126,9 @@ const UserAttendanceScreen = ({ navigation }) => {
   useEffect(() => {
     let interval;
     const uid = verifiedEmployee?.userId || currentUser?.uid;
-    if (attendanceMode === 'wfh' && isVerified && !todayWfhRequest && uid) {
+    // Skip the 5-second poll entirely when offline — no point hammering a
+    // network we know is unreachable, and it pollutes logs.
+    if (!offline && attendanceMode === 'wfh' && isVerified && !todayWfhRequest && uid) {
       interval = setInterval(async () => {
         console.log('[WFH] Auto-refreshing for user:', uid);
         try {
@@ -128,7 +147,7 @@ const UserAttendanceScreen = ({ navigation }) => {
       }, 5000);
     }
     return () => { if (interval) clearInterval(interval); };
-  }, [attendanceMode, isVerified, todayWfhRequest, verifiedEmployee]);
+  }, [attendanceMode, isVerified, todayWfhRequest, verifiedEmployee, offline]);
 
   // Camera countdown and auto-capture
   useEffect(() => {
@@ -288,7 +307,12 @@ const UserAttendanceScreen = ({ navigation }) => {
         setVerificationMethod('fingerprint');
         showToastMessage(`Welcome, ${result.employee.name}!`);
 
+        // Fire-and-forget: prime the workplace cache for offline use.
         if (attendanceMode === 'office') {
+          const uidForWp = result.employee.userId || currentUser?.uid;
+          if (uidForWp) {
+            getWorkplaceLocation(uidForWp).catch(() => {});
+          }
           await loadTodayAttendanceForEmployee(result.employee.id, result.employee.name);
         } else if (attendanceMode === 'wfh') {
           // Check if there's an approved WFH request for today
@@ -333,7 +357,15 @@ const UserAttendanceScreen = ({ navigation }) => {
         setPinInput('');
         showToastMessage(`Welcome, ${result.employee.name}!`);
 
+        // Fire-and-forget: prime the workplace cache so offline check-in
+        // works without requiring a prior full online check-in. Errors are
+        // ignored — if it fails (offline), we'll just rely on whatever
+        // workplace was cached the last time it succeeded.
         if (attendanceMode === 'office') {
+          const uidForWp = result.employee.userId || currentUser?.uid;
+          if (uidForWp) {
+            getWorkplaceLocation(uidForWp).catch(() => {});
+          }
           await loadTodayAttendanceForEmployee(result.employee.id, result.employee.name);
         } else if (attendanceMode === 'wfh') {
           const uid = result.employee.userId || currentUser?.uid;
@@ -413,7 +445,37 @@ const UserAttendanceScreen = ({ navigation }) => {
       });
 
       const result = await checkInByEmployeeId(verifiedEmployee.id, verifiedEmployee.name);
-      if (result.success) {
+      if (result.success && result.offline) {
+        // Offline path — record was queued locally; will flush when online.
+        // Skip photo upload (no server id yet) and skip the late-check query
+        // (which would also fail offline). Still update local UI so the user
+        // sees themselves as checked in.
+        showToastMessage('Saved offline. Will sync when online.');
+        const offlineAttendance = {
+          id: null,
+          checkIn: result.checkInTime,
+          checkOut: null,
+          employeeName: result.employeeName,
+          offline: true,
+          // Store the queue item id + raw UTC check-in time so the check-out
+          // flow can replace this entry with a combined create record.
+          offlineQueueId: result.localId || null,
+          checkInTimeUtc: result.checkInTimeUtc || null,
+        };
+        setTodayAttendance(offlineAttendance);
+        // Persist to the same cache key that getTodayAttendanceByEmployeeId
+        // reads on re-entry. This way if the user leaves and comes back while
+        // still offline, the screen will show Check Out instead of Check In.
+        try {
+          const empId = verifiedEmployee?.id;
+          if (empId) {
+            await AsyncStorage.setItem(
+              `@attCache:todayAtt:${empId}`,
+              JSON.stringify(offlineAttendance),
+            );
+          }
+        } catch (_) { /* ignore */ }
+      } else if (result.success) {
         if (photoBase64) {
           const uploadResult = await uploadAttendancePhoto(result.attendanceId, photoBase64, 'check_in');
           if (uploadResult.success) {
@@ -461,7 +523,8 @@ const UserAttendanceScreen = ({ navigation }) => {
   };
 
   const handleCheckOut = async () => {
-    if (!todayAttendance?.id) {
+    // Allow check-out when we have a server ID OR an offline check-in (id=null but offline=true)
+    if (!todayAttendance?.id && !todayAttendance?.offline) {
       showToastMessage('No check-in record found');
       return;
     }
@@ -514,32 +577,88 @@ const UserAttendanceScreen = ({ navigation }) => {
 
   const processCheckOut = async (photoBase64) => {
     try {
-      const locationResult = await verifyAttendanceLocation(verifiedEmployee.userId || currentUser?.uid);
+      // Skip location verification when offline (same as processCheckIn)
+      if (!offline) {
+        const locationResult = await verifyAttendanceLocation(verifiedEmployee.userId || currentUser?.uid);
 
-      if (!locationResult.success) {
-        Alert.alert('Location Error', locationResult.error || 'Location verification failed');
-        setLocationStatus({ verified: false, error: locationResult.error });
-        setLoading(false);
-        return;
-      }
+        if (!locationResult.success) {
+          Alert.alert('Location Error', locationResult.error || 'Location verification failed');
+          setLocationStatus({ verified: false, error: locationResult.error });
+          setLoading(false);
+          return;
+        }
 
-      if (!locationResult.withinRange) {
-        Alert.alert('Out of Range', `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}. Must be within ${locationResult.threshold}m.`);
+        if (!locationResult.withinRange) {
+          Alert.alert('Out of Range', `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}. Must be within ${locationResult.threshold}m.`);
+          setLocationStatus({
+            verified: false,
+            distance: locationResult.distance,
+            threshold: locationResult.threshold,
+            workplaceName: locationResult.workplaceName,
+          });
+          setLoading(false);
+          return;
+        }
+
         setLocationStatus({
-          verified: false,
+          verified: true,
           distance: locationResult.distance,
-          threshold: locationResult.threshold,
           workplaceName: locationResult.workplaceName,
         });
+      }
+
+      // If the check-in was done offline (no server attendance ID), replace
+      // the check-in queue entry with a single combined create that has BOTH
+      // check_in and check_out. The Odoo offline_sync module only supports
+      // 'create' and 'method' operations — a combined create is the cleanest
+      // way to land a complete attendance record in one shot.
+      if (todayAttendance?.offline && !todayAttendance?.id) {
+        const now = new Date();
+        const checkOutTimeUtc = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')} ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
+
+        const offlineQueue = require('@utils/offlineQueue').default;
+
+        // Remove the original check-in-only queue entry (if it hasn't synced yet)
+        if (todayAttendance.offlineQueueId) {
+          await offlineQueue.removeById(todayAttendance.offlineQueueId);
+        }
+
+        // Enqueue a single combined create with both check_in + check_out
+        await offlineQueue.enqueue({
+          model: 'hr.attendance',
+          operation: 'create',
+          values: {
+            employee_id: verifiedEmployee.id,
+            check_in: todayAttendance.checkInTimeUtc || checkOutTimeUtc,
+            check_out: checkOutTimeUtc,
+          },
+        });
+
+        const displayTime = now.toLocaleTimeString('en-US', {
+          hour: '2-digit', minute: '2-digit', hour12: true,
+        });
+
+        showToastMessage('Check-out saved offline. Will sync when online.');
+        // Show "All Done" for this session so the user sees the confirmation
+        setTodayAttendance({
+          ...todayAttendance,
+          checkOut: displayTime,
+          offline: true,
+        });
+        // Clear the cache so next re-entry shows Check In (allows multiple
+        // check-in/check-out cycles per day, e.g. lunch break)
+        try {
+          const empId = verifiedEmployee?.id;
+          if (empId) {
+            await AsyncStorage.setItem(
+              `@attCache:todayAtt:${empId}`,
+              JSON.stringify(null),
+            );
+          }
+        } catch (_) { /* ignore */ }
         setLoading(false);
         return;
       }
-
-      setLocationStatus({
-        verified: true,
-        distance: locationResult.distance,
-        workplaceName: locationResult.workplaceName,
-      });
 
       const result = await checkOutToOdoo(todayAttendance.id);
       if (result.success) {
@@ -1769,6 +1888,15 @@ const UserAttendanceScreen = ({ navigation }) => {
         onBackPress={handleBackPress}
       />
 
+      {offline && (
+        <View style={styles.offlineBanner}>
+          <MaterialIcons name="cloud-off" size={scale(16)} color="#7a4f00" />
+          <Text style={styles.offlineBannerText}>
+            OFFLINE MODE — punches will sync automatically when you reconnect
+          </Text>
+        </View>
+      )}
+
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1985,6 +2113,23 @@ const UserAttendanceScreen = ({ navigation }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8F9FA' },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF3CD',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FFE69C',
+    paddingHorizontal: scale(12),
+    paddingVertical: scale(8),
+    gap: scale(8),
+  },
+  offlineBannerText: {
+    flex: 1,
+    fontSize: scale(11),
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#7a4f00',
+  },
   content: { flex: 1, padding: scale(12) },
   headerCard: { backgroundColor: COLORS.white, borderRadius: scale(16), padding: scale(14), marginBottom: scale(10), shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3 },
   headerTop: { marginBottom: scale(10) },

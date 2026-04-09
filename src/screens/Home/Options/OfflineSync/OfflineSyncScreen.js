@@ -24,6 +24,8 @@ import {
   fetchOfflineSyncPending,
   triggerOfflineSyncNow,
 } from '@api/services/offlineSyncApi';
+import offlineQueue from '@utils/offlineQueue';
+import OfflineSyncService from '@services/OfflineSyncService';
 
 const { width } = Dimensions.get('window');
 // Cap the scale factor so tablets/large screens don't blow up the UI.
@@ -40,9 +42,17 @@ const OfflineSyncScreen = ({ navigation }) => {
   const [connection, setConnection] = useState({ status: 'unknown', checkedAt: null });
   const [stats, setStats] = useState({ pending: 0, synced: 0, failed: 0, total: 0 });
   const [pendingByModel, setPendingByModel] = useState([]); // [{ model, count }]
+  const [localQueueCount, setLocalQueueCount] = useState(0);
+  const [flushingLocal, setFlushingLocal] = useState(false);
 
   const loadAll = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
+
+    // Local queue count works regardless of connectivity.
+    try {
+      const localCount = await offlineQueue.getPendingCount();
+      setLocalQueueCount(localCount);
+    } catch (_) { /* ignore */ }
 
     // Ping first so we can flip the status card even if stats fails.
     let online = false;
@@ -115,6 +125,30 @@ const OfflineSyncScreen = ({ navigation }) => {
     }
   };
 
+  const handleFlushLocal = async () => {
+    setFlushingLocal(true);
+    try {
+      const res = await OfflineSyncService.flush();
+      if (res?.offline) {
+        showToastMessage('Still offline — try again when connected');
+      } else if (typeof res?.synced === 'number') {
+        showToastMessage(`Local: synced ${res.synced}, failed ${res.failed}`);
+      }
+      await loadAll(false);
+    } catch (err) {
+      showToastMessage(err?.message || 'Local flush failed');
+    } finally {
+      setFlushingLocal(false);
+    }
+  };
+
+  const handleClearLocalQueue = async () => {
+    await offlineQueue.clear();
+    setLocalQueueCount(0);
+    showToastMessage('Local queue cleared');
+    await loadAll(false);
+  };
+
   const renderConnectionCard = () => {
     const isOnline = connection.status === 'online';
     const dotColor = isOnline ? '#4CAF50' : connection.status === 'offline' ? '#E74C3C' : '#BDBDBD';
@@ -158,6 +192,47 @@ const OfflineSyncScreen = ({ navigation }) => {
     </View>
   );
 
+  const renderLocalQueueCard = () => (
+    <View style={styles.localCard}>
+      <View style={styles.localCardLeft}>
+        <MaterialIcons name="phone-android" size={scale(22)} color={COLORS.primaryThemeColor} />
+        <View style={{ marginLeft: scale(10) }}>
+          <Text style={styles.localCardTitle}>On-device queue</Text>
+          <Text style={styles.localCardSub}>
+            {localQueueCount === 0
+              ? 'No items waiting on this device'
+              : `${localQueueCount} item${localQueueCount === 1 ? '' : 's'} saved offline`}
+          </Text>
+        </View>
+      </View>
+      <View style={{ flexDirection: 'row', gap: scale(6) }}>
+        <TouchableOpacity
+          style={[
+            styles.localFlushBtn,
+            (flushingLocal || localQueueCount === 0) && styles.localFlushBtnDisabled,
+          ]}
+          disabled={flushingLocal || localQueueCount === 0}
+          onPress={handleFlushLocal}
+        >
+          <Text style={styles.localFlushBtnText}>
+            {flushingLocal ? '…' : 'Sync'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.localFlushBtn,
+            { backgroundColor: '#E74C3C' },
+            localQueueCount === 0 && styles.localFlushBtnDisabled,
+          ]}
+          disabled={localQueueCount === 0}
+          onPress={handleClearLocalQueue}
+        >
+          <Text style={styles.localFlushBtnText}>Clear</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   const renderPendingRow = ({ item }) => (
     <View style={styles.pendingRow}>
       <View style={styles.pendingRowLeft}>
@@ -183,6 +258,7 @@ const OfflineSyncScreen = ({ navigation }) => {
       >
         {renderConnectionCard()}
         {renderStatsCard()}
+        {renderLocalQueueCard()}
 
         <Text style={styles.sectionTitle}>Pending by Model</Text>
 
@@ -303,6 +379,50 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistMedium,
     color: '#888',
     marginTop: 2,
+  },
+  localCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    marginHorizontal: scale(12),
+    marginTop: scale(10),
+    borderRadius: scale(12),
+    padding: scale(14),
+    ...Platform.select({
+      android: { elevation: 3 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6 },
+    }),
+  },
+  localCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  localCardTitle: {
+    fontSize: scale(14),
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#333',
+  },
+  localCardSub: {
+    fontSize: scale(11),
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#888',
+    marginTop: 2,
+  },
+  localFlushBtn: {
+    backgroundColor: COLORS.primaryThemeColor,
+    borderRadius: scale(8),
+    paddingHorizontal: scale(14),
+    paddingVertical: scale(8),
+  },
+  localFlushBtnDisabled: {
+    backgroundColor: '#BDBDBD',
+  },
+  localFlushBtnText: {
+    color: '#fff',
+    fontSize: scale(12),
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
   sectionTitle: {
     fontSize: scale(14),
