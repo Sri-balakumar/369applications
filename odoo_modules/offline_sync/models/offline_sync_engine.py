@@ -20,7 +20,8 @@ class OfflineSyncEngine(models.AbstractModel):
     # ─────────────────────────────────────────────────────────
     @api.model
     def store_offline(self, model_name, values, company_id=None,
-                      auto_enable=False, operation='create'):
+                      auto_enable=False, operation='create',
+                      state=None, synced_record_id=None):
         """
         Store an offline write as a JSON file and a queue entry.
 
@@ -71,13 +72,16 @@ class OfflineSyncEngine(models.AbstractModel):
         )
 
         # Create queue entry
+        final_state = state or 'pending'
         self.env['offline.sync.queue'].create({
             'unique_id': unique_id,
             'line_id': line.id if line else False,
             'model_id': ir_model.id,
             'record_data': json.dumps(values, default=str),
             'operation': operation,
-            'state': 'pending',
+            'state': final_state,
+            'synced_record_id': synced_record_id or 0,
+            'synced_at': fields.Datetime.now() if final_state == 'synced' else False,
             'file_path': file_path,
         })
 

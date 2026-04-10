@@ -10,7 +10,8 @@ _logger = logging.getLogger(__name__)
 class OfflineSyncController(http.Controller):
 
     @http.route('/offline_sync/api/submit', type='jsonrpc', auth='user', methods=['POST'])
-    def submit_record(self, model_name=None, values=None, operation='create', **kwargs):
+    def submit_record(self, model_name=None, values=None, operation='create',
+                      state=None, synced_record_id=None, **kwargs):
         """
         Submit a record for offline local storage.
         External apps call this to buffer data when offline.
@@ -20,6 +21,10 @@ class OfflineSyncController(http.Controller):
           - 'method': `values` is `{record_id, method, args, kwargs}` and the
             engine will replay the method call on the existing record when
             sync_model_to_online runs.
+
+        Optional params for history logging:
+          - state: 'synced' to log a pre-synced entry (won't be replayed).
+          - synced_record_id: the Odoo record id that was already created.
         """
         try:
             if not model_name or not values:
@@ -35,6 +40,7 @@ class OfflineSyncController(http.Controller):
 
             unique_id = engine.store_offline(
                 model_name, values, auto_enable=True, operation=operation,
+                state=state, synced_record_id=synced_record_id,
             )
             return {
                 'status': 'ok',

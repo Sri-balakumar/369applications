@@ -12,6 +12,7 @@ import axios from 'axios';
 import offlineQueue from '@utils/offlineQueue';
 import networkStatus from '@utils/networkStatus';
 import { getOdooBaseUrl } from '@api/config/odooConfig';
+import { logSyncHistory } from '@api/services/offlineSyncApi';
 
 let started = false;
 let unsubscribe = null;
@@ -64,10 +65,73 @@ const syncItemDirectly = async (item) => {
 
         const recordId = response.data?.result;
         console.log('[OfflineSyncService] Created hr.attendance id:', recordId);
+
+        // Log to Odoo's Sync Queue for admin audit trail (fire-and-forget)
+        logSyncHistory({
+            model: 'hr.attendance',
+            operation: 'create',
+            values: values,
+            synced_record_id: recordId,
+        }).catch((e) => console.warn('[OfflineSyncService] history log failed:', e?.message));
+
         return recordId;
     }
 
-    // Fallback: try the offline_sync submit endpoint for non-attendance models
+    // Banner create
+    if (item.model === 'app.banner' && item.operation === 'create') {
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'app.banner',
+                    method: 'create',
+                    args: [{
+                        name: values.name || `banner_${Date.now()}`,
+                        image: values.image,
+                    }],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Banner create failed');
+        }
+        const recordId = response.data?.result;
+        console.log('[OfflineSyncService] Created app.banner id:', recordId);
+        logSyncHistory({ model: 'app.banner', operation: 'create', values, synced_record_id: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // Banner delete
+    if (item.model === 'app.banner' && item.operation === 'delete') {
+        const bannerId = values.id;
+        if (!bannerId) throw new Error('Banner delete: no id');
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'app.banner',
+                    method: 'unlink',
+                    args: [[bannerId]],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 15000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Banner delete failed');
+        }
+        console.log('[OfflineSyncService] Deleted app.banner id:', bannerId);
+        logSyncHistory({ model: 'app.banner', operation: 'delete', values, synced_record_id: bannerId }).catch(() => {});
+        return bannerId;
+    }
+
+    // Fallback: try the offline_sync submit endpoint for other models
     const { submitOfflineRecord } = require('@api/services/offlineSyncApi');
     return await submitOfflineRecord({
         model: item.model,

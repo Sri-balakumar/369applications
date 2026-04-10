@@ -112,3 +112,16 @@ export const submitOfflineRecord = async ({ model, operation, values }) => {
     values: values || {},
   });
 };
+
+// Log a completed sync to Odoo's Sync Queue for admin audit trail.
+// This creates a queue entry already marked as 'synced' so it won't be replayed.
+// Fire-and-forget — failures are silently ignored.
+export const logSyncHistory = async ({ model, operation, values, synced_record_id }) => {
+  return callOfflineSync('submit', {
+    model_name: model,
+    operation: operation || 'create',
+    values: values || {},
+    state: 'synced',
+    synced_record_id: synced_record_id || 0,
+  });
+};
