@@ -332,6 +332,16 @@ const LoginScreenOdoo = () => {
             } catch (e) {
               console.warn('Unable to persist Odoo cookie header:', e?.message || e);
             }
+            // Fetch user's allowed branches/companies and enrich userData
+            try {
+              const { fetchUserCompanies } = require('@api/services/companyApi');
+              const companyInfo = await fetchUserCompanies(userData.uid);
+              userData.company_id = companyInfo.current_company_id;
+              userData.company_name = companyInfo.current_company_name;
+              userData.allowed_companies = companyInfo.allowed_companies;
+              await AsyncStorage.setItem("userData", JSON.stringify(userData));
+            } catch (e) { console.warn('Could not fetch branches:', e?.message); }
+
             setUser(userData);
             try {
               const companyCurrency = await fetchCompanyCurrencyOdoo();

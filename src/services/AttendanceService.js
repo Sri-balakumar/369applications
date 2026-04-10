@@ -109,40 +109,108 @@ const getDistanceMeters = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
-// Get current device location
+// Get current device location with multiple fallback strategies for speed + reliability
 const getCurrentLocation = async () => {
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      return { success: false, error: 'Location permission denied' };
+      return { success: false, error: 'Location permission denied. Please enable location in Settings.' };
     }
 
-    const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
-    });
+    // Strategy: try to get a fast location first (last known), then refine with GPS.
+    // This prevents the "location unavailable" error on cold GPS starts.
 
-    return {
-      success: true,
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-    };
+    // Attempt 1: Last known location (instant, no GPS needed)
+    try {
+      const lastKnown = await Location.getLastKnownPositionAsync();
+      if (lastKnown && lastKnown.coords) {
+        const ageMs = Date.now() - lastKnown.timestamp;
+        // Accept if less than 5 minutes old
+        if (ageMs < 5 * 60 * 1000) {
+          console.log('[Attendance] Using last known location (age:', Math.round(ageMs / 1000), 's)');
+          return {
+            success: true,
+            latitude: lastKnown.coords.latitude,
+            longitude: lastKnown.coords.longitude,
+          };
+        }
+      }
+    } catch (_) {}
+
+    // Attempt 2: Balanced accuracy with 10s timeout (faster than High on most devices)
+    try {
+      const balanced = await Promise.race([
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
+      ]);
+      if (balanced?.coords) {
+        console.log('[Attendance] Got location via Balanced accuracy');
+        return {
+          success: true,
+          latitude: balanced.coords.latitude,
+          longitude: balanced.coords.longitude,
+        };
+      }
+    } catch (_) {}
+
+    // Attempt 3: High accuracy with 15s timeout (full GPS, slowest but most precise)
+    try {
+      const high = await Promise.race([
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000)),
+      ]);
+      if (high?.coords) {
+        console.log('[Attendance] Got location via High accuracy');
+        return {
+          success: true,
+          latitude: high.coords.latitude,
+          longitude: high.coords.longitude,
+        };
+      }
+    } catch (_) {}
+
+    // Attempt 4: Low accuracy as last resort (cell tower / Wi-Fi only)
+    try {
+      const low = await Promise.race([
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Low,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
+      ]);
+      if (low?.coords) {
+        console.log('[Attendance] Got location via Low accuracy (fallback)');
+        return {
+          success: true,
+          latitude: low.coords.latitude,
+          longitude: low.coords.longitude,
+        };
+      }
+    } catch (_) {}
+
+    return { success: false, error: 'Could not get location. Please turn on GPS and try again.' };
   } catch (error) {
     console.error('[Attendance] Error getting location:', error);
-    return { success: false, error: 'Failed to get current location' };
+    return { success: false, error: 'Location failed: ' + (error?.message || 'Unknown error. Turn on GPS.') };
   }
 };
 
 // Get workplace location from Odoo (company or employee work location)
-export const getWorkplaceLocation = async (userId) => {
-  console.log('[Attendance] Getting workplace location for user:', userId);
+export const getWorkplaceLocation = async (userId, employeeId) => {
+  console.log('[Attendance] Getting workplace location for user:', userId, 'employee:', employeeId);
 
-  // Helper that caches every successful workplace fetch keyed by user id.
-  const _ok = (val) => { cachePut('wp', userId, val); return val; };
+  // Helper that caches every successful workplace fetch keyed by user id or employee id.
+  const cacheId = userId || employeeId || 'unknown';
+  const _ok = (val) => { cachePut('wp', cacheId, val); return val; };
 
   try {
     const headers = await getOdooAuthHeaders();
 
-    // First try to get employee's work location
+    // First try to get employee by user_id, then fall back to employee id
+    let domain = userId ? [['user_id', '=', userId]] : [['id', '=', employeeId]];
     const employeeResponse = await axios.post(
       `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
@@ -151,7 +219,7 @@ export const getWorkplaceLocation = async (userId) => {
         params: {
           model: 'hr.employee',
           method: 'search_read',
-          args: [[['user_id', '=', userId]]],
+          args: [domain],
           kwargs: {
             fields: ['id', 'name', 'work_location_id', 'company_id'],
             limit: 1,
@@ -161,7 +229,29 @@ export const getWorkplaceLocation = async (userId) => {
       { headers }
     );
 
-    const employee = employeeResponse.data?.result?.[0];
+    let employee = employeeResponse.data?.result?.[0];
+    // If user_id search found nothing, retry by employee id
+    if (!employee && employeeId && userId) {
+      console.log('[Attendance] No employee found by user_id, trying employee id:', employeeId);
+      const retryResponse = await axios.post(
+        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'hr.employee',
+            method: 'search_read',
+            args: [[['id', '=', employeeId]]],
+            kwargs: {
+              fields: ['id', 'name', 'work_location_id', 'company_id'],
+              limit: 1,
+            },
+          },
+        },
+        { headers }
+      );
+      employee = retryResponse.data?.result?.[0];
+    }
     if (!employee) {
       return { success: false, error: 'No employee record found' };
     }
@@ -290,26 +380,28 @@ export const getWorkplaceLocation = async (userId) => {
 };
 
 // Verify if user is within workplace location
-export const verifyAttendanceLocation = async (userId) => {
-  console.log('[Attendance] Verifying attendance location for user:', userId);
+export const verifyAttendanceLocation = async (userId, employeeId) => {
+  console.log('[Attendance] Verifying attendance location for user:', userId, 'employee:', employeeId);
 
   try {
     // Get current location
     const currentLocation = await getCurrentLocation();
+    console.log('[Attendance] GPS result:', JSON.stringify(currentLocation));
     if (!currentLocation.success) {
       return {
         success: false,
-        error: currentLocation.error,
+        error: currentLocation.error || 'Failed to get GPS location',
         withinRange: false,
       };
     }
 
     // Get workplace location
-    const workplaceLocation = await getWorkplaceLocation(userId);
+    const workplaceLocation = await getWorkplaceLocation(userId, employeeId);
+    console.log('[Attendance] Workplace result:', JSON.stringify(workplaceLocation));
     if (!workplaceLocation.success) {
       return {
         success: false,
-        error: workplaceLocation.error,
+        error: workplaceLocation.error || 'No workplace coordinates configured. Ask admin to set latitude/longitude in Odoo.',
         withinRange: false,
       };
     }

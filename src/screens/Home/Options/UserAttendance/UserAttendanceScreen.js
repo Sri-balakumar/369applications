@@ -417,7 +417,7 @@ const UserAttendanceScreen = ({ navigation }) => {
 
   const processCheckIn = async (photoBase64) => {
     try {
-      const locationResult = await verifyAttendanceLocation(verifiedEmployee.userId || currentUser?.uid);
+      const locationResult = await verifyAttendanceLocation(verifiedEmployee.userId || currentUser?.uid, verifiedEmployee.id);
 
       if (!locationResult.success) {
         Alert.alert('Location Error', locationResult.error || 'Location verification failed');
@@ -579,7 +579,7 @@ const UserAttendanceScreen = ({ navigation }) => {
     try {
       // Skip location verification when offline (same as processCheckIn)
       if (!offline) {
-        const locationResult = await verifyAttendanceLocation(verifiedEmployee.userId || currentUser?.uid);
+        const locationResult = await verifyAttendanceLocation(verifiedEmployee.userId || currentUser?.uid, verifiedEmployee.id);
 
         if (!locationResult.success) {
           Alert.alert('Location Error', locationResult.error || 'Location verification failed');

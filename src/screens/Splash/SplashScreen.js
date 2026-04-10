@@ -72,6 +72,19 @@ const SplashScreen = () => {
                         .then((c) => { if (c) setCurrencyFromOdoo(c); })
                         .catch(() => {});
                 }
+                // Refresh branch list in the background (fire-and-forget).
+                // If it fails (offline), the cached list from AsyncStorage is still valid.
+                try {
+                    const { fetchUserCompanies } = require('@api/services/companyApi');
+                    fetchUserCompanies(userData.uid).then((info) => {
+                        if (info?.allowed_companies) {
+                            const updated = { ...userData, company_id: info.current_company_id, company_name: info.current_company_name, allowed_companies: info.allowed_companies };
+                            setLoggedInUser(updated);
+                            AsyncStorage.setItem('userData', JSON.stringify(updated)).catch(() => {});
+                        }
+                    }).catch(() => {});
+                } catch (_) {}
+
                 console.log('[Splash] navigating to AppNavigator');
                 // Reset the navigation stack to prevent going back to the splash screen
                 navigation.reset({
