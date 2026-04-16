@@ -50,6 +50,7 @@ const OptionsScreen = ({ navigation }) => {
     { title: 'Search Products', image: require('@assets/images/Home/options/search_product.png'), onPress: () => navigation.navigate('Products') },
     { title: 'Scan Barcode', image: require('@assets/images/Home/options/scan_barcode.png'), onPress: () => navigation.navigate('Scanner') },
     { title: 'User Attendance', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('UserAttendanceScreen') },
+    { title: 'Offline Sync', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('OfflineSyncScreen') },
     { title: 'Customers', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('CustomersPage1Screen') },
     { title: 'Purchases', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('PurchasesScreen') },
     { title: 'Easy Sales', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('EasySalesListScreen') },

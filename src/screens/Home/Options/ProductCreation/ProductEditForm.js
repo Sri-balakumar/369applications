@@ -42,8 +42,10 @@ const ProductEditForm = ({ navigation, route }) => {
     fetchPosCategoriesOdoo().then((cats) => {
       const mapped = (cats || []).map(c => ({
         id: c._id || c.id,
+        _id: c._id || c.id,
         name: c.category_name || c.name || '',
         label: c.category_name || c.name || '',
+        _source: c._source,
       }));
       setCategories(mapped);
       // Try to match existing category by name
@@ -109,9 +111,13 @@ const ProductEditForm = ({ navigation, route }) => {
     submittingRef.current = true;
     setIsSubmitting(true);
     try {
+      const categoryIdToSend = category?.id || category?._id;
+      const isPosCategory = category?._source === 'pos.category';
+      console.log('[ProductUpdate] Category:', categoryIdToSend, 'source:', category?._source);
       await updateProductOdoo(product.id, {
         name: productName.trim(),
-        posCategoryId: category.id,
+        categId: isPosCategory ? undefined : categoryIdToSend,
+        posCategoryId: isPosCategory ? categoryIdToSend : undefined,
         listPrice: salesPrice || undefined,
         standardPrice: cost || undefined,
         barcode: barcode || undefined,

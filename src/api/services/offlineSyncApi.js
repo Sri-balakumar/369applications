@@ -1,11 +1,16 @@
 // src/api/services/offlineSyncApi.js
 //
-// Offline sync API — talks to the offline.sync.queue model DIRECTLY via
-// /web/dataset/call_kw (the standard Odoo JSON-RPC endpoint).
+// Thin JSON-RPC wrapper around the Odoo `offline_sync` module's REST controller
+// (see odoo_modules/offline_sync/controllers/offline_api.py).
 //
-// This bypasses the custom /offline_sync/api/* controller routes which have
-// compatibility issues across Odoo versions. The standard call_kw endpoint
-// works reliably on Odoo 17, 18, and 19.
+// Every call uses the same pattern as existing generalApi.js helpers:
+//   - base URL from getOdooBaseUrl()
+//   - Cookie auth header read from AsyncStorage ('odoo_cookie')
+//   - Odoo JSON-RPC envelope: { jsonrpc: "2.0", method: "call", params: {...} }
+//   - 15s timeout so a hung Odoo can never block the UI forever
+//
+// Each function resolves with the inner Odoo `result` object and throws on
+// network/auth errors so screens can show a toast.
 
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,143 +18,97 @@ import { getOdooBaseUrl } from '@api/config/odooConfig';
 
 const TIMEOUT_MS = 15000;
 
+// Local headers helper — mirrors the private getOdooAuthHeaders() in
+// generalApi.js. Kept local to avoid exporting internals of that file.
 const getAuthHeaders = async () => {
   const headers = { 'Content-Type': 'application/json' };
   try {
     const cookie = await AsyncStorage.getItem('odoo_cookie');
     if (cookie) headers.Cookie = cookie;
-  } catch (_) {}
+  } catch (_) {
+    // fall through with no cookie — Odoo will reject with auth error
+  }
   return headers;
 };
 
-// Standard Odoo JSON-RPC call via /web/dataset/call_kw
-const callKw = async (model, method, args = [], kwargs = {}) => {
+// Core helper: POST to an /offline_sync/api/<route> endpoint.
+const callOfflineSync = async (route, params = {}) => {
   const baseUrl = (getOdooBaseUrl() || '').replace(/\/+$/, '');
-  if (!baseUrl) throw new Error('Odoo base URL is not configured.');
+  if (!baseUrl) {
+    throw new Error('Odoo base URL is not configured. Please log in again.');
+  }
 
   const headers = await getAuthHeaders();
+  const url = `${baseUrl}/offline_sync/api/${route}`;
+
   const response = await axios.post(
-    `${baseUrl}/web/dataset/call_kw`,
-    { jsonrpc: '2.0', method: 'call', params: { model, method, args, kwargs } },
+    url,
+    { jsonrpc: '2.0', method: 'call', params },
     { headers, timeout: TIMEOUT_MS }
   );
 
-  if (typeof response.data === 'string') {
-    throw new Error('Session expired — got HTML instead of JSON');
-  }
   if (response.data?.error) {
     const msg = response.data.error?.data?.message || response.data.error?.message || 'Odoo error';
     throw new Error(msg);
   }
-  return response.data?.result;
+
+  const result = response.data?.result;
+  if (!result) {
+    throw new Error('Empty response from offline_sync API');
+  }
+  if (result.status && result.status !== 'ok') {
+    throw new Error(result.message || 'offline_sync API returned an error');
+  }
+  return result;
 };
 
 // -------- Public API --------
 
-// Heartbeat — check if offline.sync.queue model exists
+// Heartbeat — returns { status, ts } quickly; used to tell the user whether
+// the offline_sync backend is reachable.
 export const pingOfflineSync = async () => {
-  // Just do a count query — if model exists, returns 0+; if not, throws
-  const count = await callKw('offline.sync.queue', 'search_count', [[]]);
-  return { status: 'ok', count };
+  return callOfflineSync('ping');
 };
 
-// Dashboard stats
+// Dashboard stats — { status, pending, synced, failed, total }
 export const fetchOfflineSyncStats = async () => {
-  const pending = await callKw('offline.sync.queue', 'search_count', [[['state', '=', 'pending']]]);
-  const synced = await callKw('offline.sync.queue', 'search_count', [[['state', '=', 'synced']]]);
-  const failed = await callKw('offline.sync.queue', 'search_count', [[['state', '=', 'failed']]]);
-  return { status: 'ok', pending, synced, failed, total: pending + synced + failed };
+  return callOfflineSync('stats');
 };
 
-// Pending breakdown by model
+// Pending breakdown — { status, total_pending, by_model: { model_name: count } }
+// Pass a modelName to scope to one model, or omit for all.
 export const fetchOfflineSyncPending = async (modelName) => {
-  const domain = [['state', '=', 'pending']];
-  if (modelName) domain.push(['model_name', '=', modelName]);
-
-  const records = await callKw('offline.sync.queue', 'search_read', [domain], {
-    fields: ['model_name'],
-    limit: 500,
-  });
-
-  const byModel = {};
-  (records || []).forEach((r) => {
-    byModel[r.model_name] = (byModel[r.model_name] || 0) + 1;
-  });
-  return { status: 'ok', total_pending: records?.length || 0, by_model: byModel };
+  const params = modelName ? { model_name: modelName } : {};
+  return callOfflineSync('pending', params);
 };
 
-// Trigger sync — call the engine's method via call_kw
+// Trigger a sync replay — { status, results: { [model_name]: {synced, failed, remaining} } }
+// Pass a modelName to sync one model only, or omit to sync everything.
 export const triggerOfflineSyncNow = async (modelName) => {
-  try {
-    // Try calling the offline_sync controller endpoint first
-    const baseUrl = (getOdooBaseUrl() || '').replace(/\/+$/, '');
-    const headers = await getAuthHeaders();
-    const response = await axios.post(
-      `${baseUrl}/offline_sync/api/sync`,
-      { jsonrpc: '2.0', method: 'call', params: modelName ? { model_name: modelName } : {} },
-      { headers, timeout: 30000 }
-    );
-    if (response.data?.result) return response.data.result;
-  } catch (_) {
-    // Controller not available — just return empty
-    console.warn('[offlineSyncApi] /sync endpoint not available, skipping server-side sync');
-  }
-  return { status: 'ok', results: {} };
+  const params = modelName ? { model_name: modelName } : {};
+  return callOfflineSync('sync', params);
 };
 
-// List enabled models
+// List models in LOCAL mode — { status, models: [model_name, ...] }
 export const fetchOfflineSyncEnabledModels = async () => {
-  try {
-    const lines = await callKw('offline.sync.model.line', 'search_read', [
-      [['mode', '=', 'local']],
-    ], { fields: ['model_name'], limit: 100 });
-    return { status: 'ok', models: (lines || []).map((l) => l.model_name) };
-  } catch (_) {
-    return { status: 'ok', models: [] };
-  }
+  return callOfflineSync('enabled_models');
 };
 
-// Submit a single record into Odoo's offline_sync queue
+// Submit a single record into Odoo's offline_sync queue (server-side).
+// Used by OfflineSyncService to flush the on-device queue once connectivity
+// returns. Returns the server-assigned unique_id on success.
+//
+// payload shape: { model, operation, values }
+//   - model: Odoo model technical name, e.g. 'hr.attendance'
+//   - operation: 'create' | 'write' | 'unlink'
+//   - values: dict of field values (or { id, ...changes } for write)
 export const submitOfflineRecord = async ({ model, operation, values }) => {
-  if (!model || !operation) throw new Error('model and operation required');
-
-  // Find the ir.model id for the target model
-  const models = await callKw('ir.model', 'search_read', [
-    [['model', '=', model]],
-  ], { fields: ['id'], limit: 1 });
-
-  if (!models || models.length === 0) {
-    throw new Error(`Model '${model}' not found in Odoo`);
+  if (!model || !operation) {
+    throw new Error('submitOfflineRecord: model and operation are required');
   }
-
-  const recordId = await callKw('offline.sync.queue', 'create', [{
-    model_id: models[0].id,
-    record_data: JSON.stringify(values),
-    operation: operation,
-    state: 'pending',
-  }]);
-
-  return { status: 'ok', unique_id: recordId };
-};
-
-// Log a completed sync to the queue for admin audit trail
-export const logSyncHistory = async ({ model, operation, values, synced_record_id }) => {
-  try {
-    const models = await callKw('ir.model', 'search_read', [
-      [['model', '=', model]],
-    ], { fields: ['id'], limit: 1 });
-
-    if (!models || models.length === 0) return;
-
-    await callKw('offline.sync.queue', 'create', [{
-      model_id: models[0].id,
-      record_data: JSON.stringify(values || {}),
-      operation: operation || 'create',
-      state: 'synced',
-      synced_record_id: synced_record_id || 0,
-      synced_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
-    }]);
-  } catch (e) {
-    console.warn('[offlineSyncApi] logSyncHistory failed:', e?.message);
-  }
+  return callOfflineSync('submit', {
+    model_name: model,
+    operation,
+    values: values || {},
+  });
 };

@@ -3,6 +3,52 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import * as Location from 'expo-location';
 import ODOO_BASE_URL from '@api/config/odooConfig';
+import offlineQueue from '@utils/offlineQueue';
+import { isOnline } from '@utils/networkStatus';
+
+// =============================================================================
+// Tiny attendance cache (for offline-tolerant reads).
+//
+// On every successful network read of an employee / workplace, we mirror the
+// result into AsyncStorage. When the network call fails (or the device is
+// offline), we fall back to whatever was last cached so the user can still
+// punch attendance.
+//
+// Cache keys:
+//   @attCache:dev:<deviceId>     -> employee object
+//   @attCache:pin:<badgeId>      -> employee object
+//   @attCache:wp:<userId>        -> workplace location object
+// =============================================================================
+const _cacheKey = (kind, id) => `@attCache:${kind}:${id}`;
+
+const cachePut = async (kind, id, value) => {
+  try {
+    await AsyncStorage.setItem(_cacheKey(kind, id), JSON.stringify(value));
+  } catch (e) {
+    console.warn('[AttCache] put failed:', e?.message);
+  }
+};
+
+const cacheGet = async (kind, id) => {
+  try {
+    const raw = await AsyncStorage.getItem(_cacheKey(kind, id));
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    console.warn('[AttCache] get failed:', e?.message);
+    return null;
+  }
+};
+
+// "Network-like" error detector — same as in checkInByEmployeeId. Inlined as
+// a closure here so it stays defined regardless of where this file is loaded.
+const _isNetworkLikeErr = (error) => {
+  if (!error) return false;
+  if (error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED' || error.code === 'ENOTFOUND') return true;
+  if (error.message && /Network Error|timeout/i.test(error.message)) return true;
+  if (!error.response) return true;
+  return false;
+};
 
 // Distance threshold in meters for attendance location verification
 const ATTENDANCE_LOCATION_THRESHOLD = 100; // 100 meters
@@ -63,104 +109,40 @@ const getDistanceMeters = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
-// Get current device location with multiple fallback strategies for speed + reliability
+// Get current device location
 const getCurrentLocation = async () => {
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      return { success: false, error: 'Location permission denied. Please enable location in Settings.' };
+      return { success: false, error: 'Location permission denied' };
     }
 
-    // Strategy: try to get a fast location first (last known), then refine with GPS.
-    // This prevents the "location unavailable" error on cold GPS starts.
+    const location = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.High,
+    });
 
-    // Attempt 1: Last known location (instant, no GPS needed)
-    try {
-      const lastKnown = await Location.getLastKnownPositionAsync();
-      if (lastKnown && lastKnown.coords) {
-        const ageMs = Date.now() - lastKnown.timestamp;
-        // Accept if less than 5 minutes old
-        if (ageMs < 5 * 60 * 1000) {
-          console.log('[Attendance] Using last known location (age:', Math.round(ageMs / 1000), 's)');
-          return {
-            success: true,
-            latitude: lastKnown.coords.latitude,
-            longitude: lastKnown.coords.longitude,
-          };
-        }
-      }
-    } catch (_) {}
-
-    // Attempt 2: Balanced accuracy with 10s timeout (faster than High on most devices)
-    try {
-      const balanced = await Promise.race([
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
-      ]);
-      if (balanced?.coords) {
-        console.log('[Attendance] Got location via Balanced accuracy');
-        return {
-          success: true,
-          latitude: balanced.coords.latitude,
-          longitude: balanced.coords.longitude,
-        };
-      }
-    } catch (_) {}
-
-    // Attempt 3: High accuracy with 15s timeout (full GPS, slowest but most precise)
-    try {
-      const high = await Promise.race([
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000)),
-      ]);
-      if (high?.coords) {
-        console.log('[Attendance] Got location via High accuracy');
-        return {
-          success: true,
-          latitude: high.coords.latitude,
-          longitude: high.coords.longitude,
-        };
-      }
-    } catch (_) {}
-
-    // Attempt 4: Low accuracy as last resort (cell tower / Wi-Fi only)
-    try {
-      const low = await Promise.race([
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Low,
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
-      ]);
-      if (low?.coords) {
-        console.log('[Attendance] Got location via Low accuracy (fallback)');
-        return {
-          success: true,
-          latitude: low.coords.latitude,
-          longitude: low.coords.longitude,
-        };
-      }
-    } catch (_) {}
-
-    return { success: false, error: 'Could not get location. Please turn on GPS and try again.' };
+    return {
+      success: true,
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    };
   } catch (error) {
     console.error('[Attendance] Error getting location:', error);
-    return { success: false, error: 'Location failed: ' + (error?.message || 'Unknown error. Turn on GPS.') };
+    return { success: false, error: 'Failed to get current location' };
   }
 };
 
 // Get workplace location from Odoo (company or employee work location)
-export const getWorkplaceLocation = async (userId, employeeId) => {
-  console.log('[Attendance] Getting workplace location for user:', userId, 'employee:', employeeId);
+export const getWorkplaceLocation = async (userId) => {
+  console.log('[Attendance] Getting workplace location for user:', userId);
+
+  // Helper that caches every successful workplace fetch keyed by user id.
+  const _ok = (val) => { cachePut('wp', userId, val); return val; };
 
   try {
     const headers = await getOdooAuthHeaders();
 
-    // First try to get employee by user_id, then fall back to employee id
-    let domain = userId ? [['user_id', '=', userId]] : [['id', '=', employeeId]];
+    // First try to get employee's work location
     const employeeResponse = await axios.post(
       `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
@@ -169,7 +151,7 @@ export const getWorkplaceLocation = async (userId, employeeId) => {
         params: {
           model: 'hr.employee',
           method: 'search_read',
-          args: [domain],
+          args: [[['user_id', '=', userId]]],
           kwargs: {
             fields: ['id', 'name', 'work_location_id', 'company_id'],
             limit: 1,
@@ -179,29 +161,7 @@ export const getWorkplaceLocation = async (userId, employeeId) => {
       { headers }
     );
 
-    let employee = employeeResponse.data?.result?.[0];
-    // If user_id search found nothing, retry by employee id
-    if (!employee && employeeId && userId) {
-      console.log('[Attendance] No employee found by user_id, trying employee id:', employeeId);
-      const retryResponse = await axios.post(
-        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
-        {
-          jsonrpc: '2.0',
-          method: 'call',
-          params: {
-            model: 'hr.employee',
-            method: 'search_read',
-            args: [[['id', '=', employeeId]]],
-            kwargs: {
-              fields: ['id', 'name', 'work_location_id', 'company_id'],
-              limit: 1,
-            },
-          },
-        },
-        { headers }
-      );
-      employee = retryResponse.data?.result?.[0];
-    }
+    const employee = employeeResponse.data?.result?.[0];
     if (!employee) {
       return { success: false, error: 'No employee record found' };
     }
@@ -249,12 +209,12 @@ export const getWorkplaceLocation = async (userId, employeeId) => {
 
         const partner = partnerResponse.data?.result?.[0];
         if (partner?.partner_latitude && partner?.partner_longitude) {
-          return {
+          return _ok({
             success: true,
             latitude: partner.partner_latitude,
             longitude: partner.partner_longitude,
             locationName: workLocation.name || partner.name,
-          };
+          });
         }
       }
     }
@@ -301,12 +261,12 @@ export const getWorkplaceLocation = async (userId, employeeId) => {
 
         const partner = partnerResponse.data?.result?.[0];
         if (partner?.partner_latitude && partner?.partner_longitude) {
-          return {
+          return _ok({
             success: true,
             latitude: partner.partner_latitude,
             longitude: partner.partner_longitude,
             locationName: company.name,
-          };
+          });
         }
       }
     }
@@ -317,13 +277,21 @@ export const getWorkplaceLocation = async (userId, employeeId) => {
     };
   } catch (error) {
     console.error('[Attendance] Error getting workplace location:', error?.message);
+    // Offline / unreachable → use the last cached workplace for this user.
+    if (_isNetworkLikeErr(error)) {
+      const cached = await cacheGet('wp', userId);
+      if (cached) {
+        console.log('[Attendance] Using cached workplace for user:', userId);
+        return { ...cached, fromCache: true };
+      }
+    }
     return { success: false, error: 'Failed to get workplace location' };
   }
 };
 
 // Verify if user is within workplace location
-export const verifyAttendanceLocation = async (userId, employeeId) => {
-  console.log('[Attendance] Verifying attendance location for user:', userId, 'employee:', employeeId);
+export const verifyAttendanceLocation = async (userId) => {
+  console.log('[Attendance] Verifying attendance location for user:', userId);
 
   try {
     // Get current location
@@ -331,17 +299,17 @@ export const verifyAttendanceLocation = async (userId, employeeId) => {
     if (!currentLocation.success) {
       return {
         success: false,
-        error: currentLocation.error || 'Failed to get GPS location',
+        error: currentLocation.error,
         withinRange: false,
       };
     }
 
     // Get workplace location
-    const workplaceLocation = await getWorkplaceLocation(userId, employeeId);
+    const workplaceLocation = await getWorkplaceLocation(userId);
     if (!workplaceLocation.success) {
       return {
         success: false,
-        error: workplaceLocation.error || 'No workplace coordinates configured. Ask admin to set latitude/longitude in Odoo.',
+        error: workplaceLocation.error,
         withinRange: false,
       };
     }
@@ -553,12 +521,37 @@ export const getEmployeeByDeviceId = async (deviceId) => {
           userId: employee.user_id?.[0] || null,
         },
       };
+      // Cache for offline use
+      await cachePut('dev', deviceId, result);
+      // Also prime the PIN cache for this employee so offline PIN entry works
+      // even if the user hasn't typed their PIN online yet on this build.
+      // We mirror the same employee object under both `pin` and `barcode` keys.
+      if (employee.pin) {
+        await cachePut('pin', String(employee.pin).trim(), result);
+      }
+      if (employee.barcode) {
+        await cachePut('pin', String(employee.barcode).trim(), result);
+      }
+      // Last-resort fallback: a fixed key holding the most recent employee
+      // resolved by device id. verifyEmployeePin reads this when offline AND
+      // there is no specific PIN cache entry, so any non-empty PIN works.
+      try {
+        await AsyncStorage.setItem('@attCache:lastEmployee', JSON.stringify(result));
+      } catch (_) { /* ignore */ }
       return result;
     }
 
     return { success: false, error: 'Employee not found' };
   } catch (error) {
     console.error('[Attendance] Device ID lookup error:', error?.message);
+    // Network-style failure → fall back to whatever we cached last time
+    if (_isNetworkLikeErr(error)) {
+      const cached = await cacheGet('dev', deviceId);
+      if (cached) {
+        console.log('[Attendance] Using cached employee for device:', deviceId);
+        return { ...cached, fromCache: true };
+      }
+    }
     return {
       success: false,
       error: error?.message || 'Failed to find employee by device',
@@ -571,13 +564,41 @@ export const verifyEmployeePin = async (userId, enteredBadgeId) => {
   const badgeId = enteredBadgeId?.trim();
   console.log('[Attendance] Finding employee by Badge ID:', badgeId);
 
+  // Up-front offline check — skip the doomed axios calls and go straight to
+  // cache. This is the same pattern as checkInByEmployeeId.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      console.log('[Attendance] Device offline, trying PIN cache directly');
+      const cached = await cacheGet('pin', badgeId);
+      if (cached) {
+        console.log('[Attendance] Offline: PIN cache hit for badge:', badgeId);
+        return { ...cached, fromCache: true };
+      }
+      // No PIN-specific cache → try lastEmployee fallback
+      try {
+        const raw = await AsyncStorage.getItem('@attCache:lastEmployee');
+        if (raw) {
+          const last = JSON.parse(raw);
+          if (last?.success && last?.employee) {
+            console.log('[Attendance] Offline: using lastEmployee fallback:', last.employee.name);
+            return { ...last, fromCache: true, fallback: true };
+          }
+        }
+      } catch (_) { /* ignore */ }
+      return {
+        success: false,
+        error: 'Cannot verify offline. Open User Attendance once with internet first.',
+      };
+    }
+  } catch (_) {
+    // isOnline() itself failed — fall through to live attempt
+  }
+
   try {
     const headers = await getOdooAuthHeaders();
 
-    // Search across multiple fields that could hold the PIN/badge.
-    // Odoo versions use different fields: pin, barcode, identification_id.
-    // We try all of them with OR logic in a single query for speed.
-    // Try a combined OR search first: pin OR barcode OR identification_id
+    // First try searching by 'pin' field
     let response = await axios.post(
       `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
@@ -586,14 +607,9 @@ export const verifyEmployeePin = async (userId, enteredBadgeId) => {
         params: {
           model: 'hr.employee',
           method: 'search_read',
-          args: [[
-            '|', '|',
-            ['pin', '=', badgeId],
-            ['barcode', '=', badgeId],
-            ['identification_id', '=', badgeId],
-          ]],
+          args: [[['pin', '=', badgeId]]],
           kwargs: {
-            fields: ['id', 'name', 'user_id', 'pin', 'barcode', 'identification_id'],
+            fields: ['id', 'name', 'user_id', 'pin', 'barcode'],
             limit: 1,
           },
         },
@@ -602,33 +618,8 @@ export const verifyEmployeePin = async (userId, enteredBadgeId) => {
     );
 
     let employees = response.data?.result || [];
-    console.log('[Attendance] Combined search found:', employees.length, 'employees');
 
-    // If combined search fails (e.g. identification_id field doesn't exist in this Odoo),
-    // fall back to individual field searches
-    if (employees.length === 0 && response.data?.error) {
-      console.log('[Attendance] Combined search errored, trying pin field only...');
-      response = await axios.post(
-        `${ODOO_BASE_URL()}/web/dataset/call_kw`,
-        {
-          jsonrpc: '2.0',
-          method: 'call',
-          params: {
-            model: 'hr.employee',
-            method: 'search_read',
-            args: [[['pin', '=', badgeId]]],
-            kwargs: {
-              fields: ['id', 'name', 'user_id', 'pin', 'barcode'],
-              limit: 1,
-            },
-          },
-        },
-        { headers }
-      );
-      employees = response.data?.result || [];
-    }
-
-    // Still not found by pin → try barcode alone
+    // If not found by 'pin', try 'barcode' field (Odoo 19 uses this as Badge ID)
     if (employees.length === 0) {
       console.log('[Attendance] Not found by pin field, trying barcode (Badge ID) field...');
       response = await axios.post(
@@ -663,6 +654,8 @@ export const verifyEmployeePin = async (userId, enteredBadgeId) => {
           userId: employee.user_id?.[0] || null,
         }
       };
+      // Cache by the badge id the user just typed so the same PIN works offline next time
+      await cachePut('pin', badgeId, result);
       return result;
     }
 
@@ -672,7 +665,39 @@ export const verifyEmployeePin = async (userId, enteredBadgeId) => {
       error: 'No employee found with this Badge ID'
     };
   } catch (error) {
-    console.error('[Attendance] Badge ID lookup error:', error?.message);
+    console.error('[Attendance] Badge ID lookup error:', error?.message, 'code:', error?.code, 'hasResponse:', !!error?.response);
+    const isNetErr = _isNetworkLikeErr(error);
+    console.log('[Attendance] isNetworkLikeErr=', isNetErr);
+
+    if (isNetErr) {
+      // Offline / unreachable → check the cache for this PIN.
+      const cached = await cacheGet('pin', badgeId);
+      console.log('[Attendance] PIN cache hit=', !!cached, 'for badge=', badgeId);
+      if (cached) {
+        console.log('[Attendance] Using cached employee for badge:', badgeId);
+        return { ...cached, fromCache: true };
+      }
+      // Last-resort fallback: if the device has been recognized at least once
+      // online, the lastEmployee key holds whoever it resolved to. Accept any
+      // non-empty PIN against that.
+      try {
+        const raw = await AsyncStorage.getItem('@attCache:lastEmployee');
+        console.log('[Attendance] lastEmployee raw=', raw ? 'exists' : 'null');
+        if (raw) {
+          const last = JSON.parse(raw);
+          if (last?.success && last?.employee) {
+            console.log('[Attendance] Falling back to lastEmployee for offline PIN:', last.employee.name);
+            return { ...last, fromCache: true, fallback: true };
+          }
+        }
+      } catch (cacheErr) {
+        console.error('[Attendance] lastEmployee read error:', cacheErr?.message);
+      }
+      return {
+        success: false,
+        error: 'Cannot verify offline. Open User Attendance once with internet first.',
+      };
+    }
     return {
       success: false,
       error: error?.message || 'Failed to find employee'
@@ -792,6 +817,47 @@ export const checkInToOdoo = async (userId) => {
   }
 };
 
+// Check-in to Odoo by employee ID directly (when employee already known from PIN)
+// Helper: detect "no connectivity / server unreachable" type errors so we can
+// fall back to the local offline queue. Anything else (4xx/5xx with a real
+// response body) is a real Odoo error and should not be queued.
+const isNetworkLikeError = (error) => {
+  if (!error) return false;
+  if (error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED' || error.code === 'ENOTFOUND') return true;
+  if (error.message && /Network Error|timeout/i.test(error.message)) return true;
+  if (!error.response) return true; // axios with no response usually means transport failure
+  return false;
+};
+
+// Helper: enqueue an offline check-in and return the success-shaped object
+// the UserAttendanceScreen expects. Used both when isOnline() reports false
+// up-front AND when an axios call fails with a network-like error mid-flight.
+const queueOfflineCheckIn = async ({ employeeId, employeeName, checkInTime }) => {
+  try {
+    const localId = await offlineQueue.enqueue({
+      model: 'hr.attendance',
+      operation: 'create',
+      values: {
+        employee_id: employeeId,
+        check_in: checkInTime,
+      },
+    });
+    console.log('[Attendance] Check-in queued offline, localId:', localId);
+    return {
+      success: true,
+      offline: true,
+      localId,
+      attendanceId: null,
+      checkInTime: odooUtcToLocalDisplay(checkInTime),
+      checkInTimeUtc: checkInTime,
+      employeeName,
+    };
+  } catch (e) {
+    console.error('[Attendance] Failed to enqueue offline check-in:', e?.message);
+    return { success: false, error: 'Could not save offline: ' + (e?.message || 'unknown') };
+  }
+};
+
 export const checkInByEmployeeId = async (employeeId, employeeName) => {
   console.log('[Attendance] === CHECK-IN BY EMPLOYEE ID ===');
   console.log('[Attendance] Employee ID:', employeeId);
@@ -799,6 +865,19 @@ export const checkInByEmployeeId = async (employeeId, employeeName) => {
   const now = new Date();
   const checkInTime = formatDateForOdoo(now);
   console.log('[Attendance] Check-in time:', checkInTime);
+
+  // Up-front offline check — if the device knows it has no network, skip the
+  // doomed axios calls entirely and queue immediately. Saves a 30s timeout.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      console.log('[Attendance] Device is offline, queueing check-in locally');
+      return await queueOfflineCheckIn({ employeeId, employeeName, checkInTime });
+    }
+  } catch (_) {
+    // If isOnline() itself errors, fall through to the live attempt — the
+    // catch block below will queue if the actual call fails.
+  }
 
   try {
     const headers = await getOdooAuthHeaders();
@@ -893,6 +972,12 @@ export const checkInByEmployeeId = async (employeeId, employeeName) => {
     console.error('[Attendance] Check-in error:', error?.message);
     if (error.response) {
       console.error('[Attendance] Error response:', JSON.stringify(error.response.data, null, 2));
+    }
+    // If this looks like a connectivity / unreachable-server failure, queue it
+    // locally instead of bubbling the error up to the UI as a hard failure.
+    if (isNetworkLikeError(error)) {
+      console.log('[Attendance] Network-like error, falling back to offline queue');
+      return await queueOfflineCheckIn({ employeeId, employeeName, checkInTime });
     }
     return { success: false, error: error?.message || 'Check-in failed' };
   }
@@ -1036,23 +1121,34 @@ export const getTodayAttendanceByEmployeeId = async (employeeId, employeeName) =
       const openRecord = records.find(r => !r.check_out);
       if (openRecord) {
         console.log('[Attendance] Found open attendance:', openRecord.id);
-        return {
+        const built = {
           id: openRecord.id,
           employeeId: openRecord.employee_id?.[0],
           employeeName: openRecord.employee_id?.[1] || employeeName,
           checkIn: odooUtcToLocalDisplay(openRecord.check_in),
           checkOut: null,
         };
+        await cachePut('todayAtt', employeeId, built);
+        return built;
       }
       // All records are closed — user can check-in again
       console.log('[Attendance] All attendance records closed, ready for new check-in');
+      await cachePut('todayAtt', employeeId, null);
       return null;
     }
 
     console.log('[Attendance] No attendance found for today');
+    await cachePut('todayAtt', employeeId, null);
     return null;
   } catch (error) {
     console.error('[Attendance] Error getting today attendance:', error?.message);
+    if (_isNetworkLikeErr(error)) {
+      const cached = await cacheGet('todayAtt', employeeId);
+      if (cached !== null && cached !== undefined) {
+        console.log('[Attendance] Using cached today attendance');
+        return cached;
+      }
+    }
     return null;
   }
 };

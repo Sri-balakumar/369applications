@@ -267,12 +267,13 @@ const ProductDetail = ({ navigation, route }) => {
   const [isImageModalVisible, setImageModalVisible] = useState(false);
   const [isImageLoading, setIsImageLoading] = useState(true);
 
-  // Derive display values
-  const categoryName = details?.category?.category_name
-    || details?.category_name
-    || (Array.isArray(details?.categ_id) ? details.categ_id[1] : null)
-    || (details?.categ_id && typeof details.categ_id === 'string' ? details.categ_id : null)
-    || 'N/A';
+  // Show loading dots while API resolves the real category name (POS or
+  // product). Don't fall back to categ_id[1] — it would briefly display
+  // "Goods" (Odoo's default) before the detail API returns the actual
+  // POS category.
+  const categoryName = details?.category_name
+    || details?.category?.category_name
+    || (loading ? '...' : 'N/A');
   const priceValue = (details.sale_price ?? details.price ?? 0);
   const costValue = (details.cost ?? details.standard_price ?? 0);
   const barcodeValue = details.barcode || 'N/A';
@@ -297,22 +298,20 @@ const ProductDetail = ({ navigation, route }) => {
           <>
             {/* Image Card */}
             <View style={s.imageCard}>
-              <TouchableOpacity activeOpacity={0.9} onPress={() => setImageModalVisible(true)}>
+              <TouchableOpacity activeOpacity={0.9} onPress={() => details.image_url && details.image_url.startsWith('data:image') && setImageModalVisible(true)}>
                 <View style={s.imageContainer}>
-                  {isImageLoading && (
-                    <ActivityIndicator size="large" color={COLORS.primaryThemeColor} style={{ position: 'absolute' }} />
+                  {details.image_url && details.image_url.startsWith('data:image') ? (
+                    <Image
+                      source={{ uri: details.image_url }}
+                      style={s.productImage}
+                      resizeMode="contain"
+                      onError={() => setIsImageLoading(false)}
+                    />
+                  ) : (
+                    <Text style={{ color: '#999', fontSize: 14, fontFamily: FONT_FAMILY.urbanistMedium }}>
+                      No Image
+                    </Text>
                   )}
-                  <Image
-                    source={
-                      details.image_url
-                        ? { uri: details.image_url }
-                        : require('@assets/images/error/error.png')
-                    }
-                    style={s.productImage}
-                    resizeMode="contain"
-                    onLoadStart={() => setIsImageLoading(true)}
-                    onLoadEnd={() => setIsImageLoading(false)}
-                  />
                 </View>
               </TouchableOpacity>
               <Text style={s.productName}>

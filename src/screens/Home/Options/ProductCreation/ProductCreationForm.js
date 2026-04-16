@@ -23,8 +23,12 @@ import {
   createPosCategoryOdoo,
   updatePosCategoryOdoo,
 } from '@api/services/generalApi';
+import { useAuthStore } from '@stores/auth';
 
 const ProductCreationForm = ({ navigation }) => {
+  const user = useAuthStore((state) => state.user);
+  const currentCompanyId = user?.company_id || null;
+  const currentCompanyName = user?.company_name || '';
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
   const submittingRef = useRef(false);
@@ -68,7 +72,7 @@ const ProductCreationForm = ({ navigation }) => {
       fetchTaxesOdoo(),
       fetchPurchaseTaxesOdoo(),
     ]).then(([cats, uomList, sTaxes, pTaxes]) => {
-      setCategories((cats || []).map(c => ({ id: c._id || c.id, name: c.category_name || c.name || '', label: c.category_name || c.name || '', image_url: c.image_url, image_base64: c.image_base64, parent_id: c.parent_id, color: c.color })));
+      setCategories((cats || []).map(c => ({ id: c._id || c.id, _id: c._id || c.id, name: c.category_name || c.name || '', label: c.category_name || c.name || '', image_url: c.image_url, image_base64: c.image_base64, parent_id: c.parent_id, color: c.color, _source: c._source })));
       setUoms(uomList || []);
       setSalesTaxes((sTaxes || []).map(t => ({ id: t.id, name: t.name || '', label: t.name || '' })));
       setPurchaseTaxes((pTaxes || []).map(t => ({ id: t.id, name: t.name || '', label: t.name || '' })));
@@ -230,7 +234,7 @@ const ProductCreationForm = ({ navigation }) => {
       }
       // Refresh categories
       const cats = await fetchPosCategoriesOdoo();
-      const mapped = (cats || []).map(c => ({ id: c._id || c.id, name: c.category_name || c.name || '', label: c.category_name || c.name || '', parent_id: c.parent_id, color: c.color, image_url: c.image_url, image_base64: c.image_base64 }));
+      const mapped = (cats || []).map(c => ({ id: c._id || c.id, _id: c._id || c.id, name: c.category_name || c.name || '', label: c.category_name || c.name || '', parent_id: c.parent_id, color: c.color, image_url: c.image_url, image_base64: c.image_base64, _source: c._source }));
       setCategories(mapped);
       if (!editingCategory) {
         const created = mapped.find(c => c.name === name);
@@ -276,9 +280,14 @@ const ProductCreationForm = ({ navigation }) => {
     submittingRef.current = true;
     setIsSubmitting(true);
     try {
+      const categoryIdToSend = category?.id || category?._id;
+      const isPosCategory = category?._source === 'pos.category';
+      console.log('[ProductCreate] Category:', categoryIdToSend, 'source:', category?._source);
       const productId = await createProductOdoo({
         name: productName.trim(),
-        posCategoryId: category.id,
+        // If it's a POS category, send as posCategoryId. Otherwise send as categId.
+        categId: isPosCategory ? undefined : categoryIdToSend,
+        posCategoryId: isPosCategory ? categoryIdToSend : undefined,
         listPrice: salesPrice || undefined,
         standardPrice: cost || undefined,
         barcode: barcode || undefined,
@@ -289,6 +298,7 @@ const ProductCreationForm = ({ navigation }) => {
         image: imageBase64 || undefined,
         descriptionSale: description || undefined,
         onHandQty: onHandQty || undefined,
+        companyId: currentCompanyId || undefined,
       });
       showToastMessage('Product created successfully');
       navigation.goBack();
@@ -320,6 +330,8 @@ const ProductCreationForm = ({ navigation }) => {
         <FormInput label="Product Name" placeholder="Enter product name" value={productName}
           onChangeText={(val) => { setProductName(val); if (errors.name) setErrors(prev => ({ ...prev, name: null })); }}
           validate={errors.name} required />
+        <FormInput label="Company" placeholder="-" editable={false}
+          value={currentCompanyName || 'No company selected'} />
         <FormInput label="Category" placeholder="Select category" dropIcon="menu-down" editable={false}
           value={category?.name || ''} validate={errors.category} required onPress={() => openDropdown('category')} />
 

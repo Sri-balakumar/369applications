@@ -1,19 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Image, ActivityIndicator, TouchableOpacity, Platform } from 'react-native';
+import React, { useState } from 'react';
+import { View, StyleSheet, Image, TouchableOpacity, Platform } from 'react-native';
 import Text from '@components/Text';
 import { FONT_FAMILY, COLORS } from '@constants/theme';
 import { useCurrencyStore } from '@stores/currency';
 
 const ProductsList = ({ item, onPress, showQuickAdd, onQuickAdd }) => {
-    const errorImage = require('@assets/images/error/error.png');
-    const [imageLoading, setImageLoading] = useState(true);
-
-    useEffect(() => {
-        const timeout = setTimeout(() => {
-            setImageLoading(false);
-        }, 10000);
-        return () => clearTimeout(timeout);
-    }, []);
+    // Only consider the image "real" if it's a base64 data URI (product has image stored)
+    const hasRealImage = item?.image_url && typeof item.image_url === 'string' && item.image_url.startsWith('data:image');
+    const [imageFailed, setImageFailed] = useState(!hasRealImage);
 
     const currency = useCurrencyStore((state) => state.currency);
     const priceValue = (item?.price ?? item?.list_price ?? 0);
@@ -27,13 +21,15 @@ const ProductsList = ({ item, onPress, showQuickAdd, onQuickAdd }) => {
                 </TouchableOpacity>
             )}
             <View style={styles.imageWrapper}>
-                {imageLoading && <ActivityIndicator size="small" color={COLORS.primaryThemeColor} style={styles.activityIndicator} />}
-                <Image
-                    source={item?.image_url ? { uri: item.image_url } : errorImage}
-                    style={styles.image}
-                    onLoad={() => setImageLoading(false)}
-                    onError={() => setImageLoading(false)}
-                />
+                {imageFailed ? (
+                    <Text style={styles.noImageText}>No Image</Text>
+                ) : (
+                    <Image
+                        source={{ uri: item.image_url }}
+                        style={styles.image}
+                        onError={() => setImageFailed(true)}
+                    />
+                )}
                 {stockQty !== null && (
                     <View style={[styles.stockBadge, { backgroundColor: stockQty > 0 ? '#4CAF50' : '#F44336' }]}>
                         <Text style={styles.stockText}>{stockQty}</Text>
@@ -72,13 +68,15 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    activityIndicator: {
-        position: 'absolute',
-    },
     image: {
         width: '80%',
         height: 100,
         resizeMode: 'contain',
+    },
+    noImageText: {
+        color: '#999',
+        fontSize: 12,
+        fontFamily: FONT_FAMILY.urbanistMedium,
     },
     textContainer: {
         width: '100%',

@@ -31,6 +31,7 @@ const ProductsScreen = ({ navigation, route }) => {
 
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState(initialPosCategoryId);
+  const [selectedCategorySource, setSelectedCategorySource] = useState(null);
 
   // Load POS categories on mount
   useEffect(() => {
@@ -43,27 +44,45 @@ const ProductsScreen = ({ navigation, route }) => {
     loadCategories();
   }, []);
 
+  // Build fetch params that route the selected category to the correct field
+  const buildParams = (extra = {}) => {
+    const base = { searchText: extra.searchText ?? searchText, ...extra };
+    if (selectedCategory) {
+      if (selectedCategorySource === 'pos.category') {
+        base.posCategoryId = selectedCategory;
+      } else {
+        base.categoryId = selectedCategory;
+      }
+    } else if (categoryId) {
+      base.categoryId = categoryId;
+    }
+    return base;
+  };
+
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, categoryId, posCategoryId: selectedCategory }),
+    (text) => fetchData(buildParams({ searchText: text })),
     500
   );
 
   useFocusEffect(
     useCallback(() => {
-      fetchData({ searchText, categoryId, posCategoryId: selectedCategory });
-    }, [searchText, selectedCategory])
+      fetchData(buildParams());
+    }, [searchText, selectedCategory, selectedCategorySource])
   );
 
   useEffect(() => {
-    if (isFocused) fetchData({ searchText, categoryId, posCategoryId: selectedCategory });
-  }, [isFocused, searchText, selectedCategory]);
+    if (isFocused) fetchData(buildParams());
+  }, [isFocused, searchText, selectedCategory, selectedCategorySource]);
 
   const handleCategoryPress = (catId) => {
     setSelectedCategory(catId);
+    // Find the source for this category to know which Odoo field to filter on
+    const cat = (categories || []).find(c => (c._id || c.id) === catId);
+    setSelectedCategorySource(cat?._source || 'product.category');
   };
 
   const handleLoadMore = () => {
-    fetchMoreData({ searchText, categoryId, posCategoryId: selectedCategory });
+    fetchMoreData(buildParams());
   };
 
   const handleScan = async (code) => {

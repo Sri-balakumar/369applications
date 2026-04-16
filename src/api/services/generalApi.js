@@ -562,23 +562,24 @@ export const fetchProducts = async ({ offset, limit, categoryId, searchText }) =
 export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId, posCategoryId } = {}) => {
   try {
     console.log('[fetchProductsOdoo] CALLED with:', { offset, limit, searchText, categoryId, posCategoryId });
-    // Base domain: all products
-    let domain = [];
-
-    // Filter by category if provided (uses product.category, not pos.category)
-    if (posCategoryId || categoryId) {
-      const catId = Number(posCategoryId || categoryId);
-      domain = [["categ_id", "=", catId]];
+    // Build domain filters. Use the correct field based on category source:
+    //   posCategoryId → pos_categ_ids (POS category many2many)
+    //   categoryId    → categ_id (product.category)
+    const filters = [];
+    if (posCategoryId) {
+      filters.push(["pos_categ_ids", "in", [Number(posCategoryId)]]);
+    } else if (categoryId) {
+      filters.push(["categ_id", "=", Number(categoryId)]);
     }
-
     if (searchText && searchText.trim() !== "") {
-      const term = searchText.trim();
-      if (posCategoryId || categoryId) {
-        const catId = Number(posCategoryId || categoryId);
-        domain = ["&", ["categ_id", "=", catId], ["name", "ilike", term]];
-      } else {
-        domain = [["name", "ilike", term]];
-      }
+      filters.push(["name", "ilike", searchText.trim()]);
+    }
+    // Combine filters with AND (& prefix for each additional filter)
+    let domain = [];
+    if (filters.length === 1) {
+      domain = [filters[0]];
+    } else if (filters.length === 2) {
+      domain = ["&", filters[0], filters[1]];
     }
 
     const odooLimit = limit || 50;
@@ -750,7 +751,13 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
         tax_percent: taxPercent,
         taxes: productTaxes,
         qty_available: 0,
+        // Don't set category_name from categ_id — the detail screen will
+        // resolve POS category properly via fetchProductDetailsOdoo. Showing
+        // the raw categ_id name here would briefly display "Goods" before
+        // the detail API returns the actual POS category name.
         categ_id: p.categ_id && Array.isArray(p.categ_id) ? p.categ_id : null,
+        category_name: '',
+        category: null,
         pos_categ_ids: [],
       };
     });
@@ -1052,12 +1059,14 @@ export const fetchPosCategoriesOdoo = async () => {
     }
     return (response.data.result || []).map(c => ({
       _id: c.id,
+      id: c.id,
       name: c.name || '',
       category_name: c.name || '',
       image_url: c.image_128 ? `data:image/png;base64,${c.image_128}` : null,
       image_base64: c.image_128 || null,
       parent_id: c.parent_id || null,
       color: c.color ?? 0,
+      _source: model, // 'pos.category' or 'product.category' — tells the form which field to set
     }));
   } catch (error) {
     console.error('[fetchPosCategoriesOdoo] error:', error?.message || error);
@@ -1159,7 +1168,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
           kwargs: {
             fields: [
               'id', 'name', 'list_price', 'lst_price', 'standard_price', 'default_code', 'barcode', 'uom_id', 'image_128',
-              'description_sale', 'categ_id'
+              'description_sale', 'categ_id', 'pos_categ_ids'
             ],
             limit: 1,
           },
@@ -9998,7 +10007,7 @@ export const fetchPurchaseTaxesOdoo = async () => {
   }
 };
 
-export const createProductOdoo = async ({ name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, taxesId, supplierTaxesId, image, descriptionSale, onHandQty }) => {
+export const createProductOdoo = async ({ name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, taxesId, supplierTaxesId, image, descriptionSale, onHandQty, companyId }) => {
   try {
     const headers = await getOdooAuthHeaders();
     const vals = {
@@ -10006,6 +10015,7 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
       sale_ok: true,
       purchase_ok: true,
     };
+    if (companyId) vals.company_id = companyId;
     if (categId) vals.categ_id = categId;
     if (posCategoryId) vals.pos_categ_ids = [[6, 0, [posCategoryId]]];
     if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
@@ -10018,12 +10028,24 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
     if (image) vals.image_1920 = image;
     if (descriptionSale) vals.description_sale = descriptionSale;
 
+    console.log('[createProductOdoo] Sending vals:', JSON.stringify({ ...vals, image_1920: vals.image_1920 ? '(base64)' : undefined }));
+
     const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
       jsonrpc: '2.0', method: 'call',
       params: { model: 'product.product', method: 'create', args: [vals], kwargs: {} },
     }, { headers, timeout: 30000 });
     if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create product');
     const productId = response.data.result;
+    console.log('[createProductOdoo] Created product id:', productId);
+
+    // Verify what was actually saved
+    try {
+      const verifyResp = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'product.product', method: 'read', args: [[productId]], kwargs: { fields: ['categ_id', 'pos_categ_ids'] } },
+      }, { headers, timeout: 10000 });
+      console.log('[createProductOdoo] Verification — saved categ_id:', verifyResp.data?.result?.[0]?.categ_id, 'pos_categ_ids:', verifyResp.data?.result?.[0]?.pos_categ_ids);
+    } catch (e) { console.warn('[createProductOdoo] verify failed:', e?.message); }
 
     // Set initial on-hand stock quantity if provided
     if (onHandQty && parseFloat(onHandQty) > 0 && productId) {
@@ -10066,11 +10088,13 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
   }
 };
 
-export const updateProductOdoo = async (productId, { name, posCategoryId, listPrice, standardPrice, barcode, defaultCode, image }) => {
+export const updateProductOdoo = async (productId, { name, posCategoryId, categId, listPrice, standardPrice, barcode, defaultCode, image }) => {
   try {
     const headers = await getOdooAuthHeaders();
     const vals = {};
     if (name !== undefined && name !== '') vals.name = name;
+    if (categId) vals.categ_id = categId;
+    if (posCategoryId) vals.pos_categ_ids = [[6, 0, [posCategoryId]]];
     if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
     if (standardPrice !== undefined && standardPrice !== '') vals.standard_price = parseFloat(standardPrice) || 0;
     if (barcode !== undefined) vals.barcode = barcode || false;
