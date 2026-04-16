@@ -404,16 +404,12 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
 
   const handleViewInvoice = () => {
     const idStr = String(record?.id || orderId || '');
-    if (idStr.startsWith('offline_')) {
-      Alert.alert('Offline Order', 'This order has not synced to Odoo yet — the invoice will be available once the order syncs.');
-      return;
-    }
     const invoiceId = createdInvoiceId || (record?.invoice_ids?.length > 0 ? record.invoice_ids[record.invoice_ids.length - 1] : null);
-    if (invoiceId) {
-      const od = buildOrderData();
-      console.log('[Invoice] View - Passing orderData with', od.lines.length, 'lines');
-      navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId, orderData: od });
-    }
+    // Offline-created orders don't have a real invoice yet — still navigate,
+    // the receipt screen renders a synthetic preview from the cached order.
+    const od = buildOrderData();
+    console.log('[Invoice] View - Passing orderData with', od.lines.length, 'lines', 'offlineOrder=', idStr.startsWith('offline_'));
+    navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId, orderData: od });
   };
 
   const [cancelling, setCancelling] = useState(false);

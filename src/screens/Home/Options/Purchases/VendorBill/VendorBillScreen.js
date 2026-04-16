@@ -1,5 +1,5 @@
-import React, { useEffect, useCallback } from 'react';
-import { useIsFocused, useFocusEffect } from '@react-navigation/native';
+import React, { useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
 import { RoundedContainer, SafeAreaView } from '@components/containers';
@@ -14,22 +14,18 @@ import VendorBillList from './VendorBillList';
 
 const VendorBillScreen = ({ navigation }) => {
 
-  const isFocused = useIsFocused();
   const currentUser = useAuthStore((state) => state.user);
   const currentUserId = currentUser?.related_profile?._id || '';
-  const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchVendorBill);
+  const { data, loading, fetchData, fetchMoreData } = useDataFetching(
+    fetchVendorBill,
+    { cacheKey: '@cache:vendorBills' }
+  );
 
   useFocusEffect(
     useCallback(() => {
       fetchData({ loginEmployeeId: currentUserId });
     }, [currentUserId])
   );
-
-  useEffect(() => {
-    if (isFocused) {
-      fetchData({ loginEmployeeId: currentUserId });
-    }
-  }, [isFocused]);
 
   const handleLoadMore = () => {
     fetchMoreData({ loginEmployeeId: currentUserId });

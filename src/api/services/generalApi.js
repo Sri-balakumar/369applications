@@ -11441,7 +11441,7 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
     if (partnerId) {
       try { partnerPhone = await fetchPartnerPhoneOdoo(partnerId) || ''; } catch (e) { /* ignore */ }
     }
-    return {
+    const shaped = {
       id: invoice.id, name: invoice.name || '',
       partnerId,
       partnerName: Array.isArray(invoice.partner_id) ? invoice.partner_id[1] : '',
@@ -11459,9 +11459,19 @@ export const fetchInvoiceDetailOdoo = async (invoiceId) => {
         discount: l.discount || 0, subtotal: l.price_subtotal || 0,
       })),
     };
+    try { await AsyncStorage.setItem(`@cache:invoiceDetail:${invoiceId}`, JSON.stringify(shaped)); } catch (_) {}
+    return shaped;
   } catch (error) {
     console.error('[fetchInvoiceDetailOdoo] error:', error?.message || error);
-    throw error;
+    // Offline fallback — return cached invoice if we have one.
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:invoiceDetail:${invoiceId}`);
+      if (cached) {
+        console.log('[fetchInvoiceDetailOdoo] Using cached invoice for id:', invoiceId);
+        return JSON.parse(cached);
+      }
+    } catch (_) {}
+    return null;
   }
 };
 
@@ -11478,9 +11488,17 @@ export const fetchCompanyNameOdoo = async () => {
     }, { headers, timeout: 10000 });
     if (resp.data.error) return null;
     const company = resp.data.result?.[0];
-    return company?.name || null;
+    const name = company?.name || null;
+    if (name) {
+      try { await AsyncStorage.setItem('@cache:companyName', JSON.stringify(name)); } catch (_) {}
+    }
+    return name;
   } catch (e) {
     console.warn('[fetchCompanyNameOdoo] error:', e?.message);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:companyName');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return null;
   }
 };
@@ -11500,9 +11518,17 @@ export const fetchPartnerPhoneOdoo = async (partnerId) => {
     }, { headers, timeout: 10000 });
     if (resp.data.error) return null;
     const partner = resp.data.result?.[0];
-    return partner?.phone || partner?.mobile || null;
+    const phone = partner?.phone || partner?.mobile || null;
+    if (phone) {
+      try { await AsyncStorage.setItem(`@cache:partnerPhone:${partnerId}`, JSON.stringify(phone)); } catch (_) {}
+    }
+    return phone;
   } catch (e) {
     console.warn('[fetchPartnerPhoneOdoo] error:', e?.message);
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:partnerPhone:${partnerId}`);
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return null;
   }
 };

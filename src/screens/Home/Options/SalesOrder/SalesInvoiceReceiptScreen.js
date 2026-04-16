@@ -95,9 +95,12 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       })),
   });
 
+  const [isPreview, setIsPreview] = useState(false);
+
   useEffect(() => {
     const loadInvoice = async () => {
       let invoiceData = null;
+      let cameFromSaleOrder = false;
 
       // TIER 1: Use orderData passed from navigation
       if (orderData && orderData.lines && orderData.lines.length > 0) {
@@ -126,6 +129,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           if (soRecord && soRecord.order_lines_detail && soRecord.order_lines_detail.length > 0) {
             console.log('[Invoice] TIER 3: Got', soRecord.order_lines_detail.length, 'lines from sale order');
             invoiceData = buildFromSaleOrder(soRecord);
+            cameFromSaleOrder = true;
           }
         } catch (err) {
           console.error('[Invoice] TIER 3 failed:', err?.message);
@@ -162,6 +166,9 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
         }
 
         setInvoice(invoiceData);
+        // Flag preview mode when the invoice came from a sale order fallback
+        // or the underlying order is still offline-queued.
+        setIsPreview(cameFromSaleOrder || String(orderId || '').startsWith('offline_'));
 
         // Get phone from passed data first
         let phone = invoiceData.partnerPhone || orderData?.partnerPhone || '';
@@ -525,7 +532,14 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
           {/* Header */}
           <View style={s.headerRow}>
             <Text style={s.dateText}>Date: {invoice.invoiceDate}</Text>
-            <Text style={s.invoiceNo}>{invoice.name}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              {isPreview ? (
+                <View style={{ backgroundColor: '#FFF3E0', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
+                  <Text style={{ fontSize: 10, color: '#E65100', fontFamily: FONT_FAMILY.urbanistBold }}>Preview</Text>
+                </View>
+              ) : null}
+              <Text style={s.invoiceNo}>{invoice.name}</Text>
+            </View>
           </View>
           <Text style={s.infoText}>Cashier: {cashierName}</Text>
           <Text style={s.infoText}>Customer: {invoice.partnerName}</Text>

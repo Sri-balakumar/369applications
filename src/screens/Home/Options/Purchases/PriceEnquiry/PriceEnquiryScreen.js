@@ -31,7 +31,10 @@ const EnquiryItem = ({ item, onPress }) => (
 );
 
 const PriceEnquiryScreen = ({ navigation }) => {
-  const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchProductEnquiriesOdoo);
+  const { data, loading, fetchData, fetchMoreData } = useDataFetching(
+    fetchProductEnquiriesOdoo,
+    { cacheKey: '@cache:priceEnquiries' }
+  );
 
   useFocusEffect(
     useCallback(() => {
