@@ -6,10 +6,13 @@ import {
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { showToastMessage } from '@components/Toast';
-import { fetchCustomersOdoo } from '@api/services/generalApi';
-import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import getOdooBaseUrl from '@api/config/odooConfig';
+import {
+  fetchCustomersOdoo,
+  fetchContactDetailOdoo,
+  createContactOdoo,
+  updateContactOdoo,
+} from '@api/services/generalApi';
+import OfflineBanner from '@components/common/OfflineBanner';
 
 // ─── Country Data ───────────────────────────────────────────────
 const COUNTRIES = [
@@ -192,41 +195,8 @@ const cs = StyleSheet.create({
   check: { fontSize: 16, color: '#25D366', fontFamily: FONT_FAMILY.urbanistBold },
 });
 
-// ─── Odoo RPC helpers ───────────────────────────────────────────
-const getAuthHeaders = async () => {
-  try {
-    const cookie = await AsyncStorage.getItem('odoo_cookie');
-    const headers = { 'Content-Type': 'application/json' };
-    if (cookie) headers.Cookie = cookie;
-    return headers;
-  } catch (e) {
-    return { 'Content-Type': 'application/json' };
-  }
-};
-
-const odooRpc = async (model, method, args = [], kwargs = {}) => {
-  const baseUrl = getOdooBaseUrl().replace(/\/$/, '');
-  const headers = await getAuthHeaders();
-  const response = await axios.post(
-    `${baseUrl}/web/dataset/call_kw`,
-    { jsonrpc: '2.0', method: 'call', params: { model, method, args, kwargs } },
-    { headers, withCredentials: true, timeout: 15000 }
-  );
-  if (response.data.error) throw new Error(response.data.error.data?.message || 'Odoo RPC error');
-  return response.data.result;
-};
-
-const createContact = (data) => odooRpc('res.partner', 'create', [data]);
-const updateContact = (id, data) => odooRpc('res.partner', 'write', [[id], data]);
-
-const fetchContactDetail = async (id) => {
-  const records = await odooRpc('res.partner', 'read', [[id], [
-    'name', 'email', 'phone', 'is_company',
-    'street', 'street2', 'city', 'state_id', 'zip', 'country_id',
-    'company_name', 'function', 'website', 'vat', 'lang',
-  ]]);
-  return Array.isArray(records) ? records[0] : records;
-};
+// Contact RPC helpers are in generalApi (createContactOdoo, updateContactOdoo,
+// fetchContactDetailOdoo) — they also handle offline queueing & cache fallback.
 
 // ─── Main Component ─────────────────────────────────────────────
 const ContactsSheet = ({ visible, onClose, initialView = 'list', initialContactId = null, onSaved: onSavedProp }) => {
@@ -347,6 +317,8 @@ const ContactList = ({ onClose, onEdit, onNew, refreshKey }) => {
         <View style={{ width: 50 }} />
       </View>
 
+      <OfflineBanner message="OFFLINE MODE — showing cached contacts" />
+
       {/* Search */}
       <View style={s.searchContainer}>
         <TextInput
@@ -400,7 +372,7 @@ const ContactForm = ({ contactId, onBack, onSaved }) => {
     if (contactId) {
       (async () => {
         try {
-          const rec = await fetchContactDetail(contactId);
+          const rec = await fetchContactDetailOdoo(contactId);
           setForm({
             name: rec.name || '',
             email: rec.email || '',
@@ -446,11 +418,19 @@ const ContactForm = ({ contactId, onBack, onSaved }) => {
         vat: form.vat.trim() || false,
       };
       if (isNew) {
-        await createContact(data);
-        showToastMessage('Contact created');
+        const result = await createContactOdoo(data);
+        if (result?.offline) {
+          showToastMessage('Contact saved offline. Will sync when online.');
+        } else {
+          showToastMessage('Contact created');
+        }
       } else {
-        await updateContact(contactId, data);
-        showToastMessage('Contact updated');
+        const result = await updateContactOdoo(contactId, data);
+        if (result?.offline) {
+          showToastMessage('Contact saved offline. Will sync when online.');
+        } else {
+          showToastMessage('Contact updated');
+        }
       }
       onSaved();
     } catch (e) {
@@ -476,6 +456,8 @@ const ContactForm = ({ contactId, onBack, onSaved }) => {
           <Text style={[s.headerBtn, { color: '#25D366' }]}>{saving ? 'Saving...' : 'Save'}</Text>
         </TouchableOpacity>
       </View>
+
+      <OfflineBanner message="OFFLINE MODE — contact will sync when you reconnect" />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={s.formContent} keyboardShouldPersistTaps="handled">

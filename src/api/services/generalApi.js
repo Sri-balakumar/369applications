@@ -1688,9 +1688,10 @@ export const fetchCustomersOdoo = async ({ offset = 0, limit = 50, searchText } 
           args: [domain],
           kwargs: {
             fields: [
-              "id", "name", "email", "phone",
-              "street", "street2", "city", "zip", "country_id",
-              "partner_latitude", "partner_longitude", "image_1920"
+              "id", "name", "email", "phone", "is_company",
+              "street", "street2", "city", "state_id", "zip", "country_id",
+              "company_name", "function", "website", "vat", "lang",
+              "partner_latitude", "partner_longitude", "image_1920",
             ],
             offset,
             limit,
@@ -1709,7 +1710,7 @@ export const fetchCustomersOdoo = async ({ offset = 0, limit = 50, searchText } 
     const partners = response.data.result || [];
 
     // 🔙 Shape result for your CustomerScreen
-    return partners.map((p) => ({
+    const mapped = partners.map((p) => ({
       id: p.id,
       name: p.name || "",
       email: p.email || "",
@@ -1725,8 +1726,192 @@ export const fetchCustomersOdoo = async ({ offset = 0, limit = 50, searchText } 
       longitude: p.partner_longitude || 0,
       image: p.image_1920 || null,
     }));
+
+    // Cache the base list (only when no search filter) for offline viewing.
+    if (!searchText && offset === 0) {
+      try { await AsyncStorage.setItem('@cache:contacts', JSON.stringify(mapped)); } catch (_) {}
+      // Also cache each contact's full detail fields so the edit view works
+      // offline for any row in the list — without the user having to open
+      // each one while online first.
+      try {
+        await Promise.all(
+          partners.map((p) =>
+            AsyncStorage.setItem(`@cache:contactDetail:${p.id}`, JSON.stringify(p)).catch(() => {})
+          )
+        );
+      } catch (_) {}
+    }
+    return mapped;
   } catch (error) {
     console.error("fetchCustomersOdoo error:", error);
+    // Offline fallback — return cached list, filtered client-side by search text.
+    try {
+      const cached = await AsyncStorage.getItem('@cache:contacts');
+      if (cached) {
+        let list = JSON.parse(cached);
+        if (searchText && searchText.trim() !== '') {
+          const term = searchText.trim().toLowerCase();
+          list = list.filter((c) =>
+            (c.name || '').toLowerCase().includes(term) ||
+            (c.phone || '').toLowerCase().includes(term) ||
+            (c.email || '').toLowerCase().includes(term)
+          );
+        }
+        console.log('[fetchCustomersOdoo] Using cached contacts, count:', list.length);
+        return list;
+      }
+    } catch (_) {}
+    // No cache available — return empty list instead of throwing so the UI
+    // shows "No contacts found" rather than an error toast. The screen will
+    // repopulate once the user comes back online.
+    console.log('[fetchCustomersOdoo] Offline with no cache — returning empty list');
+    return [];
+  }
+};
+
+// Fetch a single contact's full detail (with offline cache fallback).
+export const fetchContactDetailOdoo = async (id) => {
+  const idStr = String(id);
+  try {
+    // Offline-created contact — pull only from cache.
+    if (idStr.startsWith('offline_')) {
+      const cached = await AsyncStorage.getItem(`@cache:contactDetail:${idStr}`);
+      if (cached) return JSON.parse(cached);
+      throw new Error('Offline contact not found in cache');
+    }
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'res.partner', method: 'read', args: [[Number(id)], [
+          'name', 'email', 'phone', 'is_company',
+          'street', 'street2', 'city', 'state_id', 'zip', 'country_id',
+          'company_name', 'function', 'website', 'vat', 'lang',
+        ]], kwargs: {},
+      },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to load contact');
+    const rec = Array.isArray(response.data.result) ? response.data.result[0] : response.data.result;
+    try { await AsyncStorage.setItem(`@cache:contactDetail:${id}`, JSON.stringify(rec)); } catch (_) {}
+    return rec;
+  } catch (error) {
+    console.error('[fetchContactDetailOdoo] error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:contactDetail:${id}`);
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
+    throw error;
+  }
+};
+
+// Create a contact with offline fallback.
+export const createContactOdoo = async (data) => {
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const localId = await offlineQueue.enqueue({
+        model: 'res.partner',
+        operation: 'create',
+        values: data,
+      });
+      const placeholder = {
+        id: `offline_${localId}`,
+        name: data.name || '',
+        email: data.email || '',
+        phone: data.phone || '',
+        address: [data.street, data.street2, data.city, data.zip].filter(Boolean).join(', '),
+        latitude: 0, longitude: 0, image: null, offline: true,
+      };
+      try {
+        const raw = await AsyncStorage.getItem('@cache:contacts');
+        const list = raw ? JSON.parse(raw) : [];
+        list.unshift(placeholder);
+        await AsyncStorage.setItem('@cache:contacts', JSON.stringify(list));
+      } catch (_) {}
+      try {
+        await AsyncStorage.setItem(
+          `@cache:contactDetail:offline_${localId}`,
+          JSON.stringify({ id: `offline_${localId}`, ...data, offline: true })
+        );
+      } catch (_) {}
+      console.log('[createContactOdoo] Queued offline, localId:', localId);
+      return { offline: true, localId };
+    }
+  } catch (_) {}
+
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'res.partner', method: 'create', args: [data], kwargs: {} },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create contact');
+    return response.data.result;
+  } catch (error) {
+    console.error('[createContactOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Update a contact with offline fallback.
+export const updateContactOdoo = async (id, data) => {
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const idStr = String(id);
+      if (idStr.startsWith('offline_')) {
+        const queueItemId = idStr.replace('offline_', '');
+        await offlineQueue.updateValues(queueItemId, data);
+      } else {
+        await offlineQueue.enqueue({
+          model: 'res.partner',
+          operation: 'write',
+          values: { _recordId: id, ...data },
+        });
+      }
+
+      // Mutate cached list entry so the UI reflects the edit offline.
+      try {
+        const raw = await AsyncStorage.getItem('@cache:contacts');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex((c) => String(c.id) === idStr);
+          if (idx >= 0) {
+            list[idx] = {
+              ...list[idx],
+              name: data.name ?? list[idx].name,
+              email: data.email || '',
+              phone: data.phone || '',
+              address: [data.street, data.street2, data.city, data.zip].filter(Boolean).join(', '),
+            };
+            await AsyncStorage.setItem('@cache:contacts', JSON.stringify(list));
+          }
+        }
+      } catch (_) {}
+      // Mutate detail cache too.
+      try {
+        const detailKey = `@cache:contactDetail:${idStr}`;
+        const rawD = await AsyncStorage.getItem(detailKey);
+        if (rawD) {
+          const prev = JSON.parse(rawD);
+          await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, ...data }));
+        }
+      } catch (_) {}
+      console.log('[updateContactOdoo] Queued offline edit for id:', id);
+      return { offline: true };
+    }
+  } catch (_) {}
+
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'res.partner', method: 'write', args: [[Number(id)], data], kwargs: {} },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to update contact');
+    return response.data.result;
+  } catch (error) {
+    console.error('[updateContactOdoo] error:', error?.message || error);
     throw error;
   }
 };

@@ -94,6 +94,49 @@ export const fetchOfflineSyncEnabledModels = async () => {
   return callOfflineSync('enabled_models');
 };
 
+// Fetch synced-history rows from Odoo's offline.sync.queue model using the
+// standard /web/dataset/call_kw endpoint (no dedicated offline_sync controller
+// needed — we just do a filtered search_read for state='synced').
+// Returns a shaped array: [{ id, reference, model, operation, queuedAt, syncedAt, recordId }].
+export const fetchSyncedHistory = async ({ limit = 50, offset = 0 } = {}) => {
+  const baseUrl = (getOdooBaseUrl() || '').replace(/\/+$/, '');
+  if (!baseUrl) throw new Error('Odoo base URL is not configured. Please log in again.');
+  const headers = await getAuthHeaders();
+  const response = await axios.post(
+    `${baseUrl}/web/dataset/call_kw`,
+    {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'offline.sync.queue',
+        method: 'search_read',
+        args: [[['state', '=', 'synced']]],
+        kwargs: {
+          fields: ['id', 'display_name', 'model_name', 'operation', 'queued_at', 'synced_at', 'synced_record_id'],
+          limit,
+          offset,
+          order: 'synced_at desc, id desc',
+        },
+      },
+    },
+    { headers, timeout: TIMEOUT_MS }
+  );
+  if (response.data?.error) {
+    const msg = response.data.error?.data?.message || response.data.error?.message || 'Failed to load sync history';
+    throw new Error(msg);
+  }
+  const rows = response.data?.result || [];
+  return rows.map((r) => ({
+    id: r.id,
+    reference: r.display_name || `SYNC-${String(r.id).padStart(6, '0')}`,
+    model: r.model_name || '',
+    operation: r.operation || '',
+    queuedAt: r.queued_at || null,
+    syncedAt: r.synced_at || null,
+    recordId: r.synced_record_id || 0,
+  }));
+};
+
 // Submit a single record into Odoo's offline_sync queue (server-side).
 // Used by OfflineSyncService to flush the on-device queue once connectivity
 // returns. Returns the server-assigned unique_id on success.

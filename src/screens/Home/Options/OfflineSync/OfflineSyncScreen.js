@@ -23,10 +23,16 @@ import {
   pingOfflineSync,
   fetchOfflineSyncStats,
   fetchOfflineSyncPending,
+  fetchSyncedHistory,
   triggerOfflineSyncNow,
 } from '@api/services/offlineSyncApi';
 import offlineQueue from '@utils/offlineQueue';
+import networkStatus from '@utils/networkStatus';
 import OfflineSyncService from '@services/OfflineSyncService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const CACHE_KEY_STATS = '@cache:offlineSyncStats';
+const CACHE_KEY_HISTORY = '@cache:offlineSyncHistory';
 
 const { width } = Dimensions.get('window');
 // Cap the scale factor so tablets/large screens don't blow up the UI.
@@ -43,6 +49,7 @@ const OfflineSyncScreen = ({ navigation }) => {
   const [connection, setConnection] = useState({ status: 'unknown', checkedAt: null });
   const [stats, setStats] = useState({ pending: 0, synced: 0, failed: 0, total: 0 });
   const [pendingByModel, setPendingByModel] = useState([]); // [{ model, count }]
+  const [syncedHistory, setSyncedHistory] = useState([]); // [{ id, reference, model, operation, syncedAt, ... }]
   const [localQueueCount, setLocalQueueCount] = useState(0);
   const [flushingLocal, setFlushingLocal] = useState(false);
 
@@ -68,12 +75,14 @@ const OfflineSyncScreen = ({ navigation }) => {
     if (online) {
       try {
         const s = await fetchOfflineSyncStats();
-        setStats({
+        const fresh = {
           pending: s.pending || 0,
           synced: s.synced || 0,
           failed: s.failed || 0,
           total: s.total || 0,
-        });
+        };
+        setStats(fresh);
+        try { await AsyncStorage.setItem(CACHE_KEY_STATS, JSON.stringify(fresh)); } catch (_) {}
       } catch (err) {
         console.warn('[OfflineSync] stats failed:', err?.message);
       }
@@ -87,6 +96,25 @@ const OfflineSyncScreen = ({ navigation }) => {
       } catch (err) {
         console.warn('[OfflineSync] pending failed:', err?.message);
       }
+
+      try {
+        const history = await fetchSyncedHistory({ limit: 30 });
+        setSyncedHistory(history || []);
+        try { await AsyncStorage.setItem(CACHE_KEY_HISTORY, JSON.stringify(history || [])); } catch (_) {}
+      } catch (err) {
+        console.warn('[OfflineSync] history failed:', err?.message);
+      }
+    } else {
+      // Offline — surface last-known stats + history from cache so the user
+      // still sees the synced count and recent history.
+      try {
+        const rawStats = await AsyncStorage.getItem(CACHE_KEY_STATS);
+        if (rawStats) setStats(JSON.parse(rawStats));
+      } catch (_) {}
+      try {
+        const rawHist = await AsyncStorage.getItem(CACHE_KEY_HISTORY);
+        if (rawHist) setSyncedHistory(JSON.parse(rawHist));
+      } catch (_) {}
     }
 
     if (showSpinner) setLoading(false);
@@ -94,7 +122,18 @@ const OfflineSyncScreen = ({ navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
-      loadAll(true);
+      (async () => {
+        // If we have pending on-device items and we're online, kick off a flush
+        // before loading so the screen shows fresh numbers + history.
+        try {
+          const localCount = await offlineQueue.getPendingCount();
+          if (localCount > 0) {
+            const online = await networkStatus.isOnline();
+            if (online) { OfflineSyncService.flush().catch(() => {}); }
+          }
+        } catch (_) {}
+        loadAll(true);
+      })();
     }, [loadAll])
   );
 
@@ -246,6 +285,36 @@ const OfflineSyncScreen = ({ navigation }) => {
     </View>
   );
 
+  // Format "2026-04-16 11:07:12" (Odoo UTC) into local "Apr 16, 11:07 AM"
+  const formatSyncedAt = (raw) => {
+    if (!raw) return '';
+    try {
+      const d = new Date(raw.replace(' ', 'T') + 'Z');
+      if (isNaN(d.getTime())) return raw;
+      return d.toLocaleString(undefined, {
+        month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true,
+      });
+    } catch (_) { return raw; }
+  };
+
+  const renderHistoryRow = ({ item }) => (
+    <View style={styles.historyRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.historyRef} numberOfLines={1}>{item.reference}</Text>
+        <Text style={styles.historyModel} numberOfLines={1}>
+          {item.model}{item.operation ? ` · ${item.operation}` : ''}
+        </Text>
+      </View>
+      <View style={styles.historyRight}>
+        <View style={styles.syncedPill}>
+          <Text style={styles.syncedPillText}>Synced</Text>
+        </View>
+        <Text style={styles.historyDate}>{formatSyncedAt(item.syncedAt)}</Text>
+      </View>
+    </View>
+  );
+
   return (
     <SafeAreaView backgroundColor={COLORS.primaryThemeColor}>
       <NavigationHeader
@@ -275,6 +344,22 @@ const OfflineSyncScreen = ({ navigation }) => {
             data={pendingByModel}
             renderItem={renderPendingRow}
             keyExtractor={(item) => item.model}
+            scrollEnabled={false}
+            contentContainerStyle={{ paddingHorizontal: scale(12) }}
+          />
+        )}
+
+        <Text style={styles.sectionTitle}>Sync History</Text>
+        {syncedHistory.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <MaterialIcons name="history" size={scale(40)} color="#bbb" />
+            <Text style={styles.emptySubtext}>No records synced yet</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={syncedHistory}
+            renderItem={renderHistoryRow}
+            keyExtractor={(item) => String(item.id)}
             scrollEnabled={false}
             contentContainerStyle={{ paddingHorizontal: scale(12) }}
           />
@@ -472,6 +557,50 @@ const styles = StyleSheet.create({
     fontSize: scale(12),
     fontFamily: FONT_FAMILY.urbanistBold,
     color: '#FF9800',
+  },
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: scale(10),
+    paddingHorizontal: scale(14),
+    paddingVertical: scale(12),
+    marginBottom: scale(8),
+    ...Platform.select({
+      android: { elevation: 2 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
+    }),
+  },
+  historyRef: {
+    fontSize: scale(13),
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#333',
+  },
+  historyModel: {
+    fontSize: scale(11),
+    fontFamily: FONT_FAMILY.urbanistRegular,
+    color: '#888',
+    marginTop: scale(2),
+  },
+  historyRight: {
+    alignItems: 'flex-end',
+  },
+  syncedPill: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: scale(8),
+    paddingVertical: scale(2),
+    borderRadius: scale(10),
+    marginBottom: scale(3),
+  },
+  syncedPillText: {
+    fontSize: scale(10),
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#2E7D32',
+  },
+  historyDate: {
+    fontSize: scale(11),
+    fontFamily: FONT_FAMILY.urbanistRegular,
+    color: '#666',
   },
   emptyContainer: {
     alignItems: 'center',

@@ -9,12 +9,14 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
+import { AppState } from 'react-native';
 import offlineQueue from '@utils/offlineQueue';
 import networkStatus from '@utils/networkStatus';
 import { getOdooBaseUrl } from '@api/config/odooConfig';
 
 let started = false;
 let unsubscribe = null;
+let appStateSub = null;
 let flushing = false;
 let retryTimer = null;
 
@@ -354,6 +356,70 @@ const syncItemDirectly = async (item) => {
         return recordId;
     }
 
+    // Contact (res.partner) create
+    if (item.model === 'res.partner' && item.operation === 'create') {
+        const offlineId = `offline_${item.id}`;
+        const existingMap = await readOfflineIdMap();
+        if (existingMap[offlineId] !== undefined) {
+            console.log('[OfflineSyncService] contact already synced, reusing id:', existingMap[offlineId]);
+            return existingMap[offlineId];
+        }
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'res.partner', method: 'create', args: [values], kwargs: {} },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Contact create failed');
+        }
+        const recordId = response.data?.result;
+        console.log('[OfflineSyncService] Created res.partner id:', recordId);
+        await saveOfflineIdMapping(offlineId, recordId);
+        // Swap offline placeholder in the cached contact list with the real id.
+        try {
+            const raw = await AsyncStorage.getItem('@cache:contacts');
+            if (raw) {
+                const list = JSON.parse(raw);
+                let changed = false;
+                const next = list.map((c) => {
+                    if (String(c.id) === offlineId) { changed = true; return { ...c, id: recordId, offline: false }; }
+                    return c;
+                });
+                if (changed) await AsyncStorage.setItem('@cache:contacts', JSON.stringify(next));
+            }
+        } catch (_) {}
+        logSyncHistory(baseUrl, headers, { model: 'res.partner', operation: 'create', values, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // Contact (res.partner) write
+    if (item.model === 'res.partner' && item.operation === 'write') {
+        const { _recordId, ...rest } = values;
+        let realRecordId = _recordId;
+        if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
+            const map = await readOfflineIdMap();
+            if (map[realRecordId] === undefined) throw new Error(`Record ${realRecordId} not yet synced`);
+            realRecordId = map[realRecordId];
+        }
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'res.partner', method: 'write', args: [[Number(realRecordId)], rest], kwargs: {} },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Contact write failed');
+        }
+        console.log('[OfflineSyncService] Updated res.partner id:', realRecordId);
+        logSyncHistory(baseUrl, headers, { model: 'res.partner', operation: 'write', values: rest, syncedRecordId: realRecordId }).catch(() => {});
+        return realRecordId;
+    }
+
     // Product write (edit)
     if (item.model === 'product.product' && item.operation === 'write') {
         const { _recordId, ...rest } = values;
@@ -496,14 +562,30 @@ export const start = () => {
     // Auto-flush on offline→online transitions.
     unsubscribe = networkStatus.subscribe((online) => {
         if (online) {
-            // Small delay to let the connection stabilize before hitting Odoo.
+            // Tiny delay so the OS finishes the transition, then flush immediately.
             if (retryTimer) clearTimeout(retryTimer);
             retryTimer = setTimeout(() => {
                 flushOnce().then((res) => {
                     if (res && res.synced > 0) console.log('[OfflineSyncService] auto-flush synced:', res.synced);
                 }).catch((e) => console.warn('[OfflineSyncService] auto-flush failed:', e?.message));
-            }, 3000);
+            }, 500);
         }
+    });
+
+    // Flush when the app returns to foreground — covers the case where the
+    // user backgrounded the app offline and reopened it on Wi-Fi.
+    appStateSub = AppState.addEventListener('change', (next) => {
+        if (next !== 'active') return;
+        (async () => {
+            try {
+                const count = await offlineQueue.getPendingCount();
+                if (count === 0) return;
+                const online = await networkStatus.isOnline();
+                if (!online) return;
+                const res = await flushOnce();
+                if (res && res.synced > 0) console.log('[OfflineSyncService] foreground flush synced:', res.synced);
+            } catch (e) { console.warn('[OfflineSyncService] foreground flush failed:', e?.message); }
+        })();
     });
 
     // Periodic retry every 30 seconds while online — catches items that failed
@@ -529,6 +611,10 @@ export const stop = () => {
     if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;
+    }
+    if (appStateSub) {
+        appStateSub.remove();
+        appStateSub = null;
     }
     if (retryTimer) {
         clearTimeout(retryTimer);

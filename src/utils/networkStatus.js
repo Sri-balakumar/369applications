@@ -13,7 +13,7 @@ let lastKnown = null; // null = unknown, true = online, false = offline
 let pollHandle = null;
 const subscribers = new Set();
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 2000;
 
 /**
  * One-shot connectivity check. Returns true if the device has internet
