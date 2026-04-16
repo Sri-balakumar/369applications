@@ -583,6 +583,7 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
     } else if (filters.length === 2) {
       domain = ["&", filters[0], filters[1]];
     }
+    console.log('[fetchProductsOdoo] Domain:', JSON.stringify(domain));
 
     const odooLimit = limit || 50;
     const headers = await getOdooAuthHeaders();
@@ -723,7 +724,7 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
     }
 
     // 🔹 Shape to match existing ProductsList expectations
-    return products.map((p) => {
+    const mapped = products.map((p) => {
       // If Odoo returned the image as base64 (image_128), prefer using a data URI
       const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
       const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
@@ -763,8 +764,76 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
         pos_categ_ids: [],
       };
     });
+
+    // Cache for offline viewing (only base list, not search results)
+    if (!searchText) {
+      const key = (posCategoryId || categoryId)
+        ? `@cache:products:cat:${posCategoryId || categoryId}`
+        : '@cache:products';
+      try { await AsyncStorage.setItem(key, JSON.stringify(mapped)); } catch (_) {}
+    }
+
+    return mapped;
   } catch (error) {
     console.error("fetchProductsOdoo error:", error);
+    // Offline fallback — return cached products
+    try {
+      const preferredKey = (posCategoryId || categoryId)
+        ? `@cache:products:cat:${posCategoryId || categoryId}`
+        : '@cache:products';
+
+      let list = [];
+
+      // First try the preferred cache key
+      const cached = await AsyncStorage.getItem(preferredKey);
+      if (cached) {
+        list = JSON.parse(cached);
+      }
+
+      // If no category filter (= "All") and preferred cache is missing OR empty,
+      // merge ALL cached category lists we've accumulated so far
+      if (!posCategoryId && !categoryId) {
+        const allKeys = await AsyncStorage.getAllKeys();
+        const productKeys = allKeys.filter(k => k.startsWith('@cache:products'));
+        const merged = [];
+        const seenIds = new Set();
+        // Start with whatever was in the main cache
+        for (const p of list) {
+          if (p?.id && !seenIds.has(p.id)) {
+            seenIds.add(p.id);
+            merged.push(p);
+          }
+        }
+        // Merge in every category-specific cache
+        for (const key of productKeys) {
+          if (key === preferredKey) continue; // already included
+          try {
+            const raw = await AsyncStorage.getItem(key);
+            if (raw) {
+              const arr = JSON.parse(raw);
+              for (const p of arr) {
+                if (p?.id && !seenIds.has(p.id)) {
+                  seenIds.add(p.id);
+                  merged.push(p);
+                }
+              }
+            }
+          } catch (_) {}
+        }
+        list = merged;
+      }
+
+      // Apply search filter client-side when offline
+      if (searchText && searchText.trim() !== '') {
+        const term = searchText.trim().toLowerCase();
+        list = list.filter(p =>
+          (p.product_name || '').toLowerCase().includes(term) ||
+          (p.code || '').toLowerCase().includes(term)
+        );
+      }
+      console.log('[fetchProductsOdoo] Using cached products, filtered count:', list.length);
+      return list;
+    } catch (_) {}
     throw error;
   }
 };
@@ -1057,9 +1126,14 @@ export const fetchPosCategoriesOdoo = async () => {
 
     if (response.data.error) {
       console.error('[fetchPosCategoriesOdoo] error:', response.data.error?.data?.message);
+      // Fall back to cache on Odoo error
+      try {
+        const cached = await AsyncStorage.getItem('@cache:categories');
+        if (cached) return JSON.parse(cached);
+      } catch (_) {}
       return [];
     }
-    return (response.data.result || []).map(c => ({
+    const mapped = (response.data.result || []).map(c => ({
       _id: c.id,
       id: c.id,
       name: c.name || '',
@@ -1070,8 +1144,19 @@ export const fetchPosCategoriesOdoo = async () => {
       color: c.color ?? 0,
       _source: model, // 'pos.category' or 'product.category' — tells the form which field to set
     }));
+    // Cache for offline viewing
+    try { await AsyncStorage.setItem('@cache:categories', JSON.stringify(mapped)); } catch (_) {}
+    return mapped;
   } catch (error) {
     console.error('[fetchPosCategoriesOdoo] error:', error?.message || error);
+    // Offline fallback — return cached categories
+    try {
+      const cached = await AsyncStorage.getItem('@cache:categories');
+      if (cached) {
+        console.log('[fetchPosCategoriesOdoo] Using cached categories');
+        return JSON.parse(cached);
+      }
+    } catch (_) {}
     return [];
   }
 };
@@ -1257,7 +1342,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
     const finalCategoryName = posCategoryName || categName || '';
     console.log('[fetchProductDetailsOdoo] finalCategoryName:', finalCategoryName);
 
-    return {
+    const detailObj = {
       id: p.id,
       product_name: p.name || '',
       image_url: imageUrl,
@@ -1275,8 +1360,19 @@ export const fetchProductDetailsOdoo = async (productId) => {
       category_name: finalCategoryName,
       product_description: p.description_sale || '',
     };
+    // Cache this product's details for offline viewing
+    try { await AsyncStorage.setItem(`@cache:productDetail:${productId}`, JSON.stringify(detailObj)); } catch (_) {}
+    return detailObj;
   } catch (error) {
     console.error('fetchProductDetailsOdoo error:', error);
+    // Offline fallback — return cached detail for this product
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:productDetail:${productId}`);
+      if (cached) {
+        console.log('[fetchProductDetailsOdoo] Using cached detail for product:', productId);
+        return JSON.parse(cached);
+      }
+    } catch (_) {}
     throw error;
   }
 };

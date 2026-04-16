@@ -94,7 +94,10 @@ const HomeScreen = ({ navigation }) => {
     return (
       <CategoryList
         item={item}
-        onPress={() => navigation.navigate("Products", { posCategoryId: item._id })}
+        onPress={() => navigation.navigate("Products", {
+          posCategoryId: item._id,
+          categorySource: item._source || 'product.category',
+        })}
       />
     );
   };

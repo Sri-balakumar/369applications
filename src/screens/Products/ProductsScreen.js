@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { NavigationHeader } from '@components/Header';
+import OfflineBanner from '@components/common/OfflineBanner';
 import { ProductsList } from '@components/Product';
 import { fetchProductsOdoo, fetchProductByBarcodeOdoo, fetchPosCategoriesOdoo } from '@api/services/generalApi';
 import { useIsFocused, useFocusEffect } from '@react-navigation/native';
@@ -25,13 +26,14 @@ const ODOO_COLORS = [
 const ProductsScreen = ({ navigation, route }) => {
   const { fromCustomerDetails } = route.params || {};
   const initialPosCategoryId = route?.params?.posCategoryId || '';
+  const initialCategorySource = route?.params?.categorySource || null;
   const categoryId = route?.params?.id || '';
   const isFocused = useIsFocused();
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchProductsOdoo);
 
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState(initialPosCategoryId);
-  const [selectedCategorySource, setSelectedCategorySource] = useState(null);
+  const [selectedCategorySource, setSelectedCategorySource] = useState(initialCategorySource);
 
   // Load POS categories on mount
   useEffect(() => {
@@ -78,7 +80,9 @@ const ProductsScreen = ({ navigation, route }) => {
     setSelectedCategory(catId);
     // Find the source for this category to know which Odoo field to filter on
     const cat = (categories || []).find(c => (c._id || c.id) === catId);
-    setSelectedCategorySource(cat?._source || 'product.category');
+    const src = cat?._source || 'product.category';
+    console.log('[ProductsScreen] Category tapped:', catId, 'source:', src, 'cat:', cat?.name);
+    setSelectedCategorySource(src);
   };
 
   const handleLoadMore = () => {
@@ -138,6 +142,7 @@ const ProductsScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Products" onBackPress={() => navigation.goBack()} />
+      <OfflineBanner message="OFFLINE MODE — showing cached products" />
       <SearchContainer
         placeholder="Search Products"
         onChangeText={handleSearchTextChange}
