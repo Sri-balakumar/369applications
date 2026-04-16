@@ -87,6 +87,19 @@ export const markFailed = async (id, errorMessage) => {
     await writeAll(next);
 };
 
+/**
+ * Merge new values into an existing queued item. Used when editing a record
+ * that was created offline and hasn't synced yet — the edit is folded into
+ * the pending create instead of adding a separate write op.
+ */
+export const updateValues = async (id, newValues) => {
+    const items = await readAll();
+    const next = items.map((it) =>
+        it.id === id ? { ...it, values: { ...(it.values || {}), ...(newValues || {}) } } : it
+    );
+    await writeAll(next);
+};
+
 export const clear = async () => {
     try {
         await AsyncStorage.removeItem(STORAGE_KEY);
@@ -101,5 +114,6 @@ export default {
     getPendingCount,
     removeById,
     markFailed,
+    updateValues,
     clear,
 };

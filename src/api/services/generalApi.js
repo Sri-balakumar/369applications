@@ -1163,11 +1163,45 @@ export const fetchPosCategoriesOdoo = async () => {
 
 // Create a new POS category in Odoo
 export const createPosCategoryOdoo = async ({ name, parentId, color, image }) => {
+  const vals = { name };
+  if (parentId) vals.parent_id = parentId;
+  if (color !== undefined && color !== null) vals.color = color;
+
+  // Offline check — queue without image (Option 3: no images offline)
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const localId = await offlineQueue.enqueue({
+        model: 'pos.category',
+        operation: 'create',
+        values: vals,
+      });
+      // Append to cached category list so it shows immediately on Home and forms
+      try {
+        const placeholder = {
+          _id: `offline_${localId}`,
+          id: `offline_${localId}`,
+          name: name || '',
+          category_name: name || '',
+          image_url: null,
+          image_base64: null,
+          parent_id: parentId || null,
+          color: color || 0,
+          _source: 'pos.category',
+          offline: true,
+        };
+        const cached = await AsyncStorage.getItem('@cache:categories');
+        const list = cached ? JSON.parse(cached) : [];
+        list.push(placeholder);
+        await AsyncStorage.setItem('@cache:categories', JSON.stringify(list));
+      } catch (_) {}
+      console.log('[createPosCategoryOdoo] Queued offline, localId:', localId);
+      return { offline: true, localId, id: `offline_${localId}`, name };
+    }
+  } catch (_) {}
+
   try {
     const headers = await getOdooAuthHeaders();
-    const vals = { name };
-    if (parentId) vals.parent_id = parentId;
-    if (color !== undefined && color !== null) vals.color = color;
     const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
       jsonrpc: '2.0', method: 'call',
       params: { model: 'pos.category', method: 'create', args: [vals], kwargs: {} },
@@ -1187,6 +1221,61 @@ export const createPosCategoryOdoo = async ({ name, parentId, color, image }) =>
 
 // Update an existing POS category in Odoo
 export const updatePosCategoryOdoo = async (id, { name, parentId, color, image }) => {
+  // Offline branch — queue the edit, mutate cache in place. Images skipped offline.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const vals = {};
+      if (name !== undefined) vals.name = name;
+      if (parentId !== undefined) vals.parent_id = parentId || false;
+      if (color !== undefined && color !== null) vals.color = color;
+
+      const idStr = String(id);
+      if (idStr.startsWith('offline_')) {
+        // Edit of an offline-created category that hasn't synced yet —
+        // fold the edit into the pending create's values.
+        const queueItemId = idStr.replace('offline_', '');
+        await offlineQueue.updateValues(queueItemId, vals);
+      } else {
+        // Edit of a real Odoo record — queue a write op.
+        // Resolve category model from cache to call the right Odoo model.
+        let model = 'pos.category';
+        try {
+          const cached = await AsyncStorage.getItem('@cache:categories');
+          if (cached) {
+            const match = JSON.parse(cached).find(c => (c._id === id || c.id === id));
+            if (match?._source) model = match._source;
+          }
+        } catch (_) {}
+        await offlineQueue.enqueue({
+          model,
+          operation: 'write',
+          values: { _recordId: id, ...vals },
+        });
+      }
+
+      // Mutate cache in place so the UI reflects the edit immediately.
+      try {
+        const raw = await AsyncStorage.getItem('@cache:categories');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex(c => (c._id === id || c.id === id));
+          if (idx >= 0) {
+            const merged = { ...list[idx] };
+            if (name !== undefined) { merged.name = name; merged.category_name = name; }
+            if (parentId !== undefined) merged.parent_id = parentId || null;
+            if (color !== undefined && color !== null) merged.color = color;
+            list[idx] = merged;
+            await AsyncStorage.setItem('@cache:categories', JSON.stringify(list));
+          }
+        }
+      } catch (_) {}
+
+      console.log('[updatePosCategoryOdoo] Queued offline edit for id:', id);
+      return { offline: true };
+    }
+  } catch (_) {}
+
   try {
     const headers = await getOdooAuthHeaders();
     const vals = {};
@@ -4048,17 +4137,27 @@ export const fetchTaxesOdoo = async () => {
     );
     if (response.data.error) {
       console.error('Odoo JSON-RPC error (account.tax):', response.data.error);
+      try {
+        const cached = await AsyncStorage.getItem('@cache:salesTaxes');
+        if (cached) return JSON.parse(cached);
+      } catch (_) {}
       return [];
     }
-    return (response.data.result || []).map(t => ({
+    const mapped = (response.data.result || []).map(t => ({
       id: t.id,
       name: t.name || '',
       amount: t.amount || 0,
       type_tax_use: t.type_tax_use || '',
       price_include: t.price_include || false,
     }));
+    try { await AsyncStorage.setItem('@cache:salesTaxes', JSON.stringify(mapped)); } catch (_) {}
+    return mapped;
   } catch (error) {
     console.error('fetchTaxesOdoo error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:salesTaxes');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return [];
   }
 };
@@ -10157,10 +10256,22 @@ export const fetchUomsOdoo = async () => {
       params: { model: 'uom.uom', method: 'search_read', args: [[]],
         kwargs: { fields: ['id', 'name'], limit: 200 } },
     }, { headers, timeout: 15000 });
-    if (response.data.error) return [];
-    return (response.data.result || []).map(u => ({ id: u.id, name: u.name || '', label: u.name || '' }));
+    if (response.data.error) {
+      try {
+        const cached = await AsyncStorage.getItem('@cache:uoms');
+        if (cached) return JSON.parse(cached);
+      } catch (_) {}
+      return [];
+    }
+    const mapped = (response.data.result || []).map(u => ({ id: u.id, name: u.name || '', label: u.name || '' }));
+    try { await AsyncStorage.setItem('@cache:uoms', JSON.stringify(mapped)); } catch (_) {}
+    return mapped;
   } catch (error) {
     console.error('[fetchUomsOdoo] error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:uoms');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return [];
   }
 };
@@ -10173,34 +10284,129 @@ export const fetchPurchaseTaxesOdoo = async () => {
       params: { model: 'account.tax', method: 'search_read', args: [[['type_tax_use', '=', 'purchase']]],
         kwargs: { fields: ['id', 'name', 'amount', 'type_tax_use'], limit: 50 } },
     }, { headers, timeout: 15000 });
-    if (response.data.error) return [];
-    return (response.data.result || []).map(t => ({ id: t.id, name: t.name || '', label: t.name || '', amount: t.amount || 0 }));
+    if (response.data.error) {
+      try {
+        const cached = await AsyncStorage.getItem('@cache:purchaseTaxes');
+        if (cached) return JSON.parse(cached);
+      } catch (_) {}
+      return [];
+    }
+    const mapped = (response.data.result || []).map(t => ({ id: t.id, name: t.name || '', label: t.name || '', amount: t.amount || 0 }));
+    try { await AsyncStorage.setItem('@cache:purchaseTaxes', JSON.stringify(mapped)); } catch (_) {}
+    return mapped;
   } catch (error) {
     console.error('[fetchPurchaseTaxesOdoo] error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:purchaseTaxes');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return [];
   }
 };
 
 export const createProductOdoo = async ({ name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, taxesId, supplierTaxesId, image, descriptionSale, onHandQty, companyId }) => {
+  // Build the base vals (shared between online and offline paths)
+  const vals = {
+    name,
+    sale_ok: true,
+    purchase_ok: true,
+  };
+  if (companyId) vals.company_id = companyId;
+  if (categId) vals.categ_id = categId;
+  if (posCategoryId) vals.pos_categ_ids = [[6, 0, [posCategoryId]]];
+  if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
+  if (standardPrice !== undefined && standardPrice !== '') vals.standard_price = parseFloat(standardPrice) || 0;
+  if (barcode) vals.barcode = barcode;
+  if (defaultCode) vals.default_code = defaultCode;
+  if (uomId) { vals.uom_id = uomId; vals.uom_po_id = uomId; }
+  if (taxesId && taxesId.length > 0) vals.taxes_id = [[6, 0, taxesId]];
+  if (supplierTaxesId && supplierTaxesId.length > 0) vals.supplier_taxes_id = [[6, 0, supplierTaxesId]];
+  if (descriptionSale) vals.description_sale = descriptionSale;
+
+  // Offline check up-front — queue WITHOUT image (Option 3: no images offline)
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const localId = await offlineQueue.enqueue({
+        model: 'product.product',
+        operation: 'create',
+        values: vals,  // no image included — will show "No Image" until edited online
+      });
+      // Look up the category name from cache so the product detail view shows
+      // the right category (instead of "N/A") while offline.
+      let categoryName = '';
+      const catKeyId = posCategoryId || categId;
+      try {
+        const catCacheRaw = await AsyncStorage.getItem('@cache:categories');
+        if (catCacheRaw && catKeyId) {
+          const catList = JSON.parse(catCacheRaw);
+          const match = catList.find(c => (c._id === catKeyId || c.id === catKeyId));
+          categoryName = match?.category_name || match?.name || '';
+        }
+      } catch (_) {}
+      // Append to cached product lists so user sees it immediately in Products screen + Home
+      try {
+        const placeholderProduct = {
+          id: `offline_${localId}`,
+          product_name: name || '',
+          image_url: '',
+          price: parseFloat(listPrice) || 0,
+          list_price: parseFloat(listPrice) || 0,
+          standard_price: parseFloat(standardPrice) || 0,
+          code: defaultCode || '',
+          uom: uomId ? { uom_id: uomId, uom_name: '' } : null,
+          tax_percent: 0,
+          taxes: [],
+          qty_available: parseFloat(onHandQty) || 0,
+          categ_id: catKeyId ? [catKeyId, categoryName] : null,
+          category_name: categoryName,
+          category: catKeyId ? { id: catKeyId, category_name: categoryName, name: categoryName } : null,
+          pos_categ_ids: posCategoryId ? [[posCategoryId, categoryName]] : [],
+          offline: true,
+        };
+        // Main cache
+        const mainRaw = await AsyncStorage.getItem('@cache:products');
+        const mainList = mainRaw ? JSON.parse(mainRaw) : [];
+        mainList.push(placeholderProduct);
+        await AsyncStorage.setItem('@cache:products', JSON.stringify(mainList));
+        // Category-specific cache too (so the Drinks/category filter shows it)
+        if (catKeyId) {
+          const catKey = `@cache:products:cat:${catKeyId}`;
+          const catRaw = await AsyncStorage.getItem(catKey);
+          const catList = catRaw ? JSON.parse(catRaw) : [];
+          catList.push(placeholderProduct);
+          await AsyncStorage.setItem(catKey, JSON.stringify(catList));
+        }
+        // Per-product detail cache so fetchProductDetailsOdoo returns category
+        // info when offline (ProductDetail reads @cache:productDetail:<id>).
+        try {
+          const detailEntry = {
+            id: `offline_${localId}`,
+            product_name: name || '',
+            image_url: '',
+            price: parseFloat(listPrice) || 0,
+            standard_price: parseFloat(standardPrice) || 0,
+            code: defaultCode || '',
+            barcode: barcode || '',
+            uom: uomId ? { uom_id: uomId, uom_name: '' } : null,
+            categ_id: catKeyId ? [catKeyId, categoryName] : null,
+            category_name: categoryName,
+            pos_categ_ids: posCategoryId ? [[posCategoryId, categoryName]] : [],
+            product_description: descriptionSale || '',
+            offline: true,
+          };
+          await AsyncStorage.setItem(`@cache:productDetail:offline_${localId}`, JSON.stringify(detailEntry));
+        } catch (_) {}
+      } catch (_) {}
+      console.log('[createProductOdoo] Queued offline, localId:', localId, 'category:', categoryName);
+      return { offline: true, localId };
+    }
+  } catch (_) {}
+
   try {
     const headers = await getOdooAuthHeaders();
-    const vals = {
-      name,
-      sale_ok: true,
-      purchase_ok: true,
-    };
-    if (companyId) vals.company_id = companyId;
-    if (categId) vals.categ_id = categId;
-    if (posCategoryId) vals.pos_categ_ids = [[6, 0, [posCategoryId]]];
-    if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
-    if (standardPrice !== undefined && standardPrice !== '') vals.standard_price = parseFloat(standardPrice) || 0;
-    if (barcode) vals.barcode = barcode;
-    if (defaultCode) vals.default_code = defaultCode;
-    if (uomId) { vals.uom_id = uomId; vals.uom_po_id = uomId; }
-    if (taxesId && taxesId.length > 0) vals.taxes_id = [[6, 0, taxesId]];
-    if (supplierTaxesId && supplierTaxesId.length > 0) vals.supplier_taxes_id = [[6, 0, supplierTaxesId]];
+    // Image goes only on the ONLINE path
     if (image) vals.image_1920 = image;
-    if (descriptionSale) vals.description_sale = descriptionSale;
 
     console.log('[createProductOdoo] Sending vals:', JSON.stringify({ ...vals, image_1920: vals.image_1920 ? '(base64)' : undefined }));
 
@@ -10263,6 +10469,91 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
 };
 
 export const updateProductOdoo = async (productId, { name, posCategoryId, categId, listPrice, standardPrice, barcode, defaultCode, image }) => {
+  // Offline branch — queue edit, mutate caches in place. Images skipped offline.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const vals = {};
+      if (name !== undefined && name !== '') vals.name = name;
+      if (categId) vals.categ_id = categId;
+      if (posCategoryId) vals.pos_categ_ids = [[6, 0, [posCategoryId]]];
+      if (listPrice !== undefined && listPrice !== '') vals.list_price = parseFloat(listPrice) || 0;
+      if (standardPrice !== undefined && standardPrice !== '') vals.standard_price = parseFloat(standardPrice) || 0;
+      if (barcode !== undefined) vals.barcode = barcode || false;
+      if (defaultCode !== undefined) vals.default_code = defaultCode || false;
+
+      const idStr = String(productId);
+      if (idStr.startsWith('offline_')) {
+        // Edit of an offline-created product that hasn't synced yet.
+        const queueItemId = idStr.replace('offline_', '');
+        await offlineQueue.updateValues(queueItemId, vals);
+      } else {
+        await offlineQueue.enqueue({
+          model: 'product.product',
+          operation: 'write',
+          values: { _recordId: productId, ...vals },
+        });
+      }
+
+      // Look up category name from cache to keep the cached product display correct.
+      const newCatId = posCategoryId || categId;
+      let categoryName = '';
+      try {
+        const catCacheRaw = await AsyncStorage.getItem('@cache:categories');
+        if (catCacheRaw && newCatId) {
+          const catList = JSON.parse(catCacheRaw);
+          const m = catList.find(c => (c._id === newCatId || c.id === newCatId));
+          categoryName = m?.category_name || m?.name || '';
+        }
+      } catch (_) {}
+
+      // Build merge object for the cached product entries.
+      const patch = {};
+      if (name !== undefined && name !== '') patch.product_name = name;
+      if (listPrice !== undefined && listPrice !== '') { patch.price = parseFloat(listPrice) || 0; patch.list_price = parseFloat(listPrice) || 0; }
+      if (standardPrice !== undefined && standardPrice !== '') patch.standard_price = parseFloat(standardPrice) || 0;
+      if (barcode !== undefined) patch.barcode = barcode || '';
+      if (defaultCode !== undefined) patch.code = defaultCode || '';
+      if (newCatId) {
+        patch.categ_id = [newCatId, categoryName];
+        patch.category_name = categoryName;
+        patch.category = { id: newCatId, category_name: categoryName, name: categoryName };
+        patch.pos_categ_ids = posCategoryId ? [[posCategoryId, categoryName]] : [];
+      }
+
+      // Update every product list cache that contains this product.
+      try {
+        const keys = await AsyncStorage.getAllKeys();
+        const productKeys = keys.filter(k => k.startsWith('@cache:products') && !k.startsWith('@cache:productDetail'));
+        for (const key of productKeys) {
+          try {
+            const raw = await AsyncStorage.getItem(key);
+            if (!raw) continue;
+            const list = JSON.parse(raw);
+            const idx = list.findIndex(p => p.id === productId);
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], ...patch };
+              await AsyncStorage.setItem(key, JSON.stringify(list));
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+
+      // Update the per-product detail cache so the detail view reflects edit.
+      try {
+        const detailKey = `@cache:productDetail:${productId}`;
+        const raw = await AsyncStorage.getItem(detailKey);
+        if (raw) {
+          const prev = JSON.parse(raw);
+          await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, ...patch }));
+        }
+      } catch (_) {}
+
+      console.log('[updateProductOdoo] Queued offline edit for id:', productId);
+      return { offline: true };
+    }
+  } catch (_) {}
+
   try {
     const headers = await getOdooAuthHeaders();
     const vals = {};

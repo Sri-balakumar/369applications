@@ -16,6 +16,7 @@ import {
   fetchPosCategoriesOdoo,
   updateProductOdoo,
 } from '@api/services/generalApi';
+import { isOnline } from '@utils/networkStatus';
 
 const ProductEditForm = ({ navigation, route }) => {
   const { product } = route?.params || {};
@@ -58,7 +59,15 @@ const ProductEditForm = ({ navigation, route }) => {
     }).catch((e) => { console.error('[ProductEdit] Failed to load categories:', e?.message); });
   }, []);
 
-  const handlePickImage = () => {
+  const handlePickImage = async () => {
+    const online = await isOnline();
+    if (!online) {
+      Alert.alert(
+        'You\'re Offline',
+        'Can\'t add image right now. Please add the image once you\'re connected to the internet.'
+      );
+      return;
+    }
     Alert.alert('Select Image', 'Choose an option', [
       { text: 'Camera', onPress: () => openCamera() },
       { text: 'Gallery', onPress: () => openGallery() },
@@ -114,7 +123,7 @@ const ProductEditForm = ({ navigation, route }) => {
       const categoryIdToSend = category?.id || category?._id;
       const isPosCategory = category?._source === 'pos.category';
       console.log('[ProductUpdate] Category:', categoryIdToSend, 'source:', category?._source);
-      await updateProductOdoo(product.id, {
+      const result = await updateProductOdoo(product.id, {
         name: productName.trim(),
         categId: isPosCategory ? undefined : categoryIdToSend,
         posCategoryId: isPosCategory ? categoryIdToSend : undefined,
@@ -124,7 +133,11 @@ const ProductEditForm = ({ navigation, route }) => {
         defaultCode: internalRef || undefined,
         image: imageBase64 || undefined,
       });
-      showToastMessage('Product updated successfully');
+      if (result?.offline) {
+        showToastMessage('Product saved offline. Will sync when online.');
+      } else {
+        showToastMessage('Product updated successfully');
+      }
       navigation.goBack();
     } catch (error) {
       Alert.alert('Error', error?.message || 'Failed to update product');

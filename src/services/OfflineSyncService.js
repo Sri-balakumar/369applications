@@ -18,6 +18,8 @@ let unsubscribe = null;
 let flushing = false;
 let retryTimer = null;
 
+const OFFLINE_ID_MAP_KEY = '@offline_id_map';
+
 const getAuthHeaders = async () => {
     const headers = { 'Content-Type': 'application/json' };
     try {
@@ -25,6 +27,107 @@ const getAuthHeaders = async () => {
         if (cookie) headers.Cookie = cookie;
     } catch (_) {}
     return headers;
+};
+
+// Persistent map of offline placeholder ids ("offline_<queueItemId>") to real
+// Odoo ids. Used so that a product queued offline that references a newly
+// created offline category can resolve the category's real id once the
+// category has itself been synced.
+const readOfflineIdMap = async () => {
+    try {
+        const raw = await AsyncStorage.getItem(OFFLINE_ID_MAP_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch (_) { return {}; }
+};
+
+const saveOfflineIdMapping = async (offlineId, realId) => {
+    try {
+        const map = await readOfflineIdMap();
+        map[offlineId] = realId;
+        await AsyncStorage.setItem(OFFLINE_ID_MAP_KEY, JSON.stringify(map));
+    } catch (_) {}
+};
+
+// Resolve any "offline_<id>" references inside a product's values to their
+// real Odoo ids. Throws if a reference has no mapping yet — the queue will
+// retry after the dependency syncs.
+const resolveOfflineCategoryRefs = async (values) => {
+    const map = await readOfflineIdMap();
+    const resolve = (val) => {
+        if (typeof val !== 'string' || !val.startsWith('offline_')) return val;
+        const real = map[val];
+        if (real === undefined) throw new Error(`Dependency ${val} not yet synced`);
+        return real;
+    };
+    const out = { ...values };
+    if (typeof out.categ_id === 'string' && out.categ_id.startsWith('offline_')) {
+        out.categ_id = resolve(out.categ_id);
+    }
+    if (Array.isArray(out.pos_categ_ids)) {
+        out.pos_categ_ids = out.pos_categ_ids.map((cmd) => {
+            if (Array.isArray(cmd) && cmd[0] === 6 && Array.isArray(cmd[2])) {
+                return [6, 0, cmd[2].map((id) => resolve(id))];
+            }
+            return cmd;
+        });
+    }
+    return out;
+};
+
+// After a category syncs, replace any offline placeholder entry in the cached
+// category list with the real id so the form dropdown stops showing it twice.
+// Also rename the category-keyed product cache so filter still finds products
+// that were queued under the offline id.
+const replaceOfflineCategoryInCache = async (offlineId, realId) => {
+    try {
+        const raw = await AsyncStorage.getItem('@cache:categories');
+        if (raw) {
+            const list = JSON.parse(raw);
+            let changed = false;
+            const next = list.map((c) => {
+                if (c._id === offlineId || c.id === offlineId) {
+                    changed = true;
+                    return { ...c, _id: realId, id: realId, offline: false };
+                }
+                return c;
+            });
+            if (changed) await AsyncStorage.setItem('@cache:categories', JSON.stringify(next));
+        }
+
+        // Rename @cache:products:cat:<offlineId> -> @cache:products:cat:<realId>
+        const oldKey = `@cache:products:cat:${offlineId}`;
+        const newKey = `@cache:products:cat:${realId}`;
+        const oldProducts = await AsyncStorage.getItem(oldKey);
+        if (oldProducts) {
+            await AsyncStorage.setItem(newKey, oldProducts);
+            await AsyncStorage.removeItem(oldKey);
+        }
+    } catch (_) {}
+};
+
+// After a product syncs, update its placeholder in the cached product lists
+// so the real id replaces the offline id and downstream navigation works.
+const replaceOfflineProductInCache = async (offlineId, realId) => {
+    try {
+        const keys = await AsyncStorage.getAllKeys();
+        const productKeys = keys.filter((k) => k.startsWith('@cache:products'));
+        for (const key of productKeys) {
+            try {
+                const raw = await AsyncStorage.getItem(key);
+                if (!raw) continue;
+                const list = JSON.parse(raw);
+                let changed = false;
+                const next = list.map((p) => {
+                    if (p.id === offlineId) {
+                        changed = true;
+                        return { ...p, id: realId, offline: false };
+                    }
+                    return p;
+                });
+                if (changed) await AsyncStorage.setItem(key, JSON.stringify(next));
+            } catch (_) {}
+        }
+    } catch (_) {}
 };
 
 // Log a completed sync into Odoo's offline.sync.queue as 'synced' so the
@@ -172,6 +275,159 @@ const syncItemDirectly = async (item) => {
         console.log('[OfflineSyncService] Deleted app.banner id:', bannerId);
         logSyncHistory(baseUrl, headers, { model: 'app.banner', operation: 'delete', values, syncedRecordId: bannerId }).catch(() => {});
         return bannerId;
+    }
+
+    // Product create (sale_ok/purchase_ok and category already in values)
+    if (item.model === 'product.product' && item.operation === 'create') {
+        // Resolve any offline_<id> category refs to the real ids we got from
+        // earlier queue items. If an offline category ref is still unresolved,
+        // this throws and keeps the item in the queue for retry.
+        const resolvedValues = await resolveOfflineCategoryRefs(values);
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'product.product',
+                    method: 'create',
+                    args: [resolvedValues],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Product create failed');
+        }
+        const recordId = response.data?.result;
+        console.log('[OfflineSyncService] Created product.product id:', recordId);
+        await replaceOfflineProductInCache(`offline_${item.id}`, recordId);
+        logSyncHistory(baseUrl, headers, { model: 'product.product', operation: 'create', values: resolvedValues, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // POS category create (with product.category fallback)
+    if ((item.model === 'pos.category' || item.model === 'product.category') && item.operation === 'create') {
+        // Idempotency: if we already synced this queue item but failed to
+        // removeById (e.g. app killed between the two), the mapping is still
+        // persisted — return that real id instead of creating a duplicate.
+        const offlineId = `offline_${item.id}`;
+        const existingMap = await readOfflineIdMap();
+        if (existingMap[offlineId] !== undefined) {
+            console.log('[OfflineSyncService] category already synced, reusing id:', existingMap[offlineId]);
+            return existingMap[offlineId];
+        }
+
+        let model = item.model;
+        let response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: { model, method: 'create', args: [values], kwargs: {} },
+            },
+            { headers, timeout: 15000 }
+        );
+        // If pos.category doesn't exist, fall back to product.category
+        if (response.data?.error && model === 'pos.category') {
+            console.log('[OfflineSyncService] pos.category unavailable, trying product.category');
+            model = 'product.category';
+            response = await axios.post(
+                `${baseUrl}/web/dataset/call_kw`,
+                {
+                    jsonrpc: '2.0',
+                    method: 'call',
+                    params: { model, method: 'create', args: [values], kwargs: {} },
+                },
+                { headers, timeout: 15000 }
+            );
+        }
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Category create failed');
+        }
+        const recordId = response.data?.result;
+        console.log('[OfflineSyncService] Created', model, 'id:', recordId);
+        await saveOfflineIdMapping(offlineId, recordId);
+        await replaceOfflineCategoryInCache(offlineId, recordId);
+        logSyncHistory(baseUrl, headers, { model, operation: 'create', values, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // Product write (edit)
+    if (item.model === 'product.product' && item.operation === 'write') {
+        const { _recordId, ...rest } = values;
+        // Resolve if the record itself was offline-created but is now synced.
+        let realRecordId = _recordId;
+        if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
+            const map = await readOfflineIdMap();
+            if (map[realRecordId] === undefined) {
+                throw new Error(`Record ${realRecordId} not yet synced`);
+            }
+            realRecordId = map[realRecordId];
+        }
+        // Any category refs inside the edit values may also be offline_<id>.
+        const resolvedValues = await resolveOfflineCategoryRefs(rest);
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'product.product',
+                    method: 'write',
+                    args: [[Number(realRecordId)], resolvedValues],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Product write failed');
+        }
+        console.log('[OfflineSyncService] Updated product.product id:', realRecordId);
+        logSyncHistory(baseUrl, headers, { model: 'product.product', operation: 'write', values: resolvedValues, syncedRecordId: realRecordId }).catch(() => {});
+        return realRecordId;
+    }
+
+    // Category write (edit) — same fallback shape as create handler
+    if ((item.model === 'pos.category' || item.model === 'product.category') && item.operation === 'write') {
+        const { _recordId, ...rest } = values;
+        let realRecordId = _recordId;
+        if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
+            const map = await readOfflineIdMap();
+            if (map[realRecordId] === undefined) {
+                throw new Error(`Record ${realRecordId} not yet synced`);
+            }
+            realRecordId = map[realRecordId];
+        }
+        let model = item.model;
+        let response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: { model, method: 'write', args: [[Number(realRecordId)], rest], kwargs: {} },
+            },
+            { headers, timeout: 15000 }
+        );
+        if (response.data?.error && model === 'pos.category') {
+            console.log('[OfflineSyncService] pos.category unavailable on write, trying product.category');
+            model = 'product.category';
+            response = await axios.post(
+                `${baseUrl}/web/dataset/call_kw`,
+                {
+                    jsonrpc: '2.0', method: 'call',
+                    params: { model, method: 'write', args: [[Number(realRecordId)], rest], kwargs: {} },
+                },
+                { headers, timeout: 15000 }
+            );
+        }
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Category write failed');
+        }
+        console.log('[OfflineSyncService] Updated', model, 'id:', realRecordId);
+        logSyncHistory(baseUrl, headers, { model, operation: 'write', values: rest, syncedRecordId: realRecordId }).catch(() => {});
+        return realRecordId;
     }
 
     // Fallback: try the offline_sync submit endpoint for non-attendance models

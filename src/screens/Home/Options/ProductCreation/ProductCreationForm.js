@@ -3,6 +3,7 @@ import { View, StyleSheet, Keyboard, TouchableOpacity, Alert, Image, TextInput a
 import Modal from 'react-native-modal';
 import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
+import OfflineBanner from '@components/common/OfflineBanner';
 import { CustomListModal } from '@components/Modal';
 import { TextInput as FormInput } from '@components/common/TextInput';
 import { LoadingButton } from '@components/common/Button';
@@ -23,12 +24,12 @@ import {
   createPosCategoryOdoo,
   updatePosCategoryOdoo,
 } from '@api/services/generalApi';
+import { isOnline } from '@utils/networkStatus';
 import { useAuthStore } from '@stores/auth';
 
 const ProductCreationForm = ({ navigation }) => {
   const user = useAuthStore((state) => state.user);
   const currentCompanyId = user?.company_id || null;
-  const currentCompanyName = user?.company_name || '';
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
   const submittingRef = useRef(false);
@@ -79,7 +80,15 @@ const ProductCreationForm = ({ navigation }) => {
     }).catch(() => {});
   }, []);
 
-  const handlePickImage = () => {
+  const handlePickImage = async () => {
+    const online = await isOnline();
+    if (!online) {
+      Alert.alert(
+        'You\'re Offline',
+        'Can\'t add image right now. Please add the image once you\'re connected to the internet.'
+      );
+      return;
+    }
     Alert.alert('Select Image', 'Choose an option', [
       { text: 'Camera', onPress: () => openCamera() },
       { text: 'Gallery', onPress: () => openGallery() },
@@ -195,6 +204,14 @@ const ProductCreationForm = ({ navigation }) => {
   };
 
   const pickCategoryImage = async () => {
+    const online = await isOnline();
+    if (!online) {
+      Alert.alert(
+        'You\'re Offline',
+        'Can\'t add image right now. Please add the image once you\'re connected to the internet.'
+      );
+      return;
+    }
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -225,19 +242,33 @@ const ProductCreationForm = ({ navigation }) => {
     try {
       console.log('[CategoryForm] Saving with image size:', newCatImage ? newCatImage.length : 'no image');
       const vals = { name, parentId: newCatParentId, color: newCatColor, image: newCatImage };
+      let createResult;
       if (editingCategory) {
-        await updatePosCategoryOdoo(editingCategory.id, vals);
-        showToastMessage('Category updated successfully');
+        const updateResult = await updatePosCategoryOdoo(editingCategory.id, vals);
+        if (updateResult?.offline) {
+          showToastMessage('Category saved offline. Will sync when online.');
+        } else {
+          showToastMessage('Category updated successfully');
+        }
       } else {
-        await createPosCategoryOdoo(vals);
-        showToastMessage('Category created successfully');
+        createResult = await createPosCategoryOdoo(vals);
+        if (createResult?.offline) {
+          showToastMessage('Category saved offline. Will sync when online.');
+        } else {
+          showToastMessage('Category created successfully');
+        }
       }
-      // Refresh categories
+      // Refresh categories — fetchPosCategoriesOdoo now returns cached list when offline
+      // which already includes the just-created offline category
       const cats = await fetchPosCategoriesOdoo();
       const mapped = (cats || []).map(c => ({ id: c._id || c.id, _id: c._id || c.id, name: c.category_name || c.name || '', label: c.category_name || c.name || '', parent_id: c.parent_id, color: c.color, image_url: c.image_url, image_base64: c.image_base64, _source: c._source }));
       setCategories(mapped);
       if (!editingCategory) {
-        const created = mapped.find(c => c.name === name);
+        // Prefer the offline id if we just created one offline
+        const targetId = createResult?.offline ? createResult.id : null;
+        const created = targetId
+          ? mapped.find(c => (c._id || c.id) === targetId)
+          : mapped.find(c => c.name === name);
         if (created) setCategory(created);
       }
       setIsAddCategoryVisible(false);
@@ -300,7 +331,11 @@ const ProductCreationForm = ({ navigation }) => {
         onHandQty: onHandQty || undefined,
         companyId: currentCompanyId || undefined,
       });
-      showToastMessage('Product created successfully');
+      if (productId?.offline) {
+        showToastMessage('Product saved offline. Will sync when online.');
+      } else {
+        showToastMessage('Product created successfully');
+      }
       navigation.goBack();
     } catch (error) {
       Alert.alert('Error', error?.message || 'Failed to create product');
@@ -313,6 +348,7 @@ const ProductCreationForm = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="New Product" onBackPress={() => navigation.goBack()} logo={false} />
+      <OfflineBanner message="OFFLINE MODE — product will sync when you reconnect" />
       <RoundedScrollContainer>
         {/* Product Image */}
         <TouchableOpacity style={styles.imagePickerContainer} onPress={handlePickImage}>
@@ -330,8 +366,6 @@ const ProductCreationForm = ({ navigation }) => {
         <FormInput label="Product Name" placeholder="Enter product name" value={productName}
           onChangeText={(val) => { setProductName(val); if (errors.name) setErrors(prev => ({ ...prev, name: null })); }}
           validate={errors.name} required />
-        <FormInput label="Company" placeholder="-" editable={false}
-          value={currentCompanyName || 'No company selected'} />
         <FormInput label="Category" placeholder="Select category" dropIcon="menu-down" editable={false}
           value={category?.name || ''} validate={errors.category} required onPress={() => openDropdown('category')} />
 
