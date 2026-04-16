@@ -79,7 +79,6 @@ const OptionsScreen = ({ navigation }) => {
     { title: 'Inventory Management', image: require('@assets/images/Home/options/inventory_management_1.png'), onPress: () => navigation.navigate('InventoryScreen') },
     { title: 'Box Inspection', image: require('@assets/images/Home/options/box_inspection.png'), onPress: () => setIsConfirmationModalVisible(true) },
     { title: 'Late Records', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('LateRecordsScreen') },
-    { title: 'Offline Sync', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('OfflineSyncScreen') },
   ];
 
   // Add Staff Tracking option for admin users, My Location for non-admin users

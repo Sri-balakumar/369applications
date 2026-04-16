@@ -68,9 +68,10 @@ const LoginScreenOdoo = () => {
     "Non-serializable values were found in the navigation state",
   ]);
 
+  // Empty fields by default — user must enter URL and DB explicitly.
   const [inputs, setInputs] = useState({
-    baseUrl: DEFAULT_ODOO_BASE_URL || "",
-    db: DEFAULT_ODOO_DB || "",
+    baseUrl: "",
+    db: "",
     username: "",
     password: "",
   });
@@ -133,19 +134,7 @@ const LoginScreenOdoo = () => {
     }
   }, []);
 
-  // Pre-fill the Server URL from AsyncStorage on first mount
-  useEffect(() => {
-    (async () => {
-      try {
-        const saved = await AsyncStorage.getItem('odoo_base_url');
-        if (saved) {
-          setInputs((prev) => (prev.baseUrl ? prev : { ...prev, baseUrl: saved }));
-        }
-      } catch (e) {
-        console.log('Failed to read saved odoo_base_url:', e?.message);
-      }
-    })();
-  }, []);
+  // Removed auto-fill of Server URL from AsyncStorage — user must enter URL each time.
 
   // Debounce URL changes to fetch databases
   useEffect(() => {

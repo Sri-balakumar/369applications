@@ -62,7 +62,7 @@ const ProfileScreen = ({ navigation }) => {
               try {
                 const allKeys = await AsyncStorage.getAllKeys();
                 const keysToRemove = allKeys.filter(
-                  (k) => k.startsWith("cart_") || k.startsWith("@attCache:") || k === "@offline_queue_v1"
+                  (k) => k.startsWith("cart_")
                 );
                 if (keysToRemove.length > 0) await AsyncStorage.multiRemove(keysToRemove);
               } catch (_) {}
@@ -86,7 +86,7 @@ const ProfileScreen = ({ navigation }) => {
       try {
         const allKeys = await AsyncStorage.getAllKeys();
         const toRemove = allKeys.filter(
-          (k) => k.startsWith("cart_") || k.startsWith("@attCache:") || k === "@offline_queue_v1"
+          (k) => k.startsWith("cart_")
         );
         if (toRemove.length > 0) await AsyncStorage.multiRemove(toRemove);
       } catch (_) {}

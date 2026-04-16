@@ -51,15 +51,9 @@ const BannerManagementScreen = ({ navigation }) => {
       setActionLoading(true);
       const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
       const fileName = asset.fileName || `banner_${Date.now()}`;
-      const createResult = await createAppBannerOdoo({ name: fileName, imageBase64: base64 });
-      if (createResult?.offline) {
-        showToastMessage('Banner saved offline. Will sync when online.');
-        // Add placeholder to local list so user sees it immediately
-        setBanners((prev) => [...prev, { id: `offline_${Date.now()}`, name: fileName, image: base64, sequence: 999, offline: true }]);
-      } else {
-        showToastMessage('Banner added successfully');
-        fetchBanners();
-      }
+      await createAppBannerOdoo({ name: fileName, imageBase64: base64 });
+      showToastMessage('Banner added successfully');
+      fetchBanners();
     } catch (err) {
       Alert.alert('Error', err?.message || 'Failed to add banner');
     } finally {
@@ -74,14 +68,9 @@ const BannerManagementScreen = ({ navigation }) => {
       { text: 'Delete', style: 'destructive', onPress: async () => {
         setActionLoading(true);
         try {
-          const result = await deleteAppBannerOdoo(banner.id);
-          if (result?.offline) {
-            showToastMessage('Delete queued offline. Will sync when online.');
-            setBanners((prev) => prev.filter((b) => b.id !== banner.id));
-          } else {
-            showToastMessage('Banner deleted');
-            fetchBanners();
-          }
+          await deleteAppBannerOdoo(banner.id);
+          showToastMessage('Banner deleted');
+          fetchBanners();
         } catch (err) {
           Alert.alert('Error', err?.message || 'Failed to delete banner');
         } finally {

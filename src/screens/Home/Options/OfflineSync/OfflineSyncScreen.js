@@ -54,13 +54,22 @@ const OfflineSyncScreen = ({ navigation }) => {
       setLocalQueueCount(localCount);
     } catch (_) { /* ignore */ }
 
-    // Ping first so we can flip the status card even if stats fails.
+    // Check connectivity using the same method as the rest of the app.
+    // Falls back to a direct Odoo ping if the offline_sync module endpoint fails.
     let online = false;
     try {
-      await pingOfflineSync();
-      online = true;
+      online = await require('@utils/networkStatus').isOnline();
     } catch (_) {
       online = false;
+    }
+    // If basic connectivity works, also try the offline_sync ping for full status
+    if (online) {
+      try {
+        await pingOfflineSync();
+      } catch (_) {
+        // offline_sync module might not be installed/configured — that's OK,
+        // we're still online. Just the stats won't load.
+      }
     }
     setConnection({ status: online ? 'online' : 'offline', checkedAt: new Date() });
 

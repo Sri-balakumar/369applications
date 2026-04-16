@@ -537,8 +537,6 @@ import { get } from "./utils";
 import { API_ENDPOINTS } from "@api/endpoints";
 import { useAuthStore } from '@stores/auth';
 import handleApiError from "../utils/handleApiError";
-import offlineQueue from '@utils/offlineQueue';
-import { isOnline } from '@utils/networkStatus';
 
 // Debugging output for useAuthStore
 export const fetchProducts = async ({ offset, limit, categoryId, searchText }) => {
@@ -563,26 +561,23 @@ export const fetchProducts = async ({ offset, limit, categoryId, searchText }) =
 // 🔹 NEW: Fetch products directly from Odoo 19 via JSON-RPC
 export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId, posCategoryId } = {}) => {
   try {
-    // Base domain: active salable products
-    let domain = [["sale_ok", "=", true]];
+    console.log('[fetchProductsOdoo] CALLED with:', { offset, limit, searchText, categoryId, posCategoryId });
+    // Base domain: all products
+    let domain = [];
 
-    // Filter by POS category if provided
-    if (posCategoryId) {
-      domain = ["&", ["sale_ok", "=", true], ["pos_categ_ids", "in", [Number(posCategoryId)]]];
-    }
-    // Filter by product category if provided
-    else if (categoryId) {
-      domain = ["&", ["sale_ok", "=", true], ["categ_id", "=", Number(categoryId)]];
+    // Filter by category if provided (uses product.category, not pos.category)
+    if (posCategoryId || categoryId) {
+      const catId = Number(posCategoryId || categoryId);
+      domain = [["categ_id", "=", catId]];
     }
 
     if (searchText && searchText.trim() !== "") {
       const term = searchText.trim();
-      if (posCategoryId) {
-        domain = ["&", "&", ["sale_ok", "=", true], ["pos_categ_ids", "in", [Number(posCategoryId)]], ["name", "ilike", term]];
-      } else if (categoryId) {
-        domain = ["&", "&", ["sale_ok", "=", true], ["categ_id", "=", Number(categoryId)], ["name", "ilike", term]];
+      if (posCategoryId || categoryId) {
+        const catId = Number(posCategoryId || categoryId);
+        domain = ["&", ["categ_id", "=", catId], ["name", "ilike", term]];
       } else {
-        domain = ["&", ["sale_ok", "=", true], ["name", "ilike", term]];
+        domain = [["name", "ilike", term]];
       }
     }
 
@@ -610,9 +605,7 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
               "uom_id",          // many2one [id, name]
               "image_128",       // product image
               "taxes_id",        // customer taxes
-              "qty_available",   // on-hand stock quantity
               "categ_id",        // product category [id, name]
-              "pos_categ_ids",   // POS category IDs
             ],
             limit: odooLimit,
             order: "name asc",
@@ -628,6 +621,45 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
     }
 
     const products = response.data.result || [];
+    console.log('[fetchProductsOdoo] Odoo returned', products.length, 'products');
+    if (products.length > 0) {
+      console.log('[fetchProductsOdoo] First product:', JSON.stringify(products[0]).substring(0, 200));
+    }
+
+    // DIAGNOSTIC: if we got 0 products, count total in DB and check permissions
+    if (products.length === 0) {
+      try {
+        const countResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'product.product', method: 'search_count', args: [[]], kwargs: {} },
+          },
+          { headers }
+        );
+        console.log('[fetchProductsOdoo] DIAGNOSTIC — product.product count in DB:', countResp.data?.result);
+
+        const tmplCountResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'product.template', method: 'search_count', args: [[]], kwargs: {} },
+          },
+          { headers }
+        );
+        console.log('[fetchProductsOdoo] DIAGNOSTIC — product.template count in DB:', tmplCountResp.data?.result);
+
+        const sessionResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/session/get_session_info`,
+          { jsonrpc: '2.0', method: 'call', params: {} },
+          { headers }
+        );
+        const sess = sessionResp.data?.result || {};
+        console.log('[fetchProductsOdoo] DIAGNOSTIC — session db:', sess.db, 'uid:', sess.uid, 'company:', sess.company_id, 'username:', sess.username);
+      } catch (e) {
+        console.log('[fetchProductsOdoo] DIAGNOSTIC failed:', e?.message);
+      }
+    }
 
     // Fetch tax rates for all unique tax IDs
     const allTaxIds = [...new Set(products.flatMap(p => p.taxes_id || []))];
@@ -717,9 +749,9 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
           : null,
         tax_percent: taxPercent,
         taxes: productTaxes,
-        qty_available: p.qty_available ?? 0,
+        qty_available: 0,
         categ_id: p.categ_id && Array.isArray(p.categ_id) ? p.categ_id : null,
-        pos_categ_ids: p.pos_categ_ids || [],
+        pos_categ_ids: [],
       };
     });
   } catch (error) {
@@ -993,11 +1025,27 @@ export const fetchProductCategoriesOdoo = async () => {
 export const fetchPosCategoriesOdoo = async () => {
   try {
     const headers = await getOdooAuthHeaders();
-    const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+    // Try pos.category first, fall back to product.category if POS module not installed
+    let model = 'pos.category';
+    let fields = ['id', 'name', 'image_128', 'parent_id', 'color'];
+    let response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
       jsonrpc: '2.0', method: 'call',
-      params: { model: 'pos.category', method: 'search_read', args: [[]],
-        kwargs: { fields: ['id', 'name', 'image_128', 'parent_id', 'color'], limit: 100, order: 'sequence asc, name asc' } },
+      params: { model, method: 'search_read', args: [[]],
+        kwargs: { fields, limit: 100, order: 'sequence asc, name asc' } },
     }, { headers, timeout: 15000 });
+
+    // If pos.category fails (404 or error), try product.category
+    if (response.data.error || (typeof response.data === 'string')) {
+      console.log('[fetchPosCategoriesOdoo] pos.category not available, using product.category');
+      model = 'product.category';
+      fields = ['id', 'name', 'parent_id'];
+      response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model, method: 'search_read', args: [[]],
+          kwargs: { fields, limit: 100, order: 'name asc' } },
+      }, { headers, timeout: 15000 });
+    }
+
     if (response.data.error) {
       console.error('[fetchPosCategoriesOdoo] error:', response.data.error?.data?.message);
       return [];
@@ -1111,7 +1159,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
           kwargs: {
             fields: [
               'id', 'name', 'list_price', 'lst_price', 'standard_price', 'default_code', 'barcode', 'uom_id', 'image_128',
-              'description_sale', 'categ_id', 'pos_categ_ids', 'qty_available', 'virtual_available'
+              'description_sale', 'categ_id'
             ],
             limit: 1,
           },
@@ -1369,7 +1417,7 @@ export const createAuditingOdoo = async (auditingData) => {
         `${ODOO_BASE_URL()}/web/session/authenticate`,
         {
           jsonrpc: '2.0', method: 'call',
-          params: { db: DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
+          params: { db: (await AsyncStorage.getItem('odoo_db')) || DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
         },
         { headers: { 'Content-Type': 'application/json' } }
       );
@@ -3161,7 +3209,7 @@ export const createProductEnquiryOdoo = async ({
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          db: DEFAULT_ODOO_DB,
+          db: (await AsyncStorage.getItem('odoo_db')) || DEFAULT_ODOO_DB,
           login: DEFAULT_USERNAME,
           password: DEFAULT_PASSWORD,
         },
@@ -3315,7 +3363,7 @@ export const createPaymentWithSignatureOdoo = async ({
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          db: DEFAULT_ODOO_DB,
+          db: (await AsyncStorage.getItem('odoo_db')) || DEFAULT_ODOO_DB,
           login: DEFAULT_USERNAME,
           password: DEFAULT_PASSWORD,
         },
@@ -3508,13 +3556,35 @@ export const createPaymentWithSignatureOdoo = async ({
 // Helper: Full Odoo authentication (returns headers with session cookie)
 const authenticateOdoo = async () => {
   const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+
+  // Prefer the user's existing session cookie (from their actual login)
+  // over a hardcoded DEFAULT_ODOO_DB re-authentication. This prevents the
+  // user's database from being silently switched to 'test'.
+  try {
+    const existingCookie = await AsyncStorage.getItem('odoo_cookie');
+    if (existingCookie) {
+      return {
+        headers: { 'Content-Type': 'application/json', Cookie: existingCookie },
+        baseUrl,
+      };
+    }
+  } catch (_) {}
+
+  // No stored session → fall back to hardcoded credentials (only for app first-run)
+  // Use the saved odoo_db if available, else DEFAULT_ODOO_DB
+  let dbToUse = DEFAULT_ODOO_DB;
+  try {
+    const savedDb = await AsyncStorage.getItem('odoo_db');
+    if (savedDb) dbToUse = savedDb;
+  } catch (_) {}
+
   const loginResponse = await axios.post(
     `${baseUrl}/web/session/authenticate`,
     {
       jsonrpc: '2.0',
       method: 'call',
       params: {
-        db: DEFAULT_ODOO_DB,
+        db: dbToUse,
         login: DEFAULT_USERNAME,
         password: DEFAULT_PASSWORD,
       },
@@ -4919,7 +4989,7 @@ export const fetchSparePartProductsOdoo = async ({ offset = 0, limit = 20, searc
           method: 'search_read',
           args: [domain],
           kwargs: {
-            fields: ['id', 'name', 'default_code', 'list_price', 'qty_available'],
+            fields: ['id', 'name', 'default_code', 'list_price'],
             offset,
             limit,
             order: 'name asc',
@@ -4965,7 +5035,7 @@ export const fetchRepairProductsOdoo = async ({ type = 'service', offset = 0, li
         params: {
           model: 'product.product', method: 'search_read', args: [domain],
           kwargs: {
-            fields: ['id', 'name', 'default_code', 'list_price', 'standard_price', 'qty_available', 'virtual_available', 'product_template_variant_value_ids'],
+            fields: ['id', 'name', 'default_code', 'list_price', 'standard_price', 'product_template_variant_value_ids'],
             offset, limit, order: 'default_code asc, name asc',
           },
         },
@@ -5958,7 +6028,7 @@ export const uploadAuditAttachmentsOdoo = async (auditRecordId, imageDataUris) =
           `${ODOO_BASE_URL()}/web/session/authenticate`,
           {
             jsonrpc: '2.0', method: 'call',
-            params: { db: DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
+            params: { db: (await AsyncStorage.getItem('odoo_db')) || DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
           },
           { headers: { 'Content-Type': 'application/json' } }
         );
@@ -6033,7 +6103,7 @@ export const fetchAuditAttachmentsOdoo = async (auditRecordId) => {
         `${ODOO_BASE_URL()}/web/session/authenticate`,
         {
           jsonrpc: '2.0', method: 'call',
-          params: { db: DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
+          params: { db: (await AsyncStorage.getItem('odoo_db')) || DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
         },
         { headers: { 'Content-Type': 'application/json' } }
       );
@@ -6882,7 +6952,7 @@ const _reauthenticateOdoo = async () => {
       `${baseUrl}/web/session/authenticate`,
       {
         jsonrpc: '2.0', method: 'call',
-        params: { db: DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
+        params: { db: (await AsyncStorage.getItem('odoo_db')) || DEFAULT_ODOO_DB, login: DEFAULT_USERNAME, password: DEFAULT_PASSWORD },
       },
       { headers: { 'Content-Type': 'application/json' } }
     );
@@ -9853,44 +9923,18 @@ export const fetchAppBannersOdoo = async () => {
         kwargs: { fields: ['id', 'name', 'image', 'sequence'], order: 'sequence asc, id asc' } },
     }, { headers, timeout: 15000 });
     if (response.data.error) return [];
-    const banners = response.data.result || [];
-    // Cache for offline viewing
-    try { await AsyncStorage.setItem('@cache:banners', JSON.stringify(banners)); } catch (_) {}
-    return banners;
+    return response.data.result || [];
   } catch (error) {
     console.error('[AppBanner] fetchList error:', error?.message || error);
-    // Offline fallback: return cached banners
-    try {
-      const cached = await AsyncStorage.getItem('@cache:banners');
-      if (cached) return JSON.parse(cached);
-    } catch (_) {}
     return [];
   }
 };
 
 export const createAppBannerOdoo = async ({ name, imageBase64 }) => {
-  const vals = { image: imageBase64 };
-  if (name) vals.name = name;
-
-  // Offline check — queue the banner create locally
-  try {
-    const online = await isOnline();
-    if (!online) {
-      const localId = await offlineQueue.enqueue({ model: 'app.banner', operation: 'create', values: vals });
-      // Also update the banner cache so the Home carousel shows it immediately
-      try {
-        const cached = await AsyncStorage.getItem('@cache:banners');
-        const list = cached ? JSON.parse(cached) : [];
-        list.push({ id: `offline_${localId}`, name: name || `banner_${Date.now()}`, image: imageBase64, sequence: 999 });
-        await AsyncStorage.setItem('@cache:banners', JSON.stringify(list));
-      } catch (_) {}
-      console.log('[AppBanner] create queued offline:', localId);
-      return { offline: true, localId };
-    }
-  } catch (_) {}
-
   try {
     const headers = await getOdooAuthHeaders();
+    const vals = { image: imageBase64 };
+    if (name) vals.name = name;
     const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
       jsonrpc: '2.0', method: 'call',
       params: { model: 'app.banner', method: 'create', args: [vals], kwargs: {} },
@@ -9899,41 +9943,11 @@ export const createAppBannerOdoo = async ({ name, imageBase64 }) => {
     return response.data.result;
   } catch (error) {
     console.error('[AppBanner] create error:', error?.message || error);
-    // Network failure fallback
-    if (!error.response) {
-      const localId = await offlineQueue.enqueue({ model: 'app.banner', operation: 'create', values: vals });
-      try {
-        const cached = await AsyncStorage.getItem('@cache:banners');
-        const list = cached ? JSON.parse(cached) : [];
-        list.push({ id: `offline_${localId}`, name: name || `banner_${Date.now()}`, image: imageBase64, sequence: 999 });
-        await AsyncStorage.setItem('@cache:banners', JSON.stringify(list));
-      } catch (_) {}
-      console.log('[AppBanner] create queued offline (network fail):', localId);
-      return { offline: true, localId };
-    }
     throw error;
   }
 };
 
 export const deleteAppBannerOdoo = async (id) => {
-  // Offline check — queue the delete locally
-  try {
-    const online = await isOnline();
-    if (!online) {
-      const localId = await offlineQueue.enqueue({ model: 'app.banner', operation: 'delete', values: { id } });
-      // Remove from cache so carousel updates immediately
-      try {
-        const cached = await AsyncStorage.getItem('@cache:banners');
-        if (cached) {
-          const list = JSON.parse(cached).filter(b => b.id !== id);
-          await AsyncStorage.setItem('@cache:banners', JSON.stringify(list));
-        }
-      } catch (_) {}
-      console.log('[AppBanner] delete queued offline:', localId);
-      return { offline: true, localId };
-    }
-  } catch (_) {}
-
   try {
     const headers = await getOdooAuthHeaders();
     const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
@@ -9944,18 +9958,6 @@ export const deleteAppBannerOdoo = async (id) => {
     return response.data.result;
   } catch (error) {
     console.error('[AppBanner] delete error:', error?.message || error);
-    if (!error.response) {
-      const localId = await offlineQueue.enqueue({ model: 'app.banner', operation: 'delete', values: { id } });
-      try {
-        const cached = await AsyncStorage.getItem('@cache:banners');
-        if (cached) {
-          const list = JSON.parse(cached).filter(b => b.id !== id);
-          await AsyncStorage.setItem('@cache:banners', JSON.stringify(list));
-        }
-      } catch (_) {}
-      console.log('[AppBanner] delete queued offline (network fail):', localId);
-      return { offline: true, localId };
-    }
     throw error;
   }
 };
@@ -10312,7 +10314,7 @@ export const authenticateApproverOdoo = async (login, password) => {
       {
         jsonrpc: '2.0', method: 'call',
         params: {
-          db: DEFAULT_ODOO_DB,
+          db: (await AsyncStorage.getItem('odoo_db')) || DEFAULT_ODOO_DB,
           login,
           password,
         },

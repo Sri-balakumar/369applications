@@ -1,31 +1,47 @@
 // src/utils/networkStatus.js
 //
-// Tiny wrapper around expo-network for offline-sync use.
-//
-// expo-network does not expose a true push listener — it only has a one-shot
-// `getNetworkStateAsync()` call. We poll every 5 seconds and emit on change.
-// This is good enough for our use (auto-flushing the offline queue when the
-// device comes back online); we are NOT trying to react in <100ms.
+// Simple connectivity detection via HTTP ping to the Odoo server.
+// No dependency on expo-network — works reliably on all devices.
 
-import * as Network from 'expo-network';
+import axios from 'axios';
 
-let lastKnown = null; // null = unknown, true = online, false = offline
+let lastKnown = null;
 let pollHandle = null;
 const subscribers = new Set();
 
 const POLL_INTERVAL_MS = 5000;
 
 /**
- * One-shot connectivity check. Returns true if the device has internet
- * (any reachable network — wifi or cellular).
+ * Check if the device can reach the Odoo server (or the internet).
+ * Returns true if reachable, false if not.
  */
 export const isOnline = async () => {
     try {
-        const state = await Network.getNetworkStateAsync();
-        return Boolean(state?.isConnected && state?.isInternetReachable !== false);
-    } catch (e) {
-        console.warn('[networkStatus] isOnline failed:', e?.message);
+        // Try to reach the Odoo server first
+        const { getOdooBaseUrl } = require('@api/config/odooConfig');
+        const baseUrl = (getOdooBaseUrl() || '').replace(/\/+$/, '');
+        if (baseUrl) {
+            try {
+                await axios.get(`${baseUrl}/web/webclient/version_info`, { timeout: 4000 });
+                return true;
+            } catch (e) {
+                // If we get a response (even 4xx/5xx), the server is reachable = online
+                if (e.response) return true;
+            }
+        }
+
+        // Fallback: try Google
+        try {
+            await axios.head('https://clients3.google.com/generate_204', { timeout: 3000 });
+            return true;
+        } catch (e) {
+            if (e.response) return true;
+        }
+
         return false;
+    } catch (e) {
+        // If everything fails, assume online and let actual API calls decide
+        return true;
     }
 };
 
@@ -34,14 +50,13 @@ const tickAndNotify = async () => {
     if (online !== lastKnown) {
         lastKnown = online;
         subscribers.forEach((cb) => {
-            try { cb(online); } catch (e) { console.warn('[networkStatus] subscriber error:', e?.message); }
+            try { cb(online); } catch (_) {}
         });
     }
 };
 
 const ensurePolling = () => {
     if (pollHandle) return;
-    // Run immediately, then on interval
     tickAndNotify();
     pollHandle = setInterval(tickAndNotify, POLL_INTERVAL_MS);
 };
@@ -54,8 +69,8 @@ const stopPollingIfIdle = () => {
 };
 
 /**
- * Subscribe to connectivity changes. The callback fires whenever the online
- * state flips. Returns an unsubscribe function.
+ * Subscribe to connectivity changes. Callback fires when state flips.
+ * Returns an unsubscribe function.
  */
 export const subscribe = (callback) => {
     if (typeof callback !== 'function') return () => {};
@@ -67,10 +82,6 @@ export const subscribe = (callback) => {
     };
 };
 
-/**
- * Returns the last known online state without triggering a fresh check.
- * May be `null` if no check has run yet.
- */
 export const getLastKnown = () => lastKnown;
 
 export default { isOnline, subscribe, getLastKnown };
