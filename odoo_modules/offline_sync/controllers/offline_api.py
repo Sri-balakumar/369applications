@@ -41,7 +41,7 @@ class OfflineSyncController(http.Controller):
             unique_id = engine.store_offline(
                 model_name, values, auto_enable=True, operation=operation,
                 state=state, synced_record_id=synced_record_id,
-            )
+        )
             return {
                 'status': 'ok',
                 'unique_id': unique_id,

@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
+import OfflineBanner from '@components/common/OfflineBanner';
 import { OverlayLoader } from '@components/Loader';
 import { ConfirmationModal } from '@components/Modal';
 import { showToastMessage } from '@components/Toast';
@@ -251,6 +252,7 @@ const OfflineSyncScreen = ({ navigation }) => {
         title="Offline Sync"
         onBackPress={() => navigation.goBack()}
       />
+      <OfflineBanner />
 
       <ScrollView
         contentContainerStyle={{ paddingBottom: scale(120) }}

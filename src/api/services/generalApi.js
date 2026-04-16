@@ -537,6 +537,8 @@ import { get } from "./utils";
 import { API_ENDPOINTS } from "@api/endpoints";
 import { useAuthStore } from '@stores/auth';
 import handleApiError from "../utils/handleApiError";
+import offlineQueue from '@utils/offlineQueue';
+import { isOnline } from '@utils/networkStatus';
 
 // Debugging output for useAuthStore
 export const fetchProducts = async ({ offset, limit, categoryId, searchText }) => {
@@ -9931,19 +9933,52 @@ export const fetchAppBannersOdoo = async () => {
       params: { model: 'app.banner', method: 'search_read', args: [[['active', '=', true]]],
         kwargs: { fields: ['id', 'name', 'image', 'sequence'], order: 'sequence asc, id asc' } },
     }, { headers, timeout: 15000 });
-    if (response.data.error) return [];
-    return response.data.result || [];
+    if (response.data.error) {
+      // Fall back to cache on Odoo error (e.g. module missing)
+      try {
+        const cached = await AsyncStorage.getItem('@cache:banners');
+        if (cached) return JSON.parse(cached);
+      } catch (_) {}
+      return [];
+    }
+    const banners = response.data.result || [];
+    // Cache for offline
+    try { await AsyncStorage.setItem('@cache:banners', JSON.stringify(banners)); } catch (_) {}
+    return banners;
   } catch (error) {
     console.error('[AppBanner] fetchList error:', error?.message || error);
+    // Fall back to cache on network error
+    try {
+      const cached = await AsyncStorage.getItem('@cache:banners');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return [];
   }
 };
 
 export const createAppBannerOdoo = async ({ name, imageBase64 }) => {
+  const vals = { image: imageBase64 };
+  if (name) vals.name = name;
+
+  // Offline check up-front — queue immediately if no internet
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const localId = await offlineQueue.enqueue({ model: 'app.banner', operation: 'create', values: vals });
+      // Also append to cached banner list so Home carousel shows it immediately
+      try {
+        const cached = await AsyncStorage.getItem('@cache:banners');
+        const list = cached ? JSON.parse(cached) : [];
+        list.push({ id: `offline_${localId}`, name: name || `banner_${Date.now()}`, image: imageBase64, sequence: 999 });
+        await AsyncStorage.setItem('@cache:banners', JSON.stringify(list));
+      } catch (_) {}
+      console.log('[AppBanner] Queued offline, localId:', localId);
+      return { offline: true, localId };
+    }
+  } catch (_) {}
+
   try {
     const headers = await getOdooAuthHeaders();
-    const vals = { image: imageBase64 };
-    if (name) vals.name = name;
     const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
       jsonrpc: '2.0', method: 'call',
       params: { model: 'app.banner', method: 'create', args: [vals], kwargs: {} },
@@ -9952,11 +9987,41 @@ export const createAppBannerOdoo = async ({ name, imageBase64 }) => {
     return response.data.result;
   } catch (error) {
     console.error('[AppBanner] create error:', error?.message || error);
+    // Network failure fallback — queue locally
+    if (!error.response) {
+      const localId = await offlineQueue.enqueue({ model: 'app.banner', operation: 'create', values: vals });
+      try {
+        const cached = await AsyncStorage.getItem('@cache:banners');
+        const list = cached ? JSON.parse(cached) : [];
+        list.push({ id: `offline_${localId}`, name: name || `banner_${Date.now()}`, image: imageBase64, sequence: 999 });
+        await AsyncStorage.setItem('@cache:banners', JSON.stringify(list));
+      } catch (_) {}
+      console.log('[AppBanner] Queued offline (network fail), localId:', localId);
+      return { offline: true, localId };
+    }
     throw error;
   }
 };
 
 export const deleteAppBannerOdoo = async (id) => {
+  // Offline check up-front
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const localId = await offlineQueue.enqueue({ model: 'app.banner', operation: 'delete', values: { id } });
+      // Remove from cached banner list immediately
+      try {
+        const cached = await AsyncStorage.getItem('@cache:banners');
+        if (cached) {
+          const list = JSON.parse(cached).filter(b => b.id !== id);
+          await AsyncStorage.setItem('@cache:banners', JSON.stringify(list));
+        }
+      } catch (_) {}
+      console.log('[AppBanner] Delete queued offline, localId:', localId);
+      return { offline: true, localId };
+    }
+  } catch (_) {}
+
   try {
     const headers = await getOdooAuthHeaders();
     const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {
@@ -9967,6 +10032,19 @@ export const deleteAppBannerOdoo = async (id) => {
     return response.data.result;
   } catch (error) {
     console.error('[AppBanner] delete error:', error?.message || error);
+    // Network failure fallback
+    if (!error.response) {
+      const localId = await offlineQueue.enqueue({ model: 'app.banner', operation: 'delete', values: { id } });
+      try {
+        const cached = await AsyncStorage.getItem('@cache:banners');
+        if (cached) {
+          const list = JSON.parse(cached).filter(b => b.id !== id);
+          await AsyncStorage.setItem('@cache:banners', JSON.stringify(list));
+        }
+      } catch (_) {}
+      console.log('[AppBanner] Delete queued offline (network fail), localId:', localId);
+      return { offline: true, localId };
+    }
     throw error;
   }
 };

@@ -27,6 +27,58 @@ const getAuthHeaders = async () => {
     return headers;
 };
 
+// Log a completed sync into Odoo's offline.sync.queue as 'synced' so the
+// history appears in Odoo's Sync Queue view and app's dashboard stats update.
+// Fire-and-forget — if logging fails, the actual record is still created.
+const logSyncHistory = async (baseUrl, headers, { model, operation, values, syncedRecordId }) => {
+    try {
+        // Find ir.model id for the target model
+        const modelResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                    model: 'ir.model', method: 'search_read',
+                    args: [[['model', '=', model]]],
+                    kwargs: { fields: ['id'], limit: 1 },
+                },
+            },
+            { headers, timeout: 8000 }
+        );
+        const modelId = modelResp.data?.result?.[0]?.id;
+        if (!modelId) return;
+
+        // Format synced_at for Odoo (YYYY-MM-DD HH:MM:SS UTC)
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const syncedAt = `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())} ${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())}`;
+
+        await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                    model: 'offline.sync.queue', method: 'create',
+                    args: [{
+                        model_id: modelId,
+                        record_data: JSON.stringify(values || {}),
+                        operation: operation || 'create',
+                        state: 'synced',
+                        synced_record_id: syncedRecordId || 0,
+                        synced_at: syncedAt,
+                    }],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 8000 }
+        );
+        console.log('[OfflineSyncService] Logged sync history for', model, 'recordId:', syncedRecordId);
+    } catch (e) {
+        // Non-fatal — the actual record was already created successfully
+        console.warn('[OfflineSyncService] history log failed:', e?.message);
+    }
+};
+
 // Directly create/write an hr.attendance record in Odoo — same as
 // checkInByEmployeeId does online.
 const syncItemDirectly = async (item) => {
@@ -64,7 +116,62 @@ const syncItemDirectly = async (item) => {
 
         const recordId = response.data?.result;
         console.log('[OfflineSyncService] Created hr.attendance id:', recordId);
+        logSyncHistory(baseUrl, headers, { model: 'hr.attendance', operation: 'create', values, syncedRecordId: recordId }).catch(() => {});
         return recordId;
+    }
+
+    // Banner create
+    if (item.model === 'app.banner' && item.operation === 'create') {
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'app.banner',
+                    method: 'create',
+                    args: [{
+                        name: values.name || `banner_${Date.now()}`,
+                        image: values.image,
+                    }],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Banner create failed');
+        }
+        const recordId = response.data?.result;
+        console.log('[OfflineSyncService] Created app.banner id:', recordId);
+        logSyncHistory(baseUrl, headers, { model: 'app.banner', operation: 'create', values, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // Banner delete
+    if (item.model === 'app.banner' && item.operation === 'delete') {
+        const bannerId = values.id;
+        if (!bannerId) throw new Error('Banner delete: no id');
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'app.banner',
+                    method: 'unlink',
+                    args: [[bannerId]],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 15000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Banner delete failed');
+        }
+        console.log('[OfflineSyncService] Deleted app.banner id:', bannerId);
+        logSyncHistory(baseUrl, headers, { model: 'app.banner', operation: 'delete', values, syncedRecordId: bannerId }).catch(() => {});
+        return bannerId;
     }
 
     // Fallback: try the offline_sync submit endpoint for non-attendance models

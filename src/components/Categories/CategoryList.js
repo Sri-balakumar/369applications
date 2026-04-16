@@ -1,30 +1,25 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Image, ActivityIndicator, TouchableOpacity, Platform } from 'react-native';
+import React, { useState } from 'react';
+import { View, StyleSheet, Image, TouchableOpacity, Platform } from 'react-native';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 
 const CategoryList = ({ item, onPress }) => {
-    const errorImage = require('@assets/images/error/error.png');
-
-    useEffect(() => {
-        const timeout = setTimeout(() => {
-            setImageLoading(false);
-        }, 10000);
-        return () => clearTimeout(timeout);
-    }, []);
-
-    const [imageLoading, setImageLoading] = useState(true);
+    // Only consider it a real image if it's a base64 data URI
+    const hasRealImage = item?.image_url && typeof item.image_url === 'string' && item.image_url.startsWith('data:image');
+    const [imageFailed, setImageFailed] = useState(!hasRealImage);
 
     return (
         <TouchableOpacity onPress={onPress} style={styles.container} activeOpacity={0.7}>
             <View style={styles.imageWrapper}>
-                {imageLoading && <ActivityIndicator size="small" color={COLORS.primaryThemeColor} style={styles.loader} />}
-                <Image
-                    source={item?.image_url ? { uri: item.image_url } : errorImage}
-                    style={styles.image}
-                    onLoad={() => setImageLoading(false)}
-                    onError={() => setImageLoading(false)}
-                />
+                {imageFailed ? (
+                    <Text style={styles.noImageText}>No Image</Text>
+                ) : (
+                    <Image
+                        source={{ uri: item.image_url }}
+                        style={styles.image}
+                        onError={() => setImageFailed(true)}
+                    />
+                )}
             </View>
             <Text style={styles.name} numberOfLines={2}>{item?.category_name}</Text>
         </TouchableOpacity>
@@ -61,14 +56,17 @@ const styles = StyleSheet.create({
         borderWidth: 1.5,
         borderColor: COLORS.primaryThemeColor + '25',
     },
-    loader: {
-        position: 'absolute',
-    },
     image: {
         width: 70,
         height: 70,
         borderRadius: 35,
         resizeMode: 'cover',
+    },
+    noImageText: {
+        fontSize: 10,
+        color: '#999',
+        fontFamily: FONT_FAMILY.urbanistMedium,
+        textAlign: 'center',
     },
     name: {
         fontSize: 13,
