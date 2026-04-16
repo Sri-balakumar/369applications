@@ -14,6 +14,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import CustomerAvatar from '@components/common/CustomerAvatar';
 import { MaterialIcons } from '@expo/vector-icons';
 import ContactsSheet from '@screens/Home/Options/WhatsApp/ContactsSheet';
+import OfflineBanner from '@components/common/OfflineBanner';
 
 const CustomerScreen = ({ navigation, route }) => {
   const [showContacts, setShowContacts] = useState(false);
@@ -122,6 +123,7 @@ const CustomerScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Customers" onBackPress={() => navigation.goBack()} />
+      <OfflineBanner message="OFFLINE MODE — showing cached customers" />
       <SearchContainer
         placeholder="Search Customers"
         onChangeText={handleSearchTextChange}

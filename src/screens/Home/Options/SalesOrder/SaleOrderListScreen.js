@@ -13,6 +13,7 @@ import { fetchSaleOrdersOdoo, searchInvoicesByOriginOdoo } from '@api/services/g
 import { useCurrencyStore } from '@stores/currency';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import OfflineBanner from '@components/common/OfflineBanner';
 
 const INV_COUNTER_KEY = 'inv_counter_s';
 const INV_MAP_KEY = 'inv_map_s';
@@ -206,6 +207,7 @@ const SaleOrderListScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Sales Orders" onBackPress={() => navigation.goBack()} />
+      <OfflineBanner message="OFFLINE MODE — showing cached orders" />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterRowContent}>
         {FILTERS.map(f => (
           <TouchableOpacity

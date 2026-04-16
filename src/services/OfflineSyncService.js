@@ -356,6 +356,101 @@ const syncItemDirectly = async (item) => {
         return recordId;
     }
 
+    // Sale order create (quotation). Supports an optional _confirmAfterCreate
+    // flag which chains action_confirm after the order is created.
+    if (item.model === 'sale.order' && item.operation === 'create') {
+        const offlineId = `offline_${item.id}`;
+        const existingMap = await readOfflineIdMap();
+        if (existingMap[offlineId] !== undefined) {
+            console.log('[OfflineSyncService] sale.order already synced, reusing id:', existingMap[offlineId]);
+            return existingMap[offlineId];
+        }
+        const { _confirmAfterCreate, ...rest } = values;
+        const createResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'sale.order', method: 'create', args: [rest], kwargs: {} },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (createResp.data?.error) {
+            throw new Error(createResp.data.error?.data?.message || 'Sale order create failed');
+        }
+        const recordId = createResp.data?.result;
+        console.log('[OfflineSyncService] Created sale.order id:', recordId);
+        await saveOfflineIdMapping(offlineId, recordId);
+
+        // Swap offline placeholder in cached list/detail with real id.
+        try {
+            const raw = await AsyncStorage.getItem('@cache:saleOrders');
+            if (raw) {
+                const list = JSON.parse(raw);
+                let changed = false;
+                const next = list.map((o) => {
+                    if (String(o.id) === offlineId) { changed = true; return { ...o, id: recordId, offline: false }; }
+                    return o;
+                });
+                if (changed) await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(next));
+            }
+        } catch (_) {}
+        try {
+            const rawD = await AsyncStorage.getItem(`@cache:saleOrderDetail:${offlineId}`);
+            if (rawD) {
+                const prev = JSON.parse(rawD);
+                await AsyncStorage.setItem(`@cache:saleOrderDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, offline: false }));
+                await AsyncStorage.removeItem(`@cache:saleOrderDetail:${offlineId}`);
+            }
+        } catch (_) {}
+
+        // Chain action_confirm if requested.
+        if (_confirmAfterCreate) {
+            try {
+                const confirmResp = await axios.post(
+                    `${baseUrl}/web/dataset/call_kw`,
+                    {
+                        jsonrpc: '2.0', method: 'call',
+                        params: { model: 'sale.order', method: 'action_confirm', args: [[recordId]], kwargs: {} },
+                    },
+                    { headers, timeout: 30000 }
+                );
+                if (confirmResp.data?.error) {
+                    console.warn('[OfflineSyncService] sale.order confirm failed:', confirmResp.data.error?.data?.message);
+                } else {
+                    console.log('[OfflineSyncService] Confirmed sale.order id:', recordId);
+                }
+            } catch (e) { console.warn('[OfflineSyncService] confirm chain error:', e?.message); }
+        }
+
+        logSyncHistory(baseUrl, headers, { model: 'sale.order', operation: 'create', values: rest, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // Sale order confirm (action_confirm on an already-synced order)
+    if (item.model === 'sale.order' && item.operation === 'action_confirm') {
+        const { _recordId } = values;
+        let realRecordId = _recordId;
+        if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
+            const map = await readOfflineIdMap();
+            if (map[realRecordId] === undefined) throw new Error(`Record ${realRecordId} not yet synced`);
+            realRecordId = map[realRecordId];
+        }
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'sale.order', method: 'action_confirm', args: [[Number(realRecordId)]], kwargs: {} },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Sale order confirm failed');
+        }
+        console.log('[OfflineSyncService] Confirmed sale.order id:', realRecordId);
+        logSyncHistory(baseUrl, headers, { model: 'sale.order', operation: 'action_confirm', values: { id: realRecordId }, syncedRecordId: realRecordId }).catch(() => {});
+        return realRecordId;
+    }
+
     // Contact (res.partner) create
     if (item.model === 'res.partner' && item.operation === 'create') {
         const offlineId = `offline_${item.id}`;

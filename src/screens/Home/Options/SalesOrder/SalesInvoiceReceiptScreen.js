@@ -18,6 +18,9 @@ import { COUNTRIES, getMaxDigits, parsePhoneCountryCode, CountryCodePicker } fro
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import PrintReceiptButton from '@components/TSPLPrinter/PrintReceiptButton';
 import { WebView } from 'react-native-webview';
+import { isOnline } from '@utils/networkStatus';
+import { Alert } from 'react-native';
+import OfflineBanner from '@components/common/OfflineBanner';
 
 const INV_COUNTER_KEY = 'inv_counter_s';
 const INV_MAP_KEY = 'inv_map_s';
@@ -187,7 +190,20 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
 
   const cashierName = currentUser?.name || currentUser?.username || currentUser?.login || 'Admin';
 
+  const guardOnlineOnly = async (actionLabel) => {
+    const online = await isOnline();
+    if (!online) {
+      Alert.alert(
+        'You\'re Offline',
+        `Can't ${actionLabel} right now. Please try again once you're connected to the internet.`
+      );
+      return false;
+    }
+    return true;
+  };
+
   const handlePrint = async () => {
+    if (!(await guardOnlineOnly('share the invoice'))) return;
     try {
       if (!invoice) return;
       const linesSummary = invoice.lines.map((l, i) =>
@@ -297,7 +313,8 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
     `;
   };
 
-  const handlePrintInvoice = () => {
+  const handlePrintInvoice = async () => {
+    if (!(await guardOnlineOnly('print the invoice'))) return;
     if (!invoice) {
       showToastMessage('Invoice data not available');
       return;
@@ -307,6 +324,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   };
 
   const handleDownloadPdf = async () => {
+    if (!(await guardOnlineOnly('download the PDF'))) return;
     if (!invoice) {
       showToastMessage('Invoice data not available');
       return;
@@ -358,6 +376,14 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   };
 
   const handleWhatsAppTap = async () => {
+    const online = await isOnline();
+    if (!online) {
+      Alert.alert(
+        'You\'re Offline',
+        'Can\'t send WhatsApp right now. Once your internet is connected, tap the Send WhatsApp button again.'
+      );
+      return;
+    }
     if (!invoice) return;
     if (partnerPhone && partnerPhone.trim()) {
       setSendingWA(true);
@@ -493,6 +519,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f5f6fa' }}>
       <NavigationHeader title={invoice.name || 'Invoice'} onBackPress={() => navigation.goBack()} logo={false} />
+      <OfflineBanner message="OFFLINE MODE — Print / Download / WhatsApp require internet" />
       <ScrollView contentContainerStyle={s.container}>
         <View style={s.receiptCard}>
           {/* Header */}

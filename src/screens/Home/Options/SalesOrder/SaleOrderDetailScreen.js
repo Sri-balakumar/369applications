@@ -20,6 +20,7 @@ import {
   createBelowCostApprovalLogOdoo,
 } from '@api/services/generalApi';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import OfflineBanner from '@components/common/OfflineBanner';
 import { useCurrencyStore } from '@stores/currency';
 import { useProductStore } from '@stores/product';
 import BelowCostApprovalModal from '@components/BelowCostApprovalModal';
@@ -250,9 +251,17 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
         await autoSave();
       }
       const companyId = record?.company_id ? (Array.isArray(record.company_id) ? record.company_id[0] : record.company_id) : null;
-      await confirmSaleOrderOdoo(orderId, companyId);
+      const confirmRes = await confirmSaleOrderOdoo(orderId, companyId);
       console.log('[ConfirmOrder] SO confirmed, proceeding to create invoice...');
       setConfirming(false);
+      // If the confirm was queued offline, skip the invoice step and just tell
+      // the user the confirm + invoice will happen when they reconnect.
+      if (confirmRes && typeof confirmRes === 'object' && confirmRes.offline) {
+        Alert.alert('Saved Offline', 'Confirmation queued. The invoice will be created automatically when you reconnect.');
+        // Refresh so the cached 'sale' state shows.
+        try { const rec = await fetchSaleOrderDetailOdoo(orderId); setRecord(rec); } catch (_) {}
+        return;
+      }
       // Automatically create invoice after confirming
       await executeCreateInvoice();
     } catch (err) {
@@ -394,6 +403,11 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   };
 
   const handleViewInvoice = () => {
+    const idStr = String(record?.id || orderId || '');
+    if (idStr.startsWith('offline_')) {
+      Alert.alert('Offline Order', 'This order has not synced to Odoo yet — the invoice will be available once the order syncs.');
+      return;
+    }
     const invoiceId = createdInvoiceId || (record?.invoice_ids?.length > 0 ? record.invoice_ids[record.invoice_ids.length - 1] : null);
     if (invoiceId) {
       const od = buildOrderData();
@@ -480,6 +494,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title={record.name || `SO-${record.id}`} onBackPress={() => navigation.goBack()} />
+      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" />
       <RoundedScrollContainer>
 
         {/* Status Badge */}

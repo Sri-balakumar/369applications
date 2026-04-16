@@ -2,6 +2,7 @@ import React from 'react';
 import { View, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { SafeAreaView, RoundedScrollContainer } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
+import OfflineBanner from '@components/common/OfflineBanner';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -10,6 +11,7 @@ const SalesOrderChoice = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Sales Order" onBackPress={() => navigation.goBack()} logo={false} />
+      <OfflineBanner message="OFFLINE MODE — orders will sync when you reconnect" />
       <RoundedScrollContainer>
         <View style={styles.content}>
           <TouchableOpacity

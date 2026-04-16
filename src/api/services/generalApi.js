@@ -561,6 +561,34 @@ export const fetchProducts = async ({ offset, limit, categoryId, searchText }) =
 
 
 // 🔹 NEW: Fetch products directly from Odoo 19 via JSON-RPC
+// Shared category-name resolver. Used offline to rewrite stale cache entries
+// and consistently pick: POS category (from @cache:categories) → last segment
+// of product.category hierarchy → full hierarchy → empty.
+const resolveProductCategoryName = async (posIds, categIdTuple) => {
+  const ids = (posIds || []).filter((id) => Number.isFinite(id) && id > 0);
+  if (ids.length) {
+    try {
+      const raw = await AsyncStorage.getItem('@cache:categories');
+      if (raw) {
+        const map = {};
+        JSON.parse(raw).forEach((c) => {
+          const id = c._id || c.id;
+          if (id !== undefined) map[id] = c.category_name || c.name || '';
+        });
+        for (const pid of ids) {
+          if (map[pid]) return { name: map[pid], source: `pos:${pid}` };
+        }
+      }
+    } catch (_) {}
+  }
+  if (Array.isArray(categIdTuple) && categIdTuple[1]) {
+    const full = String(categIdTuple[1]);
+    const leaf = full.split('/').map((s) => s.trim()).filter(Boolean).pop();
+    return { name: leaf || full, source: leaf ? 'categ_leaf' : 'categ_full' };
+  }
+  return { name: '', source: 'none' };
+};
+
 export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId, posCategoryId } = {}) => {
   try {
     console.log('[fetchProductsOdoo] CALLED with:', { offset, limit, searchText, categoryId, posCategoryId });
@@ -610,6 +638,7 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
               "image_128",       // product image
               "taxes_id",        // customer taxes
               "categ_id",        // product category [id, name]
+              "pos_categ_ids",   // POS categories many2many — resolved via cache
             ],
             limit: odooLimit,
             order: "name asc",
@@ -723,6 +752,66 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
       console.warn('[fetchProductsOdoo] Template price fetch failed:', e?.message);
     }
 
+    // Resolve POS category names for every pos_categ_ids id across all
+    // products — single batched Odoo call so the list always shows the real
+    // POS name (e.g. "Drinks") instead of the generic product.category leaf
+    // (e.g. "Goods"). Falls back to the last segment of the product.category
+    // hierarchy when the product has no POS category.
+    let posCatNameById = {};
+    const allPosIds = [...new Set(
+      products
+        .flatMap((p) => Array.isArray(p.pos_categ_ids) ? p.pos_categ_ids : [])
+        .filter((id) => Number.isFinite(id) && id > 0)
+    )];
+    console.log('[fetchProductsOdoo] Unique POS category ids to resolve:', allPosIds);
+    if (allPosIds.length > 0) {
+      try {
+        const posResp = await axios.post(
+          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'pos.category', method: 'read',
+              args: [allPosIds],
+              kwargs: { fields: ['id', 'name'] },
+            },
+          },
+          { headers }
+        );
+        if (posResp.data?.error) {
+          console.warn('[fetchProductsOdoo] pos.category.read error:', posResp.data.error?.data?.message);
+        } else {
+          const posRows = posResp.data?.result || [];
+          posRows.forEach((r) => { if (r?.id) posCatNameById[r.id] = r.name || ''; });
+          console.log('[fetchProductsOdoo] Resolved POS categories:', posCatNameById);
+        }
+      } catch (e) {
+        console.warn('[fetchProductsOdoo] POS category name fetch failed:', e?.message);
+      }
+    }
+    // Also fall back to the cached category list (picks up offline-created
+    // categories) in case some ids weren't in pos.category (e.g. Odoo without
+    // POS module uses product.category here).
+    try {
+      const rawCats = await AsyncStorage.getItem('@cache:categories');
+      if (rawCats) {
+        const cats = JSON.parse(rawCats);
+        cats.forEach((c) => {
+          const id = c._id || c.id;
+          const name = c.category_name || c.name;
+          if (id !== undefined && name && posCatNameById[id] === undefined) {
+            posCatNameById[id] = name;
+          }
+        });
+      }
+    } catch (_) {}
+
+    const categoryLeaf = (hierarchical) => {
+      if (!hierarchical) return '';
+      const parts = String(hierarchical).split('/').map((s) => s.trim()).filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : String(hierarchical);
+    };
+
     // 🔹 Shape to match existing ProductsList expectations
     const mapped = products.map((p) => {
       // If Odoo returned the image as base64 (image_128), prefer using a data URI
@@ -740,6 +829,30 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
         return sum;
       }, 0);
 
+      // Resolve category name: POS category (from batch fetch) → cached
+      // categories fallback → last segment of product.category hierarchy →
+      // full categ_id hierarchy path → empty. Log which branch fired per
+      // product so we can debug missing names.
+      const posIds = Array.isArray(p.pos_categ_ids) ? p.pos_categ_ids.filter((id) => Number.isFinite(id) && id > 0) : [];
+      let resolvedCategoryName = '';
+      let resolvedFrom = 'none';
+      for (const pid of posIds) {
+        if (posCatNameById[pid]) { resolvedCategoryName = posCatNameById[pid]; resolvedFrom = `pos:${pid}`; break; }
+      }
+      if (!resolvedCategoryName && p.categ_id && Array.isArray(p.categ_id)) {
+        resolvedCategoryName = categoryLeaf(p.categ_id[1]);
+        if (resolvedCategoryName) resolvedFrom = 'categ_leaf';
+      }
+      if (!resolvedCategoryName && p.categ_id && Array.isArray(p.categ_id) && p.categ_id[1]) {
+        resolvedCategoryName = String(p.categ_id[1]);
+        resolvedFrom = 'categ_full';
+      }
+      if (!resolvedCategoryName) {
+        console.warn('[fetchProductsOdoo] No category for product id=', p.id, 'name=', p.name, 'pos_categ_ids=', posIds, 'categ_id=', p.categ_id);
+      } else {
+        console.log('[fetchProductsOdoo] Product', p.id, p.name, '→ category:', resolvedCategoryName, '(from', resolvedFrom + ')');
+      }
+
       return {
         id: p.id,
         product_name: p.name || "",
@@ -754,14 +867,10 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
         tax_percent: taxPercent,
         taxes: productTaxes,
         qty_available: 0,
-        // Don't set category_name from categ_id — the detail screen will
-        // resolve POS category properly via fetchProductDetailsOdoo. Showing
-        // the raw categ_id name here would briefly display "Goods" before
-        // the detail API returns the actual POS category name.
         categ_id: p.categ_id && Array.isArray(p.categ_id) ? p.categ_id : null,
-        category_name: '',
-        category: null,
-        pos_categ_ids: [],
+        category_name: resolvedCategoryName,
+        category: resolvedCategoryName ? { category_name: resolvedCategoryName, name: resolvedCategoryName } : null,
+        pos_categ_ids: posIds,
       };
     });
 
@@ -821,6 +930,20 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
           } catch (_) {}
         }
         list = merged;
+      }
+
+      // Re-resolve empty/stale category_name using the cached POS categories
+      // so old cache entries (written before the resolver landed) still show
+      // the correct category name offline.
+      for (const p of list) {
+        if (!p.category_name) {
+          const { name, source } = await resolveProductCategoryName(p.pos_categ_ids, p.categ_id);
+          if (name) {
+            p.category_name = name;
+            p.category = { category_name: name, name };
+            console.log('[fetchProductsOdoo] offline re-resolved category for', p.id, p.product_name, '→', name, '(from', source + ')');
+          }
+        }
       }
 
       // Apply search filter client-side when offline
@@ -1400,8 +1523,8 @@ export const fetchProductDetailsOdoo = async (productId) => {
 
     // Fetch POS category name
     let posCategoryName = '';
-    const posCategIds = p.pos_categ_ids || [];
-    console.log('[fetchProductDetailsOdoo] categ_id:', p.categ_id, 'pos_categ_ids:', posCategIds);
+    const posCategIds = (p.pos_categ_ids || []).filter((id) => Number.isFinite(id) && id > 0);
+    console.log('[fetchProductDetailsOdoo] id=', p.id, 'name=', p.name, 'categ_id=', p.categ_id, 'pos_categ_ids=', posCategIds);
 
     if (posCategIds.length > 0) {
       try {
@@ -1411,25 +1534,44 @@ export const fetchProductDetailsOdoo = async (productId) => {
             jsonrpc: '2.0', method: 'call',
             params: {
               model: 'pos.category',
-              method: 'search_read',
-              args: [[['id', 'in', posCategIds]]],
-              kwargs: { fields: ['id', 'name'], limit: 1 },
+              method: 'read',
+              args: [posCategIds],
+              kwargs: { fields: ['id', 'name'] },
             },
           },
           { headers }
         );
+        if (posCatResp.data?.error) {
+          console.warn('[fetchProductDetailsOdoo] pos.category.read error:', posCatResp.data.error?.data?.message);
+        }
         const posCatResult = posCatResp.data?.result || [];
         console.log('[fetchProductDetailsOdoo] POS cat result:', JSON.stringify(posCatResult));
         if (posCatResult.length > 0) {
-          posCategoryName = posCatResult[0].name || '';
+          // Pick the first non-empty name so one-stale-id doesn't blank the whole thing.
+          const match = posCatResult.find((r) => r?.name);
+          posCategoryName = match?.name || '';
         }
       } catch (e) { console.warn('[fetchProductDetailsOdoo] POS category fetch failed:', e?.message); }
     }
 
-    // Use POS category name first, then product category name
-    const categName = p.categ_id && Array.isArray(p.categ_id) ? p.categ_id[1] : '';
-    const finalCategoryName = posCategoryName || categName || '';
-    console.log('[fetchProductDetailsOdoo] finalCategoryName:', finalCategoryName);
+    // Use POS category name first, then last segment of product.category,
+    // then the full hierarchy. Log what we resolved and why.
+    const categLeafName = p.categ_id && Array.isArray(p.categ_id)
+      ? String(p.categ_id[1] || '').split('/').map((s) => s.trim()).filter(Boolean).pop() || ''
+      : '';
+    const categFullName = p.categ_id && Array.isArray(p.categ_id) ? String(p.categ_id[1] || '') : '';
+    const finalCategoryName = posCategoryName || categLeafName || categFullName || '';
+    const resolvedFrom = posCategoryName
+      ? 'pos'
+      : categLeafName
+        ? 'categ_leaf'
+        : categFullName
+          ? 'categ_full'
+          : 'none';
+    console.log('[fetchProductDetailsOdoo] finalCategoryName:', finalCategoryName, '(from', resolvedFrom + ')');
+    if (!finalCategoryName) {
+      console.warn('[fetchProductDetailsOdoo] No category for product id=', p.id, 'pos_categ_ids=', posCategIds, 'categ_id=', p.categ_id);
+    }
 
     const detailObj = {
       id: p.id,
@@ -1454,12 +1596,22 @@ export const fetchProductDetailsOdoo = async (productId) => {
     return detailObj;
   } catch (error) {
     console.error('fetchProductDetailsOdoo error:', error);
-    // Offline fallback — return cached detail for this product
+    // Offline fallback — return cached detail for this product. Re-resolve
+    // category_name using the cached POS category list so a stale cache entry
+    // (written before the resolver landed) still shows the correct category.
     try {
       const cached = await AsyncStorage.getItem(`@cache:productDetail:${productId}`);
       if (cached) {
         console.log('[fetchProductDetailsOdoo] Using cached detail for product:', productId);
-        return JSON.parse(cached);
+        const obj = JSON.parse(cached);
+        if (!obj.category_name) {
+          const { name, source } = await resolveProductCategoryName(obj.pos_categ_ids, obj.categ_id);
+          if (name) {
+            obj.category_name = name;
+            console.log('[fetchProductDetailsOdoo] offline re-resolved category →', name, '(from', source + ')');
+          }
+        }
+        return obj;
       }
     } catch (_) {}
     throw error;
@@ -4392,17 +4544,59 @@ export const fetchSaleOrdersOdoo = async ({ offset = 0, limit = 50, searchText =
       console.error('[SaleOrders] list error:', response.data.error?.data?.message || response.data.error);
       return [];
     }
-    const records = response.data.result || [];
+    let records = response.data.result || [];
     console.log('[SaleOrders] Fetched', records.length, 'records');
+    // Merge offline-created placeholders still in cache (not synced yet) on
+    // top of the fresh list so they don't disappear when the user comes back
+    // online before the queue has flushed.
+    if (!searchText && offset === 0) {
+      try {
+        const oldRaw = await AsyncStorage.getItem('@cache:saleOrders');
+        if (oldRaw) {
+          const oldList = JSON.parse(oldRaw);
+          const pendingOffline = oldList.filter((o) => String(o?.id || '').startsWith('offline_'));
+          if (pendingOffline.length > 0) {
+            records = [...pendingOffline, ...records];
+          }
+        }
+      } catch (_) {}
+      try { await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(records)); } catch (_) {}
+    }
     return records;
   } catch (error) {
     console.error('[SaleOrders] fetchSaleOrders error:', error?.message || error);
+    // Offline fallback — return cached list, filtered client-side by search text.
+    try {
+      const cached = await AsyncStorage.getItem('@cache:saleOrders');
+      if (cached) {
+        let list = JSON.parse(cached);
+        if (searchText && searchText.trim() !== '') {
+          const term = searchText.trim().toLowerCase();
+          list = list.filter((o) => {
+            const name = (o.name || '').toLowerCase();
+            const partner = Array.isArray(o.partner_id) ? (o.partner_id[1] || '').toLowerCase() : '';
+            return name.includes(term) || partner.includes(term);
+          });
+        }
+        console.log('[SaleOrders] Using cached orders, count:', list.length);
+        return list;
+      }
+    } catch (_) {}
     return [];
   }
 };
 
 // Fetch a single sale.order record by ID
 export const fetchSaleOrderDetailOdoo = async (orderId) => {
+  // Offline-created orders — read from local cache only.
+  const idStr = String(orderId);
+  if (idStr.startsWith('offline_')) {
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:saleOrderDetail:${idStr}`);
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
+    return null;
+  }
   try {
     const { headers, baseUrl } = await authenticateOdoo();
 
@@ -4481,15 +4675,130 @@ export const fetchSaleOrderDetailOdoo = async (orderId) => {
       record.order_lines_detail = [];
     }
 
+    // Cache the merged detail for offline viewing.
+    try { await AsyncStorage.setItem(`@cache:saleOrderDetail:${orderId}`, JSON.stringify(record)); } catch (_) {}
     return record;
   } catch (error) {
     console.error('[SaleOrders] fetchSaleOrderDetail error:', error?.message || error);
+    // Offline fallback — return cached detail if we have it.
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:saleOrderDetail:${orderId}`);
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return null;
   }
 };
 
 // Create a Sale Order (Quotation) in Odoo
 export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }) => {
+  // Offline branch — queue the create, cache a placeholder so the order
+  // appears in All Orders / list immediately.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const lines = (orderLines || []).map(line => [0, 0, {
+        product_id: line.product_id || line.id,
+        product_uom_qty: line.qty || line.quantity || line.product_uom_qty || 1,
+        price_unit: line.price_unit || line.price || line.unit_price || 0,
+        discount: line.discount || line.discount_percentage || 0,
+      }]);
+      const vals = { partner_id: partnerId, order_line: lines };
+      if (warehouseId) vals.warehouse_id = warehouseId;
+
+      const localId = await offlineQueue.enqueue({
+        model: 'sale.order', operation: 'create', values: vals,
+      });
+
+      // Look up partner name (for list display) from cached contacts.
+      let partnerName = '';
+      try {
+        const raw = await AsyncStorage.getItem('@cache:contacts');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const p = list.find((c) => String(c.id) === String(partnerId));
+          partnerName = p?.name || '';
+        }
+      } catch (_) {}
+
+      // Totals for the placeholder.
+      let amountUntaxed = 0;
+      (orderLines || []).forEach((l) => {
+        const qty = l.qty || l.quantity || l.product_uom_qty || 1;
+        const price = l.price_unit || l.price || l.unit_price || 0;
+        const discount = (l.discount || l.discount_percentage || 0) / 100;
+        amountUntaxed += qty * price * (1 - discount);
+      });
+
+      const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      const placeholder = {
+        id: `offline_${localId}`,
+        name: `NEW (offline)`,
+        partner_id: partnerId ? [partnerId, partnerName] : false,
+        state: 'draft',
+        amount_total: amountUntaxed,
+        amount_untaxed: amountUntaxed,
+        amount_tax: 0,
+        date_order: nowIso,
+        invoice_status: 'no',
+        invoice_ids: [],
+        company_id: false,
+        offline: true,
+      };
+
+      // Append to the cached sale-order list.
+      try {
+        const rawList = await AsyncStorage.getItem('@cache:saleOrders');
+        const list = rawList ? JSON.parse(rawList) : [];
+        list.unshift(placeholder);
+        await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list));
+      } catch (_) {}
+
+      // Build a detail-cache entry so tapping into it works offline.
+      let allCompanyIds = [];
+      // Enrich order_lines_detail for display using cached product info.
+      let productCache = {};
+      try {
+        const rawProducts = await AsyncStorage.getItem('@cache:products');
+        if (rawProducts) {
+          const list = JSON.parse(rawProducts);
+          list.forEach((p) => { productCache[p.id] = p; });
+        }
+      } catch (_) {}
+
+      const detailLines = (orderLines || []).map((l, i) => {
+        const pid = l.product_id || l.id;
+        const pc = productCache[pid] || {};
+        const qty = l.qty || l.quantity || l.product_uom_qty || 1;
+        const price = l.price_unit || l.price || l.unit_price || 0;
+        const discount = l.discount || l.discount_percentage || 0;
+        return {
+          id: `offline_line_${i}`,
+          product_id: [pid, pc.product_name || pc.name || `#${pid}`],
+          name: pc.product_name || pc.name || '',
+          product_uom_qty: qty,
+          price_unit: price,
+          price_subtotal: qty * price * (1 - discount / 100),
+          discount,
+        };
+      });
+
+      const detailRecord = {
+        ...placeholder,
+        warehouse_id: warehouseId ? [warehouseId, ''] : false,
+        currency_id: false,
+        client_order_ref: '',
+        partner_phone: '',
+        order_line: [], order_lines_detail: detailLines,
+      };
+      try { await AsyncStorage.setItem(`@cache:saleOrderDetail:offline_${localId}`, JSON.stringify(detailRecord)); } catch (_) {}
+
+      // Suppress the "unused allCompanyIds" reference — keep the shape similar to online.
+      void allCompanyIds;
+      console.log('[createSaleOrderOdoo] Queued offline, localId:', localId);
+      return { offline: true, localId, id: `offline_${localId}` };
+    }
+  } catch (_) {}
+
   try {
     const { headers, baseUrl } = await authenticateOdoo();
 
@@ -4536,6 +4845,48 @@ export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }
 
 // Confirm a Sale Order (Quotation → Sale Order) in Odoo
 export const confirmSaleOrderOdoo = async (orderId, companyId = null) => {
+  // Offline branch — queue the confirm action + update cached state.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const idStr = String(orderId);
+      if (idStr.startsWith('offline_')) {
+        // Fold "confirm" into the pending create by tagging values with a
+        // _confirmAfterCreate flag. The sync handler picks it up and calls
+        // action_confirm once the order is created in Odoo.
+        const queueItemId = idStr.replace('offline_', '');
+        await offlineQueue.updateValues(queueItemId, { _confirmAfterCreate: true });
+      } else {
+        await offlineQueue.enqueue({
+          model: 'sale.order',
+          operation: 'action_confirm',
+          values: { _recordId: orderId, companyId: companyId || null },
+        });
+      }
+
+      // Update cached state to 'sale' so the list shows it under Sales Order.
+      try {
+        const raw = await AsyncStorage.getItem('@cache:saleOrders');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex((o) => String(o.id) === idStr);
+          if (idx >= 0) { list[idx] = { ...list[idx], state: 'sale' }; await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list)); }
+        }
+      } catch (_) {}
+      try {
+        const detailKey = `@cache:saleOrderDetail:${idStr}`;
+        const rawD = await AsyncStorage.getItem(detailKey);
+        if (rawD) {
+          const prev = JSON.parse(rawD);
+          await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, state: 'sale' }));
+        }
+      } catch (_) {}
+
+      console.log('[confirmSaleOrderOdoo] Queued offline for id:', orderId);
+      return { offline: true };
+    }
+  } catch (_) {}
+
   try {
     const { headers, baseUrl } = await authenticateOdoo();
 

@@ -104,6 +104,11 @@ const ProductDetail = ({ navigation, route }) => {
           console.log('[ProductDetail] category_name from API:', od?.category_name, 'categ_id:', od?.categ_id, 'pos_categ_ids:', od?.pos_categ_ids);
         } catch (e) {
           console.error('Error loading Odoo product details:', e);
+          // Preserve any category already resolved at list time so the detail
+          // view doesn't fall through to "N/A" when the API is unreachable.
+          const fallbackCategoryName = detail.category_name
+            || (Array.isArray(detail?.categ_id) ? String(detail.categ_id[1] || '').split('/').map(s => s.trim()).filter(Boolean).pop() : '')
+            || '';
           setDetails({
             ...detail,
             id: detail.id,
@@ -115,6 +120,9 @@ const ProductDetail = ({ navigation, route }) => {
             inventory_ledgers: [],
             total_product_quantity: 0,
             uom: detail.uom || null,
+            categ_id: detail.categ_id || null,
+            category_name: fallbackCategoryName,
+            pos_categ_ids: detail.pos_categ_ids || [],
           });
         } finally {
           setLoading(false);

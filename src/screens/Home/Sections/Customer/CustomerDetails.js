@@ -12,6 +12,7 @@ import { EmptyState } from '@components/common/empty';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
 import { createSaleOrderOdoo, confirmSaleOrderOdoo, createInvoiceFromQuotationOdoo, fetchProductByBarcodeOdoo, fetchSaleOrderDetailOdoo, validateSaleOrderPickingsOdoo, createBelowCostApprovalLogOdoo } from '@api/services/generalApi';
+import OfflineBanner from '@components/common/OfflineBanner';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Toast from 'react-native-toast-message';
 import Text from '@components/Text';
@@ -196,13 +197,16 @@ const CustomerDetails = ({ navigation, route }) => {
         product_id: product.id, qty: product.quantity, price_unit: parseFloat(product.price) || 0, product_uom_qty: product.quantity,
       }));
       let warehouseId = currentUser?.warehouse?.warehouse_id || currentUser?.warehouse?.id || null;
-      const odooOrderId = await createSaleOrderOdoo({ partnerId: customerId, orderLines: orderItems, warehouseId: warehouseId || undefined });
-      if (!odooOrderId) {
+      const createResult = await createSaleOrderOdoo({ partnerId: customerId, orderLines: orderItems, warehouseId: warehouseId || undefined });
+      if (!createResult) {
         Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to create sale order in Odoo', position: 'bottom' });
         return;
       }
-      // Log below-cost approval to Odoo if this was an approved below-cost sale
-      if (approvalInfo) {
+      // Unwrap offline result vs. plain online id
+      const isOfflineResult = typeof createResult === 'object' && createResult?.offline;
+      const odooOrderId = isOfflineResult ? createResult.id : createResult;
+      // Log below-cost approval to Odoo if this was an approved below-cost sale (skip when offline)
+      if (approvalInfo && !isOfflineResult) {
         try {
           const detailsText = (approvalInfo.belowCostLines || []).map(l =>
             `Product: ${l.productName} | Price: ${l.unitPrice.toFixed(3)} | Cost: ${l.costPrice.toFixed(3)} | Min Required: ${l.costPrice.toFixed(3)} | Margin: ${l.marginPercent.toFixed(2)}% | Qty: ${l.qty}`
@@ -222,9 +226,15 @@ const CustomerDetails = ({ navigation, route }) => {
       clearProducts();
       const custId = details?.id || details?._id;
       if (custId) await clearCartFromStorage(custId);
-      Alert.alert('Order Created', `Sale Order created successfully.\nOrder ID: ${odooOrderId}`, [
-        { text: 'OK', onPress: () => navigation.navigate('SaleOrderListScreen') },
-      ]);
+      if (isOfflineResult) {
+        Alert.alert('Order Saved Offline', 'Your order has been saved locally and will sync when you reconnect.', [
+          { text: 'OK', onPress: () => navigation.navigate('SaleOrderListScreen') },
+        ]);
+      } else {
+        Alert.alert('Order Created', `Sale Order created successfully.\nOrder ID: ${odooOrderId}`, [
+          { text: 'OK', onPress: () => navigation.navigate('SaleOrderListScreen') },
+        ]);
+      }
     } catch (err) {
       const errMsg = err?.message || 'Failed to create sale order';
       const userMsg = errMsg.includes('does not exist or has been deleted')
@@ -258,9 +268,25 @@ const CustomerDetails = ({ navigation, route }) => {
         product_id: product.id, qty: product.quantity, price_unit: parseFloat(product.price) || 0, product_uom_qty: product.quantity,
       }));
       let warehouseId = currentUser?.warehouse?.warehouse_id || currentUser?.warehouse?.id || null;
-      const odooOrderId = await createSaleOrderOdoo({ partnerId: customerId, orderLines: orderItems, warehouseId: warehouseId || undefined });
-      if (!odooOrderId) {
+      const createResult = await createSaleOrderOdoo({ partnerId: customerId, orderLines: orderItems, warehouseId: warehouseId || undefined });
+      if (!createResult) {
         Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to create sale order', position: 'bottom' });
+        return;
+      }
+      const isOfflineResult = typeof createResult === 'object' && createResult?.offline;
+      const odooOrderId = isOfflineResult ? createResult.id : createResult;
+      // Offline — queue a confirm-after-create flag so the sync creates + confirms
+      // the order, then bail out (invoice needs internet to generate).
+      if (isOfflineResult) {
+        try { await confirmSaleOrderOdoo(odooOrderId); } catch (_) {}
+        clearProducts();
+        const custId2 = details?.id || details?._id;
+        if (custId2) await clearCartFromStorage(custId2);
+        Alert.alert(
+          'Saved Offline',
+          'Your order has been saved locally. The invoice will be created automatically once you reconnect.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
         return;
       }
       // Log below-cost approval to Odoo if this was an approved below-cost sale
@@ -389,6 +415,7 @@ const CustomerDetails = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Order Summary" onBackPress={() => navigation.goBack()} logo={false} />
+      <OfflineBanner message="OFFLINE MODE — order will sync when you reconnect" />
       <RoundedScrollContainer>
         {/* Customer Info Card */}
         <View style={s.customerCard}>
