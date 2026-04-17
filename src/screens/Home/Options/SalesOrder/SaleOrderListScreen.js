@@ -9,7 +9,9 @@ import { EmptyItem, EmptyState } from '@components/common/empty';
 import { OverlayLoader } from '@components/Loader';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchSaleOrdersOdoo, searchInvoicesByOriginOdoo } from '@api/services/generalApi';
+import { fetchSaleOrdersOdoo, searchInvoicesByOriginOdoo, createInvoiceFromQuotationOdoo } from '@api/services/generalApi';
+import { isOnline } from '@utils/networkStatus';
+import { showToastMessage } from '@components/Toast';
 import { useCurrencyStore } from '@stores/currency';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -96,6 +98,7 @@ const SaleOrderListScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState('all');
   const [invMap, setInvMap] = useState({});
+  const [generatingInvoices, setGeneratingInvoices] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -148,6 +151,39 @@ const SaleOrderListScreen = ({ navigation }) => {
             })
           : data.filter(i => (i.state || 'draft').toLowerCase() === activeFilter);
 
+  // Orders eligible for bulk invoice generation: confirmed, not invoiced, real Odoo ID
+  const toInvoiceOrders = data.filter((o) => {
+    const s = (o.state || '').toLowerCase();
+    const isConfirmed = s === 'sale' || s === 'done';
+    const notInvoiced = o.invoice_status !== 'invoiced' && (!o.invoice_ids || o.invoice_ids.length === 0 || (o.invoice_ids.length === 1 && o.invoice_ids[0] === 'offline_inv'));
+    const hasRealId = !String(o.id || '').startsWith('offline_');
+    return isConfirmed && notInvoiced && hasRealId;
+  });
+
+  const handleBulkGenerateInvoices = async () => {
+    const online = await isOnline();
+    if (!online) { showToastMessage('Internet required to generate invoices'); return; }
+    if (toInvoiceOrders.length === 0) { showToastMessage('No orders pending invoice'); return; }
+    setGeneratingInvoices(true);
+    let success = 0;
+    let failed = 0;
+    for (const order of toInvoiceOrders) {
+      try {
+        const companyId = order.company_id ? (Array.isArray(order.company_id) ? order.company_id[0] : order.company_id) : null;
+        console.log('[BulkInvoice] Generating for order:', order.id, order.name);
+        await createInvoiceFromQuotationOdoo(order.id, companyId);
+        success += 1;
+        console.log('[BulkInvoice] SUCCESS:', order.id);
+      } catch (err) {
+        failed += 1;
+        console.error('[BulkInvoice] FAILED:', order.id, err?.message);
+      }
+    }
+    showToastMessage(`Invoices: ${success} created, ${failed} failed`);
+    setGeneratingInvoices(false);
+    fetchData();
+  };
+
   const renderItem = ({ item }) => {
     if (item.empty) return <EmptyItem />;
     const state = (item.state || 'draft').toLowerCase();
@@ -167,8 +203,11 @@ const SaleOrderListScreen = ({ navigation }) => {
         onPress={() => navigation.navigate('SaleOrderDetailScreen', { orderId: item.id })}
       >
         <View style={styles.row}>
-          <Text style={styles.head} numberOfLines={1}>{invMap[item.id] || item.name || `SO-${item.id}`}</Text>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.head} numberOfLines={1}>{invMap[item.id] || item.name || `SO-${item.id}`}</Text>
+            <Text style={{ fontSize: 11, color: '#999', fontFamily: FONT_FAMILY.urbanistMedium }}>{String(item.id || '').startsWith('offline_') ? 'Ref: -' : `Ref: ${item.name || '-'}`}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: 6, alignSelf: 'flex-start' }}>
             {!hasInvoice && invoiceStatus === 'to_invoice' && (
               <View style={[styles.badge, { backgroundColor: '#FF5722' }]}>
                 <Text style={styles.badgeText}>TO INVOICE</Text>
@@ -208,17 +247,32 @@ const SaleOrderListScreen = ({ navigation }) => {
     <SafeAreaView>
       <NavigationHeader title="Sales Orders" onBackPress={() => navigation.goBack()} />
       <OfflineBanner message="OFFLINE MODE — showing cached orders" />
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterRowContent}>
-        {FILTERS.map(f => (
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterRow, { flex: 1 }]} contentContainerStyle={styles.filterRowContent}>
+          {FILTERS.map(f => (
+            <TouchableOpacity
+              key={f.key}
+              style={[styles.filterTab, activeFilter === f.key && styles.filterTabActive]}
+              onPress={() => setActiveFilter(f.key)}
+            >
+              <Text style={[styles.filterTabText, activeFilter === f.key && styles.filterTabTextActive]}>{f.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {toInvoiceOrders.length > 0 && (
           <TouchableOpacity
-            key={f.key}
-            style={[styles.filterTab, activeFilter === f.key && styles.filterTabActive]}
-            onPress={() => setActiveFilter(f.key)}
+            style={styles.bulkInvoiceBtn}
+            onPress={handleBulkGenerateInvoices}
+            disabled={generatingInvoices}
+            activeOpacity={0.7}
           >
-            <Text style={[styles.filterTabText, activeFilter === f.key && styles.filterTabTextActive]}>{f.label}</Text>
+            <MaterialIcons name="receipt-long" size={16} color="#009688" />
+            <Text style={styles.bulkInvoiceBtnText}>
+              {generatingInvoices ? '...' : `Invoice (${toInvoiceOrders.length})`}
+            </Text>
           </TouchableOpacity>
-        ))}
-      </ScrollView>
+        )}
+      </View>
       <RoundedContainer>
         {filteredData.length === 0 && !loading ? (
           <EmptyState
@@ -248,6 +302,23 @@ const SaleOrderListScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   filterRow: { backgroundColor: '#fff', maxHeight: 48, borderBottomWidth: 1, borderBottomColor: '#eee' },
   filterRowContent: { paddingHorizontal: 12, alignItems: 'center' },
+  bulkInvoiceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 12,
+    borderWidth: 1.5,
+    borderColor: '#009688',
+    gap: 4,
+  },
+  bulkInvoiceBtnText: {
+    color: '#009688',
+    fontSize: 11,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
   filterTab: { paddingHorizontal: 16, paddingVertical: 12, marginRight: 4, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   filterTabActive: { borderBottomColor: COLORS.primaryThemeColor },
   filterTabText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, color: '#999' },

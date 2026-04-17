@@ -143,19 +143,45 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
       }
 
       if (invoiceData) {
-        // Get S number - look up existing or assign new one
+        // Get S number — check all possible IDs (offline + real + invoice)
+        // so we never assign a duplicate when the ID swaps after sync.
         const primaryId = orderId || invoiceId || invoiceData.id;
-        const sNum = await getOrAssignSNumber(primaryId);
+        let sNum = null;
+        try {
+          const mapRaw = await AsyncStorage.getItem(INV_MAP_KEY);
+          const map = mapRaw ? JSON.parse(mapRaw) : {};
+          // Check all possible keys: orderId, invoiceId, offline ID from map
+          const keysToCheck = [String(primaryId), String(orderId), String(invoiceId)].filter(Boolean);
+          // Also check if there's a reverse mapping from offline_id_map
+          try {
+            const offlineMapRaw = await AsyncStorage.getItem('@offline_id_map');
+            if (offlineMapRaw) {
+              const offlineMap = JSON.parse(offlineMapRaw);
+              // Find any offline key that maps to our orderId
+              for (const [offKey, realId] of Object.entries(offlineMap)) {
+                if (String(realId) === String(orderId) || String(realId) === String(primaryId)) {
+                  keysToCheck.push(offKey);
+                }
+              }
+            }
+          } catch (_) {}
+          for (const k of keysToCheck) {
+            if (k && map[k]) { sNum = map[k]; break; }
+          }
+        } catch (_) {}
+        // Only assign new if none found
+        if (!sNum) { sNum = await getOrAssignSNumber(primaryId); }
         if (sNum) {
           invoiceData.name = sNum;
-          // Also store by both keys so both screens find it
-          if (orderId && invoiceId && String(orderId) !== String(invoiceId)) {
+          // Store by all keys so future lookups find it
+          try {
             const mapRaw = await AsyncStorage.getItem(INV_MAP_KEY);
             const map = mapRaw ? JSON.parse(mapRaw) : {};
-            map[String(orderId)] = sNum;
-            map[String(invoiceId)] = sNum;
+            if (orderId) map[String(orderId)] = sNum;
+            if (invoiceId) map[String(invoiceId)] = sNum;
+            map[String(primaryId)] = sNum;
             await AsyncStorage.setItem(INV_MAP_KEY, JSON.stringify(map));
-          }
+          } catch (_) {}
         }
         // Fetch company name from Odoo if missing
         if (!invoiceData.companyName || invoiceData.companyName === '-') {
@@ -210,7 +236,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   };
 
   const handlePrint = async () => {
-    if (!(await guardOnlineOnly('share the invoice'))) return;
     try {
       if (!invoice) return;
       const linesSummary = invoice.lines.map((l, i) =>
@@ -321,7 +346,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   };
 
   const handlePrintInvoice = async () => {
-    if (!(await guardOnlineOnly('print the invoice'))) return;
     if (!invoice) {
       showToastMessage('Invoice data not available');
       return;
@@ -331,7 +355,6 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   };
 
   const handleDownloadPdf = async () => {
-    if (!(await guardOnlineOnly('download the PDF'))) return;
     if (!invoice) {
       showToastMessage('Invoice data not available');
       return;
@@ -526,7 +549,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f5f6fa' }}>
       <NavigationHeader title={invoice.name || 'Invoice'} onBackPress={() => navigation.goBack()} logo={false} />
-      <OfflineBanner message="OFFLINE MODE — Print / Download / WhatsApp require internet" />
+      <OfflineBanner message="OFFLINE MODE — WhatsApp requires internet" />
       <ScrollView contentContainerStyle={s.container}>
         <View style={s.receiptCard}>
           {/* Header */}

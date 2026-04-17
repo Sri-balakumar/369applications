@@ -8,6 +8,7 @@
 // device comes back online); we are NOT trying to react in <100ms.
 
 import * as Network from 'expo-network';
+import { getOdooBaseUrl } from '@api/config/odooConfig';
 
 let lastKnown = null; // null = unknown, true = online, false = offline
 let pollHandle = null;
@@ -16,13 +17,41 @@ const subscribers = new Set();
 const POLL_INTERVAL_MS = 2000;
 
 /**
- * One-shot connectivity check. Returns true if the device has internet
- * (any reachable network — wifi or cellular).
+ * One-shot connectivity check. Returns true only if the device can actually
+ * reach the internet — not just connected to WiFi. Uses a fast HTTP ping
+ * as fallback when expo-network reports ambiguous state.
  */
 export const isOnline = async () => {
     try {
         const state = await Network.getNetworkStateAsync();
-        return Boolean(state?.isConnected && state?.isInternetReachable !== false);
+        const connected = Boolean(state?.isConnected);
+        const reachable = state?.isInternetReachable;
+
+        // If OS says not connected at all, we're definitely offline
+        if (!connected) return false;
+
+        // If OS explicitly says not reachable, trust it
+        if (reachable === false) return false;
+
+        // Ambiguous (null/undefined) OR reachable — verify by pinging Odoo
+        // This catches: device online but Odoo server down, ngrok tunnel active
+        // but no Odoo, etc.
+        try {
+            const odooUrl = getOdooBaseUrl();
+            const pingUrl = odooUrl
+                ? `${odooUrl.replace(/\/+$/, '')}/web/webclient/version_info`
+                : 'https://clients3.google.com/generate_204';
+            const controller = new AbortController();
+            const tm = setTimeout(() => controller.abort(), 4000);
+            const resp = await fetch(pingUrl, { method: 'POST', signal: controller.signal,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', method: 'call', params: {} }),
+            });
+            clearTimeout(tm);
+            return resp.ok || resp.status === 200;
+        } catch (_) {
+            return false;
+        }
     } catch (e) {
         console.warn('[networkStatus] isOnline failed:', e?.message);
         return false;

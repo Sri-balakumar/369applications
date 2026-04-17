@@ -530,14 +530,41 @@ const syncItemDirectly = async (item) => {
         console.log('[OfflineSyncService] Created sale.order id:', recordId);
         await saveOfflineIdMapping(offlineId, recordId);
 
-        // Swap offline placeholder in cached list/detail with real id.
+        // Fetch real order name from Odoo so the cache shows the Odoo ref
+        let realName = `S${String(recordId).padStart(5, '0')}`;
+        try {
+            const nameResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'sale.order', method: 'read', args: [[recordId]], kwargs: { fields: ['name'] } },
+            }, { headers, timeout: 10000 });
+            const fetched = nameResp.data?.result?.[0]?.name;
+            if (fetched) realName = fetched;
+        } catch (_) {}
+        console.log('[OfflineSyncService] sale.order real name:', realName);
+
+        // Copy the local S-number mapping from offline ID to real ID so the
+        // invoice receipt keeps the same S-number after sync.
+        try {
+            const sMapRaw = await AsyncStorage.getItem('inv_map_s');
+            if (sMapRaw) {
+                const sMap = JSON.parse(sMapRaw);
+                const offlineKey = offlineId;
+                if (sMap[offlineKey] && !sMap[String(recordId)]) {
+                    sMap[String(recordId)] = sMap[offlineKey];
+                    await AsyncStorage.setItem('inv_map_s', JSON.stringify(sMap));
+                    console.log('[OfflineSyncService] Copied S-number', sMap[offlineKey], 'from', offlineKey, 'to', recordId);
+                }
+            }
+        } catch (_) {}
+
+        // Swap offline placeholder in cached list/detail with real id + name.
         try {
             const raw = await AsyncStorage.getItem('@cache:saleOrders');
             if (raw) {
                 const list = JSON.parse(raw);
                 let changed = false;
                 const next = list.map((o) => {
-                    if (String(o.id) === offlineId) { changed = true; return { ...o, id: recordId, offline: false }; }
+                    if (String(o.id) === offlineId) { changed = true; return { ...o, id: recordId, name: realName, offline: false }; }
                     return o;
                 });
                 if (changed) await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(next));
@@ -547,7 +574,7 @@ const syncItemDirectly = async (item) => {
             const rawD = await AsyncStorage.getItem(`@cache:saleOrderDetail:${offlineId}`);
             if (rawD) {
                 const prev = JSON.parse(rawD);
-                await AsyncStorage.setItem(`@cache:saleOrderDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, offline: false }));
+                await AsyncStorage.setItem(`@cache:saleOrderDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, name: realName, offline: false }));
                 await AsyncStorage.removeItem(`@cache:saleOrderDetail:${offlineId}`);
             }
         } catch (_) {}
@@ -750,36 +777,49 @@ const syncItemDirectly = async (item) => {
 };
 
 const flushOnce = async () => {
-    if (flushing) return { skipped: true };
+    if (flushing) { console.log('[OfflineSyncService] flush skipped — already in progress'); return { skipped: true }; }
     flushing = true;
     let synced = 0;
     let failed = 0;
     try {
         const items = await offlineQueue.getAll();
+        console.log('[OfflineSyncService] flush started, queue has', items.length, 'items');
         if (items.length === 0) return { synced: 0, failed: 0, total: 0 };
 
         const online = await networkStatus.isOnline();
-        if (!online) return { synced: 0, failed: 0, total: items.length, offline: true };
+        if (!online) { console.log('[OfflineSyncService] flush aborted — offline'); return { synced: 0, failed: 0, total: items.length, offline: true }; }
 
         for (const item of items) {
             // Auto-remove poison pills (failed 5+ times)
             if ((item.retryCount || 0) >= 5) {
-                console.warn('[OfflineSyncService] removing poison-pill:', item.id);
+                console.warn('[OfflineSyncService] removing poison-pill:', item.id, item.model, 'lastError:', item.lastError);
                 await offlineQueue.removeById(item.id);
                 failed += 1;
                 continue;
             }
             try {
+                console.log('[OfflineSyncService] syncing item:', item.id, item.model, item.operation, 'retry:', item.retryCount || 0);
                 await syncItemDirectly(item);
                 await offlineQueue.removeById(item.id);
                 synced += 1;
-                console.log('[OfflineSyncService] synced item:', item.id, item.model);
+                console.log('[OfflineSyncService] SUCCESS:', item.id, item.model);
             } catch (e) {
-                console.error('[OfflineSyncService] item failed:', item.id, e?.message);
+                console.error('[OfflineSyncService] FAILED:', item.id, item.model, e?.message);
                 await offlineQueue.markFailed(item.id, e?.message || 'sync failed');
                 failed += 1;
             }
         }
+        console.log('[OfflineSyncService] flush done: synced=', synced, 'failed=', failed);
+
+        // Re-check: if items remain after flush, schedule another pass in 3s
+        const remaining = await offlineQueue.getPendingCount();
+        if (remaining > 0) {
+            console.log('[OfflineSyncService] still', remaining, 'items in queue — scheduling retry');
+            setTimeout(() => {
+                flushOnce().catch((e) => console.warn('[OfflineSyncService] retry flush failed:', e?.message));
+            }, 3000);
+        }
+
         return { synced, failed, total: items.length };
     } finally {
         flushing = false;
@@ -805,12 +845,13 @@ export const start = () => {
 
     // Auto-flush on offline→online transitions.
     unsubscribe = networkStatus.subscribe((online) => {
+        console.log('[OfflineSyncService] connectivity changed:', online ? 'ONLINE' : 'OFFLINE');
         if (online) {
-            // Tiny delay so the OS finishes the transition, then flush immediately.
             if (retryTimer) clearTimeout(retryTimer);
             retryTimer = setTimeout(() => {
+                console.log('[OfflineSyncService] auto-flush triggered by connectivity change');
                 flushOnce().then((res) => {
-                    if (res && res.synced > 0) console.log('[OfflineSyncService] auto-flush synced:', res.synced);
+                    console.log('[OfflineSyncService] auto-flush result:', JSON.stringify(res));
                 }).catch((e) => console.warn('[OfflineSyncService] auto-flush failed:', e?.message));
             }, 500);
         }

@@ -22,6 +22,8 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import OfflineBanner from '@components/common/OfflineBanner';
 import { StyledAlertModal } from '@components/Modal';
+import { isOnline } from '@utils/networkStatus';
+import { showToastMessage } from '@components/Toast';
 import { useCurrencyStore } from '@stores/currency';
 import { useProductStore } from '@stores/product';
 import BelowCostApprovalModal from '@components/BelowCostApprovalModal';
@@ -44,7 +46,8 @@ const STATE_COLORS = {
 };
 
 const SaleOrderDetailScreen = ({ navigation, route }) => {
-  const { orderId } = route?.params || {};
+  const routeOrderId = route?.params?.orderId;
+  const [orderId, setOrderId] = useState(routeOrderId);
   const currencySymbol = useCurrencyStore((state) => state.currency) || 'OMR';
 
   const [record, setRecord] = useState(null);
@@ -81,7 +84,23 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
     if (!orderId) return;
     if (showLoader) setLoading(true);
     try {
-      const data = await fetchSaleOrderDetailOdoo(orderId);
+      // If the order was offline-created, check if it has synced and got a real ID
+      let resolvedId = orderId;
+      if (String(orderId).startsWith('offline_')) {
+        try {
+          const AsyncStorageLocal = require('@react-native-async-storage/async-storage').default;
+          const mapRaw = await AsyncStorageLocal.getItem('@offline_id_map');
+          if (mapRaw) {
+            const map = JSON.parse(mapRaw);
+            if (map[orderId] !== undefined) {
+              resolvedId = map[orderId];
+              console.log('[SaleOrderDetail] Resolved offline ID', orderId, '→', resolvedId);
+              setOrderId(resolvedId);
+            }
+          }
+        } catch (_) {}
+      }
+      const data = await fetchSaleOrderDetailOdoo(resolvedId);
       // If no invoice_ids but SO is confirmed, check for invoices by origin
       if (data && (!data.invoice_ids || data.invoice_ids.length === 0) && (data.state === 'sale' || data.state === 'done') && data.name) {
         try {
@@ -90,6 +109,29 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
             data.invoice_ids = invResp.map(inv => inv.id);
           }
         } catch (e) { /* ignore */ }
+      }
+      // Preserve local offline invoice marker if the fresh data has no real invoices.
+      // This keeps "View Invoice" visible until the real Odoo invoice is created.
+      if (data && (!data.invoice_ids || data.invoice_ids.length === 0)) {
+        if (createdInvoiceId === 'offline_inv') {
+          data.invoice_status = 'invoiced';
+          data.invoice_ids = ['offline_inv'];
+        } else {
+          // Also check the cached detail for offline_inv marker
+          try {
+            const AsyncStorageLocal = require('@react-native-async-storage/async-storage').default;
+            const cachedKey = `@cache:saleOrderDetail:${String(resolvedId || orderId)}`;
+            const cachedRaw = await AsyncStorageLocal.getItem(cachedKey);
+            if (cachedRaw) {
+              const cached = JSON.parse(cachedRaw);
+              if (cached.invoice_status === 'invoiced' && cached.invoice_ids?.includes('offline_inv')) {
+                data.invoice_status = 'invoiced';
+                data.invoice_ids = ['offline_inv'];
+                setCreatedInvoiceId('offline_inv');
+              }
+            }
+          } catch (_) {}
+        }
       }
       setRecord(data);
       setEditedLines({});
@@ -362,6 +404,46 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const executeCreateInvoice = async () => {
     setInvoicing(true);
     try {
+      // If the order hasn't synced yet (still offline ID), treat as offline
+      const isOfflineOrder = String(orderId).startsWith('offline_');
+      const online = await isOnline();
+      if (!online || isOfflineOrder) {
+        const od = buildOrderData();
+        const idStr = String(orderId);
+
+        // Mark as invoiced in cached list so the list shows "INVOICED" badge
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          const raw = await AsyncStorage.getItem('@cache:saleOrders');
+          if (raw) {
+            const list = JSON.parse(raw);
+            const idx = list.findIndex((o) => String(o.id) === idStr);
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], invoice_status: 'invoiced', invoice_ids: ['offline_inv'] };
+              await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list));
+            }
+          }
+          // Update detail cache too
+          const detailKey = `@cache:saleOrderDetail:${idStr}`;
+          const rawD = await AsyncStorage.getItem(detailKey);
+          if (rawD) {
+            const prev = JSON.parse(rawD);
+            await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, invoice_status: 'invoiced', invoice_ids: ['offline_inv'] }));
+          }
+        } catch (_) {}
+
+        // Update local state so buttons switch to "View Invoice"
+        setCreatedInvoiceId('offline_inv');
+        if (record) {
+          setRecord({ ...record, invoice_status: 'invoiced', invoice_ids: ['offline_inv'] });
+        }
+
+        showToastMessage('Invoice generated locally');
+        navigation.navigate('SalesInvoiceReceiptScreen', { orderId, orderData: od });
+        setInvoicing(false);
+        return;
+      }
+
       const od = buildOrderData();
       console.log('[Invoice] Captured orderData with', od.lines.length, 'lines before create');
       const companyId = record?.company_id ? (Array.isArray(record.company_id) ? record.company_id[0] : record.company_id) : null;
@@ -513,6 +595,9 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
             <View style={styles.fieldCol}>
               <Text style={styles.fieldLabel}>Customer</Text>
               <Text style={styles.fieldValue}>{partnerName}</Text>
+              <Text style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                {String(record?.id || orderId || '').startsWith('offline_') ? 'Ref: -' : `Ref: ${record?.name || '-'}`}
+              </Text>
             </View>
             <View style={styles.fieldCol}>
               <Text style={styles.fieldLabel}>Date</Text>
@@ -521,22 +606,8 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
           </View>
           <View style={styles.fieldRow}>
             <View style={styles.fieldCol}>
-              <Text style={styles.fieldLabel}>Warehouse</Text>
-              <Text style={styles.fieldValue}>{warehouseName}</Text>
-            </View>
-            <View style={styles.fieldCol}>
               <Text style={styles.fieldLabel}>Company</Text>
               <Text style={styles.fieldValue}>{companyName}</Text>
-            </View>
-          </View>
-          <View style={styles.fieldRow}>
-            <View style={styles.fieldCol}>
-              <Text style={styles.fieldLabel}>Customer Reference</Text>
-              <Text style={styles.fieldValue}>{customerRef || '-'}</Text>
-            </View>
-            <View style={styles.fieldCol}>
-              <Text style={styles.fieldLabel}>Currency</Text>
-              <Text style={styles.fieldValue}>{currencyName}</Text>
             </View>
           </View>
         </View>

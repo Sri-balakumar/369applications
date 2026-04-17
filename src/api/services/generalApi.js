@@ -5446,7 +5446,27 @@ export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }
     console.log('[createSaleOrderOdoo] Created sale order ID:', response.data.result);
     return response.data.result;
   } catch (error) {
-    console.error('createSaleOrderOdoo error:', error?.message || error);
+    console.error('[createSaleOrderOdoo] Online path failed:', error?.message || error);
+    // If network/timeout error (not Odoo business error), fall back to offline queue
+    const isNetworkError = !error?.message?.includes('Failed to create') && (
+      error?.message?.includes('Network') || error?.message?.includes('timeout') ||
+      error?.message?.includes('ECONNREFUSED') || error?.code === 'ERR_NETWORK'
+    );
+    if (isNetworkError) {
+      console.log('[createSaleOrderOdoo] Network error detected — falling back to offline queue');
+      const localId = await offlineQueue.enqueue({
+        model: 'sale.order', operation: 'create', values: vals,
+      });
+      let partnerName = '';
+      try { const raw = await AsyncStorage.getItem('@cache:contacts'); if (raw) { const list = JSON.parse(raw); const p = list.find((c) => String(c.id) === String(partnerId)); partnerName = p?.name || ''; } } catch (_) {}
+      let amountUntaxed = 0;
+      (orderLines || []).forEach((l) => { const qty = l.qty || l.quantity || l.product_uom_qty || 1; const price = l.price_unit || l.price || l.unit_price || 0; amountUntaxed += qty * price; });
+      const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      const placeholder = { id: `offline_${localId}`, name: 'NEW (offline)', partner_id: partnerId ? [partnerId, partnerName] : false, state: 'draft', amount_total: amountUntaxed, amount_untaxed: amountUntaxed, amount_tax: 0, date_order: nowIso, invoice_status: 'no', invoice_ids: [], offline: true };
+      try { const rawList = await AsyncStorage.getItem('@cache:saleOrders'); const list = rawList ? JSON.parse(rawList) : []; list.unshift(placeholder); await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list)); } catch (_) {}
+      console.log('[createSaleOrderOdoo] Queued offline (network fallback), localId:', localId);
+      return { offline: true, localId, id: `offline_${localId}` };
+    }
     throw error;
   }
 };
@@ -5728,6 +5748,7 @@ export const updateSaleOrderLinesOdoo = async (orderId, { changes = [], addition
 export const createInvoiceFromQuotationOdoo = async (orderId, companyId = null) => {
   try {
     const { headers, baseUrl } = await authenticateOdoo();
+    console.log('[createInvoice] === START === orderId:', orderId, 'companyId:', companyId);
 
     let allCompanyIds = [1];
     try {
@@ -5735,15 +5756,46 @@ export const createInvoiceFromQuotationOdoo = async (orderId, companyId = null) 
         { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
         { headers });
       allCompanyIds = (compResp.data?.result || []).map(c => c.id);
-    } catch (e) { /* fallback */ }
+    } catch (e) { console.warn('[createInvoice] Company fetch failed:', e?.message); }
 
     const companyIds = companyId ? [companyId, ...allCompanyIds.filter(id => id !== companyId)] : allCompanyIds;
     const wizardCtx = { allowed_company_ids: companyIds, active_ids: [orderId], active_id: orderId, active_model: 'sale.order' };
+    console.log('[createInvoice] Context:', JSON.stringify({ companyIds, orderId }));
+
+    // STEP 0: Check order state first
+    try {
+      const stateResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['state', 'invoice_status', 'invoice_ids', 'name'] } },
+      }, { headers, timeout: 15000 });
+      const soState = stateResp.data?.result?.[0];
+      console.log('[createInvoice] Order state:', soState?.state, 'invoice_status:', soState?.invoice_status, 'existing_invoices:', soState?.invoice_ids?.length, 'name:', soState?.name);
+
+      // If already invoiced, return existing invoice
+      if (soState?.invoice_ids?.length > 0) {
+        const existingInvId = soState.invoice_ids[soState.invoice_ids.length - 1];
+        console.log('[createInvoice] Order already has invoice:', existingInvId, '— returning it');
+        return { result: existingInvId };
+      }
+
+      // If order is still draft, confirm it first
+      if (soState?.state === 'draft' || soState?.state === 'sent') {
+        console.log('[createInvoice] Order is in draft/sent state — confirming first');
+        try {
+          await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'sale.order', method: 'action_confirm', args: [[orderId]], kwargs: { context: { allowed_company_ids: companyIds } } },
+          }, { headers, timeout: 15000 });
+          console.log('[createInvoice] Order confirmed');
+        } catch (confErr) { console.warn('[createInvoice] Confirm failed:', confErr?.message); }
+      }
+    } catch (stateErr) { console.warn('[createInvoice] State check failed:', stateErr?.message); }
 
     // STEP 1: Ensure delivery is done (so 'delivered' method works)
     console.log('[createInvoice] Step 1: Validating pickings for SO', orderId);
     try {
       await validateSaleOrderPickingsOdoo(orderId);
+      console.log('[createInvoice] Pickings validated OK');
     } catch (e) {
       console.warn('[createInvoice] Picking validation warning:', e?.message);
     }
@@ -5804,8 +5856,62 @@ export const createInvoiceFromQuotationOdoo = async (orderId, companyId = null) 
       }
     }
 
+    // FALLBACK: If wizard methods failed, create invoice directly via account.move
     if (!invoiceId) {
-      console.error('[createInvoice] All wizard methods failed');
+      console.log('[createInvoice] Wizard methods failed, trying direct account.move create');
+      try {
+        // Read order lines to build invoice lines
+        const soDataResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'sale.order', method: 'read', args: [[orderId]], kwargs: { fields: ['partner_id', 'order_line', 'currency_id', 'company_id'] } },
+        }, { headers, timeout: 15000 });
+        const soData = soDataResp.data?.result?.[0];
+        if (soData && soData.order_line && soData.order_line.length > 0) {
+          const linesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'sale.order.line', method: 'read', args: [soData.order_line], kwargs: { fields: ['product_id', 'product_uom_qty', 'price_unit', 'discount', 'name', 'tax_id'] } },
+          }, { headers, timeout: 15000 });
+          const soLines = linesResp.data?.result || [];
+
+          const invoiceLines = soLines.map((l) => [0, 0, {
+            product_id: Array.isArray(l.product_id) ? l.product_id[0] : l.product_id,
+            quantity: l.product_uom_qty || 1,
+            price_unit: l.price_unit || 0,
+            discount: l.discount || 0,
+            name: l.name || '',
+            ...(l.tax_id && l.tax_id.length > 0 ? { tax_ids: [[6, 0, l.tax_id]] } : {}),
+          }]);
+
+          const partnerId = Array.isArray(soData.partner_id) ? soData.partner_id[0] : soData.partner_id;
+          const moveResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'account.move', method: 'create',
+              args: [{
+                move_type: 'out_invoice',
+                partner_id: partnerId,
+                invoice_origin: soData.name || `SO-${orderId}`,
+                invoice_line_ids: invoiceLines,
+                ...(soData.currency_id ? { currency_id: Array.isArray(soData.currency_id) ? soData.currency_id[0] : soData.currency_id } : {}),
+              }],
+              kwargs: { context: wizardCtx },
+            },
+          }, { headers, timeout: 30000 });
+
+          if (!moveResp.data?.error && moveResp.data?.result) {
+            invoiceId = moveResp.data.result;
+            console.log('[createInvoice] Direct account.move created:', invoiceId);
+          } else {
+            console.warn('[createInvoice] Direct create failed:', moveResp.data?.error?.data?.message);
+          }
+        }
+      } catch (directErr) {
+        console.warn('[createInvoice] Direct fallback failed:', directErr?.message);
+      }
+    }
+
+    if (!invoiceId) {
+      console.error('[createInvoice] All methods failed including direct create');
       throw new Error('Failed to create invoice - all methods failed');
     }
 

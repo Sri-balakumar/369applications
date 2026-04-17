@@ -116,14 +116,9 @@ const OptionsScreen = ({ navigation }) => {
       ],
     },
     {
-      title: 'Services',
-      items: [
-        { title: 'Services', image: require('@assets/images/Home/section/quick_service.png'), onPress: () => navigation.navigate('ServicesScreen') },
-      ],
-    },
-    {
       title: 'Other',
       items: [
+        { title: 'Services', image: require('@assets/images/Home/section/quick_service.png'), onPress: () => navigation.navigate('ServicesScreen') },
         { title: 'Offline Sync', image: require('@assets/images/Home/section/spare_parts_request.png'), onPress: () => navigation.navigate('OfflineSyncScreen') },
         { title: 'Task Manager', image: require('@assets/images/Home/options/tasK_manager_1.png'), onPress: () => navigation.navigate('TaskManagerScreen') },
         { title: 'Market Study', image: require('@assets/images/Home/options/market_study_1.png'), onPress: () => navigation.navigate('MarketStudyScreen') },
