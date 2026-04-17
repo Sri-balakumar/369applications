@@ -375,14 +375,17 @@ const ProductDetail = ({ navigation, route }) => {
             )}
 
             <View style={{ height: 10 }} />
-            {route?.params?.fromPOS ? (
-              fromCustomerDetails?.id?.toString().startsWith('__so_edit_') ? (
-                <Button title={'Add to Order Lines'} onPress={handleAddToPosCart} />
+            {/* Hide the cart button entirely for Easy Sales / Easy Purchase / Estimate flows */}
+            {(fromCustomerDetails?.id?.toString().startsWith('__easy_') || fromCustomerDetails?.id?.toString().startsWith('__estimate_')) ? null : (
+              route?.params?.fromPOS ? (
+                fromCustomerDetails?.id?.toString().startsWith('__so_edit_') ? (
+                  <Button title={'Add to Order Lines'} onPress={handleAddToPosCart} />
+                ) : (
+                  <Button title={'Add to POS Cart'} onPress={handleAddToPosCart} />
+                )
               ) : (
-                <Button title={'Add to POS Cart'} onPress={handleAddToPosCart} />
+                <Button title={'Add Products'} onPress={handleAddProduct} />
               )
-            ) : (
-              <Button title={'Add Products'} onPress={handleAddProduct} />
             )}
             <View style={{ height: 30 }} />
           </>

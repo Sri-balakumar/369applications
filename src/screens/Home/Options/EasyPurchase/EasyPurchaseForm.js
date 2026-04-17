@@ -66,14 +66,19 @@ const EasyPurchaseForm = ({ navigation }) => {
 
   const total = products.reduce((sum, p) => sum + (parseFloat(p.price) || 0) * (p.quantity || 1), 0);
 
-  const handleQuantityChange = (product, delta) => {
-    const newQty = Math.max(1, (product.quantity || 1) + delta);
-    addProduct({ ...product, quantity: newQty });
+  const handleQuantityChange = (productId, quantity) => {
+    const updatedQty = Math.max(0, isNaN(parseInt(quantity)) ? 0 : parseInt(quantity));
+    const product = products.find((p) => p.id === productId);
+    if (product) addProduct({ ...product, quantity: updatedQty });
   };
 
-  const handlePriceChange = (product, newPrice) => {
-    addProduct({ ...product, price: newPrice });
+  const handlePriceChange = (productId, price) => {
+    const updatedPrice = isNaN(parseFloat(price)) ? 0 : parseFloat(price);
+    const product = products.find((p) => p.id === productId);
+    if (product) addProduct({ ...product, price: updatedPrice });
   };
+
+  const handleDelete = (productId) => { removeProduct(productId); };
 
   const handleSubmit = async () => {
     if (!vendor) { Alert.alert('Missing Data', 'Please select a vendor.'); return; }
@@ -118,23 +123,49 @@ const EasyPurchaseForm = ({ navigation }) => {
   };
 
   const renderProductRow = ({ item }) => (
-    <View style={s.productRow}>
-      <View style={{ flex: 1 }}>
-        <Text style={s.productName} numberOfLines={2}>{item.name || item.display_name || '-'}</Text>
-        <View style={s.qtyRow}>
-          <TouchableOpacity onPress={() => handleQuantityChange(item, -1)} style={s.qtyBtn}><AntDesign name="minus" size={14} color="#333" /></TouchableOpacity>
-          <Text style={s.qtyText}>{item.quantity || 1}</Text>
-          <TouchableOpacity onPress={() => handleQuantityChange(item, 1)} style={s.qtyBtn}><AntDesign name="plus" size={14} color="#333" /></TouchableOpacity>
+    <View style={s.lineCard}>
+      <View style={s.lineRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={s.lineName} numberOfLines={1}>{item?.name?.trim() || item?.display_name || '-'}</Text>
+        </View>
+        <TouchableOpacity onPress={() => handleDelete(item.id)}>
+          <Ionicons name="trash-outline" size={20} color="#F44336" />
+        </TouchableOpacity>
+      </View>
+      <View style={s.lineRow}>
+        <View style={s.lineField}>
+          <Text style={s.lineLabel}>Qty</Text>
+          <View style={s.qtyRow}>
+            <TouchableOpacity onPress={() => handleQuantityChange(item.id, (item.quantity || 1) - 1)}>
+              <AntDesign name="minuscircleo" size={20} color={COLORS.primaryThemeColor} />
+            </TouchableOpacity>
+            <TextInput
+              style={s.qtyInput}
+              value={String(item.quantity || 1)}
+              onChangeText={(text) => handleQuantityChange(item.id, text)}
+              keyboardType="numeric"
+              selectTextOnFocus
+            />
+            <TouchableOpacity onPress={() => handleQuantityChange(item.id, (item.quantity || 1) + 1)}>
+              <AntDesign name="pluscircleo" size={20} color={COLORS.primaryThemeColor} />
+            </TouchableOpacity>
+          </View>
+        </View>
+        <View style={s.lineField}>
+          <Text style={s.lineLabel}>Price</Text>
+          <TextInput
+            style={s.priceInput}
+            value={String(item.price || 0)}
+            onChangeText={(text) => handlePriceChange(item.id, text)}
+            keyboardType="numeric"
+            selectTextOnFocus
+          />
+        </View>
+        <View style={s.lineField}>
+          <Text style={s.lineLabel}>Subtotal</Text>
+          <Text style={s.subtotalText}>{currencySymbol} {((parseFloat(item.price) || 0) * (item.quantity || 1)).toFixed(3)}</Text>
         </View>
       </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <TextInput style={s.priceInput} value={String(item.price || 0)} keyboardType="numeric"
-          onChangeText={(t) => handlePriceChange(item, t)} />
-        <Text style={s.lineTotal}>{currencySymbol} {((parseFloat(item.price) || 0) * (item.quantity || 1)).toFixed(3)}</Text>
-      </View>
-      <TouchableOpacity onPress={() => removeProduct(item.id)} style={{ paddingLeft: 8 }}>
-        <Ionicons name="trash-outline" size={20} color="#e74c3c" />
-      </TouchableOpacity>
     </View>
   );
 
@@ -219,13 +250,15 @@ const s = StyleSheet.create({
   sectionTitle: { fontSize: 15, fontFamily: FONT_FAMILY.urbanistBold, color: '#2e2a4f' },
   addBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primaryThemeColor, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, gap: 4 },
   addBtnText: { color: '#fff', fontSize: 12, fontFamily: FONT_FAMILY.urbanistBold },
-  productRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 8 },
-  productName: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistSemiBold, color: '#333', marginBottom: 4 },
+  lineCard: { backgroundColor: '#f9f9f9', borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#eee' },
+  lineRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  lineName: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#333' },
+  lineField: { flex: 1, alignItems: 'center' },
+  lineLabel: { fontSize: 11, fontFamily: FONT_FAMILY.urbanistMedium, color: '#999', marginBottom: 4 },
   qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  qtyBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' },
-  qtyText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#333', minWidth: 20, textAlign: 'center' },
-  priceInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, fontSize: 13, textAlign: 'right', minWidth: 70, color: '#333' },
-  lineTotal: { fontSize: 12, fontFamily: FONT_FAMILY.urbanistBold, color: COLORS.primaryThemeColor, marginTop: 4 },
+  qtyInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, width: 50, textAlign: 'center', paddingVertical: 4, fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, backgroundColor: '#fff' },
+  priceInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, width: 80, textAlign: 'center', paddingVertical: 4, fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, backgroundColor: '#fff' },
+  subtotalText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistExtraBold, color: COLORS.primaryThemeColor },
   totalCard: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, padding: 14, marginTop: 12 },
   totalLabel: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: '#2e2a4f' },
   totalValue: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: COLORS.primaryThemeColor },

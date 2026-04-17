@@ -303,6 +303,7 @@ const EasySalesForm = ({ navigation }) => {
               value={item.quantity.toString()}
               onChangeText={(text) => handleQuantityChange(item.id, text)}
               keyboardType="numeric"
+              selectTextOnFocus
             />
             <TouchableOpacity onPress={() => handleQuantityChange(item.id, item.quantity + 1)}>
               <AntDesign name="pluscircleo" size={20} color={COLORS.primaryThemeColor} />
@@ -316,6 +317,7 @@ const EasySalesForm = ({ navigation }) => {
             value={item.price.toString()}
             onChangeText={(text) => handlePriceChange(item.id, text)}
             keyboardType="numeric"
+            selectTextOnFocus
           />
         </View>
         <View style={styles.lineField}>

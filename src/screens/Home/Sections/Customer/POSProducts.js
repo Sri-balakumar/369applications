@@ -2,7 +2,7 @@ import React, { useEffect, useCallback, useState } from 'react';
 import { View, TouchableOpacity, ScrollView, StyleSheet as RNStyleSheet } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { ProductsList } from '@components/Product';
-import { fetchProductsOdoo, fetchProductCategoriesOdoo } from '@api/services/generalApi';
+import { fetchProductsOdoo, fetchPosCategoriesOdoo } from '@api/services/generalApi';
 import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
@@ -18,6 +18,11 @@ import Toast from 'react-native-toast-message';
 import { Button } from '@components/common/Button';
 import Text from '@components/Text';
 
+const ODOO_COLORS = [
+  '#FFFFFF', '#F06050', '#F4A460', '#F7CD1F', '#6CC1ED', '#814968',
+  '#EB7E7F', '#2C8397', '#475577', '#D6145F', '#30C381', '#9365B8',
+];
+
 const POSProducts = ({ navigation, route }) => {
   const { openingAmount, sessionId, fromCustomerDetails } = route?.params || {};
   const customerId = fromCustomerDetails?.id || fromCustomerDetails?._id || null;
@@ -27,10 +32,23 @@ const POSProducts = ({ navigation, route }) => {
 
   const [categories, setCategories] = useState([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
+  const [selectedCategorySource, setSelectedCategorySource] = useState(null);
   const [categoriesLoading, setCategoriesLoading] = useState(false);
 
+  const buildParams = (extra = {}) => {
+    const base = { searchText: extra.searchText ?? searchText, ...extra };
+    if (selectedCategoryId) {
+      if (selectedCategorySource === 'pos.category') {
+        base.posCategoryId = selectedCategoryId;
+      } else {
+        base.categoryId = selectedCategoryId;
+      }
+    }
+    return base;
+  };
+
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, categoryId: selectedCategoryId }),
+    (text) => fetchData(buildParams({ searchText: text })),
     500
   );
 
@@ -39,8 +57,8 @@ const POSProducts = ({ navigation, route }) => {
     const loadCategories = async () => {
       setCategoriesLoading(true);
       try {
-        const cats = await fetchProductCategoriesOdoo();
-        console.log('[POSProducts] categories loaded:', cats?.length);
+        const cats = await fetchPosCategoriesOdoo();
+        console.log('[POSProducts] POS categories loaded:', cats?.length);
         setCategories(cats || []);
       } catch (err) {
         console.error('[POSProducts] categories error:', err);
@@ -55,20 +73,21 @@ const POSProducts = ({ navigation, route }) => {
   useFocusEffect(
     useCallback(() => {
       setCurrentCustomer(customerId || 'pos_guest');
-      fetchData({ searchText, categoryId: selectedCategoryId });
-    }, [searchText, selectedCategoryId, customerId])
+      fetchData(buildParams());
+    }, [searchText, selectedCategoryId, selectedCategorySource, customerId])
   );
 
   useEffect(() => {
-    if (isFocused) fetchData({ searchText, categoryId: selectedCategoryId });
-  }, [isFocused, searchText, selectedCategoryId]);
+    if (isFocused) fetchData(buildParams());
+  }, [isFocused, searchText, selectedCategoryId, selectedCategorySource]);
 
-  const handleLoadMore = () => fetchMoreData({ searchText, categoryId: selectedCategoryId });
+  const handleLoadMore = () => fetchMoreData(buildParams());
 
   const handleCategoryPress = (catId) => {
     const newId = selectedCategoryId === catId ? '' : catId;
     setSelectedCategoryId(newId);
-    fetchData({ searchText, categoryId: newId });
+    const cat = (categories || []).find((c) => (c._id || c.id) === catId);
+    setSelectedCategorySource(cat?._source || 'product.category');
   };
 
   const handleAdd = (p) => {
@@ -143,13 +162,24 @@ const POSProducts = ({ navigation, route }) => {
             {categories.map((cat) => {
               const catId = cat._id || cat.id;
               const isActive = selectedCategoryId === catId;
+              const catColor = ODOO_COLORS[cat.color] || null;
+              const hasColor = cat.color > 0 && catColor;
               return (
                 <TouchableOpacity
                   key={catId}
-                  style={[catStyles.chip, isActive && catStyles.chipActive]}
+                  style={[
+                    catStyles.chip,
+                    hasColor && { backgroundColor: catColor, borderColor: catColor },
+                    isActive && !hasColor && catStyles.chipActive,
+                    isActive && hasColor && { borderColor: '#333', borderWidth: 2.5 },
+                  ]}
                   onPress={() => handleCategoryPress(catId)}
                 >
-                  <Text style={[catStyles.chipText, isActive && catStyles.chipTextActive]} numberOfLines={1}>
+                  <Text style={[
+                    catStyles.chipText,
+                    hasColor && { color: '#fff' },
+                    isActive && catStyles.chipTextActive,
+                  ]} numberOfLines={1}>
                     {cat.category_name || cat.name}
                   </Text>
                 </TouchableOpacity>

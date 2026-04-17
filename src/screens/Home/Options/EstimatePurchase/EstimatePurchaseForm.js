@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { View, StyleSheet, Keyboard, TouchableOpacity, Alert, TextInput, Modal } from 'react-native';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { View, StyleSheet, Keyboard, TouchableOpacity, Alert, TextInput, Modal, FlatList } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
 import { NavigationHeader, TitleWithButton } from '@components/Header';
 import { CustomListModal } from '@components/Modal';
@@ -9,8 +10,10 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { OverlayLoader } from '@components/Loader';
 import { showToastMessage } from '@components/Toast';
 import Text from '@components/Text';
-import { AntDesign } from '@expo/vector-icons';
+import { AntDesign, Ionicons } from '@expo/vector-icons';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useProductStore } from '@stores/product';
+import { useCurrencyStore } from '@stores/currency';
 import {
   fetchVendorsOdoo,
   createVendorOdoo,
@@ -23,7 +26,16 @@ import {
   fetchPosCategoriesOdoo,
 } from '@api/services/generalApi';
 
+const ESTIMATE_PURCHASE_CART_ID = '__estimate_purchase__';
+
 const EstimatePurchaseForm = ({ navigation }) => {
+  const currencySymbol = useCurrencyStore((s) => s.currencySymbol) || '$';
+  const { getCurrentCart, setCurrentCustomer, loadCustomerCart, removeProduct, addProduct, clearProducts } = useProductStore();
+
+  useEffect(() => { setCurrentCustomer(ESTIMATE_PURCHASE_CART_ID); loadCustomerCart(ESTIMATE_PURCHASE_CART_ID, []); }, []);
+  useFocusEffect(useCallback(() => { setCurrentCustomer(ESTIMATE_PURCHASE_CART_ID); }, []));
+  const cartProducts = getCurrentCart();
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
   const submittingRef = useRef(false);
@@ -310,11 +322,61 @@ const EstimatePurchaseForm = ({ navigation }) => {
     }
   };
 
-  const renderLine = (line, index) => (
+  // Easy-Sales-style product line rendering
+  const handleCartQtyChange = (productId, quantity) => {
+    const qty = Math.max(0, isNaN(parseInt(quantity)) ? 0 : parseInt(quantity));
+    const p = cartProducts.find((x) => x.id === productId);
+    if (p) addProduct({ ...p, quantity: qty });
+  };
+  const handleCartPriceChange = (productId, price) => {
+    const p = cartProducts.find((x) => x.id === productId);
+    if (p) addProduct({ ...p, price: isNaN(parseFloat(price)) ? 0 : parseFloat(price) });
+  };
+  const handleAddProductNav = () => {
+    navigation.navigate('POSProducts', { fromCustomerDetails: { id: ESTIMATE_PURCHASE_CART_ID, name: 'Estimate Purchase' } });
+  };
+  const handleBarcodeScanNav = () => {
+    navigation.navigate('Scanner', {
+      onScan: async (barcode) => {
+        const results = await fetchProductByBarcodeOdoo(barcode);
+        if (results && results.length > 0) {
+          const p = results[0];
+          addProduct({ id: p.id, name: p.product_name || p.name, price: p.standard_price || p.price || 0, quantity: 1 });
+          navigation.goBack();
+        } else { Alert.alert('Not Found', 'Product not found'); }
+      },
+    });
+  };
+
+  const renderProductLine = ({ item }) => (
+    <View style={styles.lineCard}>
+      <View style={styles.lineRow}>
+        <View style={{ flex: 1 }}><Text style={styles.lineName} numberOfLines={1}>{item?.name?.trim() || '-'}</Text></View>
+        <TouchableOpacity onPress={() => removeProduct(item.id)}><Ionicons name="trash-outline" size={20} color="#F44336" /></TouchableOpacity>
+      </View>
+      <View style={styles.lineRow}>
+        <View style={styles.lineField}><Text style={styles.lineLabel}>Qty</Text>
+          <View style={styles.qtyRow}>
+            <TouchableOpacity onPress={() => handleCartQtyChange(item.id, (item.quantity || 1) - 1)}><AntDesign name="minuscircleo" size={20} color={COLORS.primaryThemeColor} /></TouchableOpacity>
+            <TextInput style={styles.qtyInput} value={String(item.quantity || 1)} onChangeText={(t) => handleCartQtyChange(item.id, t)} keyboardType="numeric" selectTextOnFocus />
+            <TouchableOpacity onPress={() => handleCartQtyChange(item.id, (item.quantity || 1) + 1)}><AntDesign name="pluscircleo" size={20} color={COLORS.primaryThemeColor} /></TouchableOpacity>
+          </View>
+        </View>
+        <View style={styles.lineField}><Text style={styles.lineLabel}>Price</Text>
+          <TextInput style={styles.priceInput} value={String(item.price || 0)} onChangeText={(t) => handleCartPriceChange(item.id, t)} keyboardType="numeric" selectTextOnFocus />
+        </View>
+        <View style={styles.lineField}><Text style={styles.lineLabel}>Subtotal</Text>
+          <Text style={styles.subtotalText}>{currencySymbol} {((parseFloat(item.price) || 0) * (item.quantity || 1)).toFixed(3)}</Text>
+        </View>
+      </View>
+    </View>
+  );
+
+  const _oldRenderLine = (line, index) => (
     <View key={index} style={styles.lineCard}>
       <View style={styles.lineRow}>
         <TouchableOpacity style={{ flex: 1 }} onPress={() => openDropdown('product', index)}>
-          <Text style={styles.productText} numberOfLines={1}>
+          <Text style={styles.lineName} numberOfLines={1}>
             {line.product_name || 'Tap to select product'}
           </Text>
         </TouchableOpacity>
@@ -407,8 +469,25 @@ const EstimatePurchaseForm = ({ navigation }) => {
         />
 
         {/* Product Lines */}
-        <TitleWithButton label="Add Product Line" onPress={handleAddLine} />
-        {lines.map((line, index) => renderLine(line, index))}
+        {/* Products — Easy Sales style */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Products</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity style={styles.addBtn} onPress={handleBarcodeScanNav}>
+              <Icon name="barcode-scan" size={16} color="#fff" />
+              <Text style={styles.addBtnText}>Scan</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.addBtn} onPress={handleAddProductNav}>
+              <AntDesign name="plus" size={16} color="#fff" />
+              <Text style={styles.addBtnText}>Add Product</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        {cartProducts.length === 0 ? (
+          <Text style={{ textAlign: 'center', color: '#888', padding: 20 }}>No products added yet</Text>
+        ) : (
+          <FlatList data={cartProducts} renderItem={renderProductLine} keyExtractor={(item) => String(item.id)} scrollEnabled={false} />
+        )}
 
         {lines.length > 0 && (
           <View style={styles.totalSection}>
@@ -541,14 +620,20 @@ const EstimatePurchaseForm = ({ navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  lineCard: { backgroundColor: '#fff', borderRadius: 8, padding: 10, marginVertical: 4, borderWidth: 1, borderColor: '#e0e0e0' },
-  lineRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  productText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: COLORS.primaryThemeColor },
-  lineFieldsRow: { flexDirection: 'row', marginTop: 8, gap: 12 },
-  fieldGroup: { flex: 1 },
-  fieldLabel: { fontSize: 10, fontFamily: FONT_FAMILY.urbanistMedium, color: '#999', marginBottom: 2 },
-  fieldValue: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistSemiBold, color: '#212529' },
-  fieldInput: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistMedium, color: '#212529', borderBottomWidth: 1, borderBottomColor: '#ccc', paddingVertical: 2, paddingHorizontal: 0 },
+  // Easy Sales style product line cards
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, marginBottom: 6 },
+  sectionTitle: { fontSize: 15, fontFamily: FONT_FAMILY.urbanistBold, color: '#2e2a4f' },
+  addBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primaryThemeColor, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, gap: 4 },
+  addBtnText: { color: '#fff', fontSize: 12, fontFamily: FONT_FAMILY.urbanistBold },
+  lineCard: { backgroundColor: '#f9f9f9', borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#eee' },
+  lineRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  lineName: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#333' },
+  lineField: { flex: 1, alignItems: 'center' },
+  lineLabel: { fontSize: 11, fontFamily: FONT_FAMILY.urbanistMedium, color: '#999', marginBottom: 4 },
+  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  qtyInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, width: 50, textAlign: 'center', paddingVertical: 4, fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, backgroundColor: '#fff' },
+  priceInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, width: 80, textAlign: 'center', paddingVertical: 4, fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, backgroundColor: '#fff' },
+  subtotalText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistExtraBold, color: COLORS.primaryThemeColor },
   totalSection: { flexDirection: 'row', justifyContent: 'center', marginVertical: 10, padding: 10, backgroundColor: '#e9ecef', borderRadius: 8 },
   totalLabel: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: '#212529' },
   totalValue: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: COLORS.primaryThemeColor },
