@@ -13,6 +13,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
 import { createSaleOrderOdoo, confirmSaleOrderOdoo, createInvoiceFromQuotationOdoo, fetchProductByBarcodeOdoo, fetchSaleOrderDetailOdoo, validateSaleOrderPickingsOdoo, createBelowCostApprovalLogOdoo } from '@api/services/generalApi';
 import OfflineBanner from '@components/common/OfflineBanner';
+import { StyledAlertModal } from '@components/Modal';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Toast from 'react-native-toast-message';
 import Text from '@components/Text';
@@ -35,6 +36,7 @@ const CustomerDetails = ({ navigation, route }) => {
   const currency = useCurrencyStore((state) => state.currency) || '';
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [isDirectInvoicing, setIsDirectInvoicing] = useState(false);
+  const [successAlert, setSuccessAlert] = useState(null); // { message, onOk }
   const [showBelowCostModal, setShowBelowCostModal] = useState(false);
   const [belowCostLines, setBelowCostLines] = useState([]);
   const [belowCostAction, setBelowCostAction] = useState(null); // 'place' or 'invoice'
@@ -227,13 +229,9 @@ const CustomerDetails = ({ navigation, route }) => {
       const custId = details?.id || details?._id;
       if (custId) await clearCartFromStorage(custId);
       if (isOfflineResult) {
-        Alert.alert('Order Saved Offline', 'Your order has been saved locally and will sync when you reconnect.', [
-          { text: 'OK', onPress: () => navigation.navigate('SaleOrderListScreen') },
-        ]);
+        setSuccessAlert({ message: 'Your order has been saved locally and will sync when you reconnect.', onOk: () => navigation.navigate('SaleOrderListScreen') });
       } else {
-        Alert.alert('Order Created', `Sale Order created successfully.\nOrder ID: ${odooOrderId}`, [
-          { text: 'OK', onPress: () => navigation.navigate('SaleOrderListScreen') },
-        ]);
+        setSuccessAlert({ message: `Sale Order created successfully.\nOrder ID: ${odooOrderId}`, onOk: () => navigation.navigate('SaleOrderListScreen') });
       }
     } catch (err) {
       const errMsg = err?.message || 'Failed to create sale order';
@@ -275,18 +273,57 @@ const CustomerDetails = ({ navigation, route }) => {
       }
       const isOfflineResult = typeof createResult === 'object' && createResult?.offline;
       const odooOrderId = isOfflineResult ? createResult.id : createResult;
-      // Offline — queue a confirm-after-create flag so the sync creates + confirms
-      // the order, then bail out (invoice needs internet to generate).
+      // Offline — queue confirm, mark as invoiced in cache, navigate to receipt
       if (isOfflineResult) {
         try { await confirmSaleOrderOdoo(odooOrderId); } catch (_) {}
+
+        // Mark as invoiced in cached list + detail
+        try {
+          const AsyncStorageLocal = require('@react-native-async-storage/async-storage').default;
+          const raw = await AsyncStorageLocal.getItem('@cache:saleOrders');
+          if (raw) {
+            const list = JSON.parse(raw);
+            const idx = list.findIndex((o) => String(o.id) === String(odooOrderId));
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], invoice_status: 'invoiced', invoice_ids: ['offline_inv'] };
+              await AsyncStorageLocal.setItem('@cache:saleOrders', JSON.stringify(list));
+            }
+          }
+          const dk = `@cache:saleOrderDetail:${odooOrderId}`;
+          const rawD = await AsyncStorageLocal.getItem(dk);
+          if (rawD) {
+            const prev = JSON.parse(rawD);
+            await AsyncStorageLocal.setItem(dk, JSON.stringify({ ...prev, invoice_status: 'invoiced', invoice_ids: ['offline_inv'] }));
+          }
+        } catch (_) {}
+
+        // Build order data for receipt screen (same as online path)
+        const orderData = {
+          name: '',
+          partnerId: details?.id || details?._id || null,
+          partnerName: details?.name || '-',
+          partnerPhone: details?.phone || details?.mobile || details?.customer_mobile || '',
+          companyName: currentUser?.company?.name || currentUser?.company_name || '-',
+          invoiceDate: new Date().toISOString().split('T')[0].split('-').reverse().join('-'),
+          amountUntaxed: untaxedAmount,
+          amountTax: taxAmount,
+          amountTotal: totalAmount,
+          lines: products.map(p => ({
+            id: p.id,
+            productName: p.name || p.display_name || '-',
+            quantity: p.quantity || 1,
+            priceUnit: parseFloat(p.price) || 0,
+            discount: p.discount || 0,
+            subtotal: (parseFloat(p.price) || 0) * (p.quantity || 1),
+          })),
+        };
+
         clearProducts();
         const custId2 = details?.id || details?._id;
         if (custId2) await clearCartFromStorage(custId2);
-        Alert.alert(
-          'Saved Offline',
-          'Your order has been saved locally. The invoice will be created automatically once you reconnect.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
+
+        // Navigate to invoice receipt (same as online Direct Invoice)
+        navigation.navigate('SalesInvoiceReceiptScreen', { orderId: odooOrderId, orderData });
         return;
       }
       // Log below-cost approval to Odoo if this was an approved below-cost sale
@@ -340,9 +377,7 @@ const CustomerDetails = ({ navigation, route }) => {
       if (invoiceId) {
         navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId: odooOrderId, orderData });
       } else {
-        Alert.alert('Invoice Created', 'Invoice created successfully.', [
-          { text: 'OK', onPress: () => navigation.goBack() },
-        ]);
+        setSuccessAlert({ message: 'Invoice created successfully.', onOk: () => navigation.navigate('SaleOrderListScreen') });
       }
     } catch (err) {
       const errMsg = err?.message || 'Failed to create direct invoice';
@@ -439,7 +474,7 @@ const CustomerDetails = ({ navigation, route }) => {
             <Icon name="barcode-scan" size={20} color={COLORS.primaryThemeColor} />
             <Text style={s.actionBtnText}>Scan</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[s.actionBtn, { flex: 2 }]} onPress={() => navigation.navigate('Products', { fromCustomerDetails: details })}>
+          <TouchableOpacity style={[s.actionBtn, { flex: 2 }]} onPress={() => navigation.navigate('POSProducts', { fromCustomerDetails: details })}>
             <MaterialIcons name="add-shopping-cart" size={20} color={COLORS.primaryThemeColor} />
             <Text style={s.actionBtnText}>Add Product(s)</Text>
           </TouchableOpacity>
@@ -488,6 +523,14 @@ const CustomerDetails = ({ navigation, route }) => {
         onApprove={handleBelowCostApprove}
         onReject={handleBelowCostReject}
         onCancel={() => { setShowBelowCostModal(false); setBelowCostLines([]); setBelowCostAction(null); }}
+      />
+      <StyledAlertModal
+        isVisible={!!successAlert}
+        message={successAlert?.message || ''}
+        confirmText="OK"
+        cancelText=""
+        onConfirm={() => { const cb = successAlert?.onOk; setSuccessAlert(null); if (cb) cb(); }}
+        onCancel={() => { const cb = successAlert?.onOk; setSuccessAlert(null); if (cb) cb(); }}
       />
     </SafeAreaView>
   );

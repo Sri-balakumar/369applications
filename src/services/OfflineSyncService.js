@@ -582,16 +582,28 @@ const syncItemDirectly = async (item) => {
         // Chain action_confirm if requested.
         if (_confirmAfterCreate) {
             try {
+                // Get all company IDs for context
+                let confirmCompanyIds = [1];
+                try {
+                    const ccResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } }, { headers });
+                    confirmCompanyIds = (ccResp.data?.result || []).map((c) => c.id);
+                } catch (_) {}
+
                 const confirmResp = await axios.post(
                     `${baseUrl}/web/dataset/call_kw`,
                     {
                         jsonrpc: '2.0', method: 'call',
-                        params: { model: 'sale.order', method: 'action_confirm', args: [[recordId]], kwargs: {} },
+                        params: { model: 'sale.order', method: 'action_confirm', args: [[recordId]], kwargs: { context: { allowed_company_ids: confirmCompanyIds } } },
                     },
                     { headers, timeout: 30000 }
                 );
                 if (confirmResp.data?.error) {
                     console.warn('[OfflineSyncService] sale.order confirm failed:', confirmResp.data.error?.data?.message);
+                    // Retry once without context
+                    try {
+                        const retryResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'sale.order', method: 'action_confirm', args: [[recordId]], kwargs: {} } }, { headers, timeout: 30000 });
+                        if (!retryResp.data?.error) console.log('[OfflineSyncService] Confirmed sale.order on retry:', recordId);
+                    } catch (_) {}
                 } else {
                     console.log('[OfflineSyncService] Confirmed sale.order id:', recordId);
                 }

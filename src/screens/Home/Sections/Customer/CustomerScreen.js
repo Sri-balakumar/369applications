@@ -124,7 +124,7 @@ const CustomerScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Customers" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — showing cached customers" />
+      <OfflineBanner message="OFFLINE MODE — showing cached customers" onOnline={() => fetchData({ searchText, companyId })} />
       <SearchContainer
         placeholder="Search Customers"
         onChangeText={handleSearchTextChange}

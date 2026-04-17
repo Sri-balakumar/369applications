@@ -87,11 +87,28 @@ const POSProducts = ({ navigation, route }) => {
     const newId = selectedCategoryId === catId ? '' : catId;
     setSelectedCategoryId(newId);
     const cat = (categories || []).find((c) => (c._id || c.id) === catId);
-    setSelectedCategorySource(cat?._source || 'product.category');
+    const src = cat?._source || 'product.category';
+    setSelectedCategorySource(src);
+    // Fetch immediately with the new category (don't wait for useEffect)
+    const params = { searchText };
+    if (newId) {
+      if (src === 'pos.category') { params.posCategoryId = newId; }
+      else { params.categoryId = newId; }
+    }
+    console.log('[POSProducts] Category pressed:', catId, 'newId:', newId, 'source:', src, 'params:', JSON.stringify(params));
+    fetchData(params);
   };
 
   const handleAdd = (p) => {
-    console.log('[POSProducts] Adding product - raw data:', JSON.stringify({ id: p.id, price: p.price, list_price: p.list_price, lst_price: p.lst_price, standard_price: p.standard_price }));
+    // Check if already in cart
+    const { getCurrentCart } = useProductStore.getState();
+    const cart = getCurrentCart();
+    const existing = cart.find((c) => c.id === p.id);
+    if (existing) {
+      Toast.show({ type: 'info', text1: 'Already Added', text2: `${p.product_name || p.name} is already in the cart. Go back and increase quantity.` });
+      return;
+    }
+    console.log('[POSProducts] Adding product:', p.id, p.product_name || p.name);
     const product = {
       id: p.id,
       name: p.product_name || p.name,
@@ -100,7 +117,6 @@ const POSProducts = ({ navigation, route }) => {
       imageUrl: p.imageUrl || p.image_url || p.image || '',
       tax_percent: p.tax_percent || 0,
     };
-    console.log('[POSProducts] Final price used:', product.price);
     addProduct(product);
     Toast.show({ type: 'success', text1: 'Added', text2: product.name });
   };
@@ -110,7 +126,7 @@ const POSProducts = ({ navigation, route }) => {
     return (
       <ProductsList
         item={item}
-        onPress={() => navigation.navigate('ProductDetail', { detail: item, fromPOS: true, fromCustomerDetails })}
+        onPress={() => handleAdd(item)}
         showQuickAdd
         onQuickAdd={handleAdd}
       />

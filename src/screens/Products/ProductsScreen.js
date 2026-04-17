@@ -219,7 +219,7 @@ const pickEditCatImage = async () => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Products" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — showing cached products" />
+      <OfflineBanner message="OFFLINE MODE — showing cached products" onOnline={() => fetchData(buildParams())} />
       <SearchContainer
         placeholder="Search Products"
         onChangeText={handleSearchTextChange}

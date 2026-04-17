@@ -110,6 +110,33 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
           }
         } catch (e) { /* ignore */ }
       }
+      // Preserve the more advanced state if Odoo returns a less advanced one.
+      // This prevents "Confirm Order" from reappearing after the user already confirmed offline.
+      if (data) {
+        const stateRank = { draft: 0, sent: 1, sale: 2, done: 3, cancel: 3 };
+        try {
+          const AsyncStorageLocal2 = require('@react-native-async-storage/async-storage').default;
+          const cachedKey2 = `@cache:saleOrderDetail:${String(resolvedId || orderId)}`;
+          const cachedRaw2 = await AsyncStorageLocal2.getItem(cachedKey2);
+          if (cachedRaw2) {
+            const cached2 = JSON.parse(cachedRaw2);
+            const cachedRank = stateRank[cached2.state] ?? 0;
+            const freshRank = stateRank[data.state] ?? 0;
+            if (cachedRank > freshRank) {
+              console.log('[SaleOrderDetail] Preserving cached state:', cached2.state, 'over Odoo state:', data.state);
+              data.state = cached2.state;
+              // Also try to re-confirm in Odoo silently
+              if (data.state === 'sale' && (data.state !== cached2.state)) {
+                try {
+                  const { confirmSaleOrderOdoo: confirmFn } = require('@api/services/generalApi');
+                  confirmFn(resolvedId).catch(() => {});
+                } catch (_) {}
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
       // Preserve local offline invoice marker if the fresh data has no real invoices.
       // This keeps "View Invoice" visible until the real Odoo invoice is created.
       if (data && (!data.invoice_ids || data.invoice_ids.length === 0)) {
@@ -300,7 +327,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
       // If the confirm was queued offline, skip the invoice step and just tell
       // the user the confirm + invoice will happen when they reconnect.
       if (confirmRes && typeof confirmRes === 'object' && confirmRes.offline) {
-        Alert.alert('Saved Offline', 'Confirmation queued. The invoice will be created automatically when you reconnect.');
+        showToastMessage('Confirmation queued. Invoice will be created when you reconnect.');
         // Refresh so the cached 'sale' state shows.
         try { const rec = await fetchSaleOrderDetailOdoo(orderId); setRecord(rec); } catch (_) {}
         return;
@@ -456,7 +483,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
         navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId, orderId, orderData: od });
       } else {
         await fetchDetail(false);
-        Alert.alert('Invoice Created', 'Invoice created successfully.');
+        showToastMessage('Invoice created successfully');
       }
     } catch (err) {
       Alert.alert('Error', err?.message || 'Failed to create invoice.');
@@ -569,7 +596,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title={record.name || `SO-${record.id}`} onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" />
+      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" onOnline={() => fetchDetail(false)} />
       <RoundedScrollContainer>
 
         {/* Status Badge */}

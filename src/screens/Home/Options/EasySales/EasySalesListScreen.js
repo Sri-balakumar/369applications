@@ -84,7 +84,7 @@ const EasySalesListScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Easy Sales" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — showing cached sales" />
+      <OfflineBanner message="OFFLINE MODE — showing cached sales" onOnline={fetchData} />
       <RoundedContainer>
         {data.length === 0 && !loading ? (
           <EmptyState

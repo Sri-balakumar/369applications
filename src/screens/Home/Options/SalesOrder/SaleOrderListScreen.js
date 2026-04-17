@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { View, StyleSheet, Platform, TouchableOpacity, ScrollView } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
@@ -99,6 +99,18 @@ const SaleOrderListScreen = ({ navigation }) => {
   const [activeFilter, setActiveFilter] = useState('all');
   const [invMap, setInvMap] = useState({});
   const [generatingInvoices, setGeneratingInvoices] = useState(false);
+  const [isDeviceOnline, setIsDeviceOnline] = useState(false);
+
+  // Check online status on focus + subscribe to changes
+  useFocusEffect(useCallback(() => {
+    isOnline().then((o) => setIsDeviceOnline(o));
+  }, []));
+
+  useEffect(() => {
+    const { subscribe } = require('@utils/networkStatus').default;
+    const unsub = subscribe((online) => setIsDeviceOnline(online));
+    return () => unsub && unsub();
+  }, []);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -246,9 +258,9 @@ const SaleOrderListScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Sales Orders" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — showing cached orders" />
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterRow, { flex: 1 }]} contentContainerStyle={styles.filterRowContent}>
+      <OfflineBanner message="OFFLINE MODE — showing cached orders" onOnline={() => { setIsDeviceOnline(true); fetchData(); }} />
+      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff' }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterRow, { flex: 1, borderBottomWidth: 0 }]} contentContainerStyle={styles.filterRowContent}>
           {FILTERS.map(f => (
             <TouchableOpacity
               key={f.key}
@@ -259,7 +271,7 @@ const SaleOrderListScreen = ({ navigation }) => {
             </TouchableOpacity>
           ))}
         </ScrollView>
-        {toInvoiceOrders.length > 0 && (
+        {toInvoiceOrders.length > 0 && isDeviceOnline && (
           <TouchableOpacity
             style={styles.bulkInvoiceBtn}
             onPress={handleBulkGenerateInvoices}

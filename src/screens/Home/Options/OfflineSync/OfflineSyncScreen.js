@@ -321,7 +321,7 @@ const OfflineSyncScreen = ({ navigation }) => {
         title="Offline Sync"
         onBackPress={() => navigation.goBack()}
       />
-      <OfflineBanner />
+      <OfflineBanner onOnline={() => loadAll(false)} />
 
       <ScrollView
         contentContainerStyle={{ paddingBottom: scale(120) }}

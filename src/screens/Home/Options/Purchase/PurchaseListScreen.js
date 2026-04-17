@@ -99,7 +99,7 @@ const PurchaseListScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Purchase" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — showing cached purchase orders" />
+      <OfflineBanner message="OFFLINE MODE — showing cached purchase orders" onOnline={() => fetchData({ state })} />
 
       {/* Status filter */}
       <View style={styles.filterBar}>

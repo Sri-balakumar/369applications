@@ -64,7 +64,7 @@ const EasyPurchaseListScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Easy Purchase" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — showing cached purchases" />
+      <OfflineBanner message="OFFLINE MODE — showing cached purchases" onOnline={fetchData} />
       <RoundedContainer>
         {data.length === 0 && !loading ? (
           <EmptyState imageSource={require('@assets/images/EmptyData/empty.png')} message="No Easy Purchases Found" />

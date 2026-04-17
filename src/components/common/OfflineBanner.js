@@ -15,19 +15,31 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { FONT_FAMILY } from '@constants/theme';
 import networkStatus from '@utils/networkStatus';
 
-const OfflineBanner = ({ message = 'OFFLINE MODE — changes will sync automatically when you reconnect' }) => {
+const OfflineBanner = ({ message = 'OFFLINE MODE — changes will sync automatically when you reconnect', onOnline }) => {
   const [offline, setOffline] = useState(false);
+  const wasOfflineRef = React.useRef(false);
 
   useEffect(() => {
     let mounted = true;
     networkStatus.isOnline().then((online) => {
-      if (mounted) setOffline(!online);
+      if (mounted) {
+        setOffline(!online);
+        wasOfflineRef.current = !online;
+      }
     });
     const unsubscribe = networkStatus.subscribe((online) => {
-      if (mounted) setOffline(!online);
+      if (!mounted) return;
+      const wasOff = wasOfflineRef.current;
+      setOffline(!online);
+      wasOfflineRef.current = !online;
+      // When flipping from offline → online, trigger refresh callback
+      if (online && wasOff && onOnline) {
+        // Small delay to let sync flush first
+        setTimeout(() => { if (mounted) onOnline(); }, 2000);
+      }
     });
     return () => { mounted = false; unsubscribe && unsubscribe(); };
-  }, []);
+  }, [onOnline]);
 
   if (!offline) return null;
 
