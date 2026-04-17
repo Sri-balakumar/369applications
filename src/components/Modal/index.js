@@ -16,5 +16,6 @@ import UpdatesModal from "./UpdatesModal";
 import DocumentModal from "./DocumentModal";
 import MenuModal from "./MenuModal";
 import VendorModal from "./VendorModal";
+import StyledAlertModal from "./StyledAlertModal";
 
-export { ActionModal, LogoutModal, InputModal, CustomListModal, EmployeeListModal, RulesModal, AddUpdateModal, MeetingsScheduleModal, ConfirmationModal, StartModal, PauseModal, UpdatesModal, ReAssignModal, CompleteModal, DocumentModal, CloseModal, MenuModal, VendorModal  }
+export { ActionModal, LogoutModal, InputModal, CustomListModal, EmployeeListModal, RulesModal, AddUpdateModal, MeetingsScheduleModal, ConfirmationModal, StartModal, PauseModal, UpdatesModal, ReAssignModal, CompleteModal, DocumentModal, CloseModal, MenuModal, VendorModal, StyledAlertModal }

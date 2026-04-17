@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, Alert, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { TabBarIcon } from '@components/TabBar';
 import { HomeScreen, ProfileScreen } from '@screens';
@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
+import { StyledAlertModal } from '@components/Modal';
 
 const Tab = createBottomTabNavigator();
 
@@ -14,6 +15,30 @@ const Tab = createBottomTabNavigator();
 const LogoutPlaceholder = () => null;
 
 const AppNavigator = () => {
+  const [showLogoutAlert, setShowLogoutAlert] = useState(false);
+  const [logoutNavigation, setLogoutNavigation] = useState(null);
+
+  const executeLogout = async () => {
+    setShowLogoutAlert(false);
+    try {
+      await AsyncStorage.removeItem('userData');
+      await AsyncStorage.removeItem('odoo_db');
+      await AsyncStorage.removeItem('odoo_cookie');
+      try {
+        const allKeys = await AsyncStorage.getAllKeys();
+        const cartKeys = allKeys.filter(k => k.startsWith('cart_'));
+        if (cartKeys.length > 0) await AsyncStorage.multiRemove(cartKeys);
+      } catch (_) {}
+      if (logoutNavigation) {
+        logoutNavigation.dispatch(
+          CommonActions.reset({ index: 0, routes: [{ name: 'LoginScreenOdoo' }] })
+        );
+      }
+    } catch (error) {
+      console.error('Error logging out:', error);
+    }
+  };
+
   const tabBarOptions = {
     tabBarShowLabel: false,
     tabBarHideOnKeyboard: true,
@@ -32,6 +57,7 @@ const AppNavigator = () => {
   };
 
   return (
+    <>
     <Tab.Navigator screenOptions={tabBarOptions}>
       <Tab.Screen
         name="Home"
@@ -63,33 +89,8 @@ const AppNavigator = () => {
         listeners={({ navigation }) => ({
           tabPress: (e) => {
             e.preventDefault();
-            Alert.alert('Logout', 'Are you sure you want to logout?', [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Logout',
-                style: 'destructive',
-                onPress: async () => {
-                  try {
-                    await AsyncStorage.removeItem('userData');
-                    await AsyncStorage.removeItem('odoo_db');
-                    await AsyncStorage.removeItem('odoo_cookie');
-                    try {
-                      const allKeys = await AsyncStorage.getAllKeys();
-                      const cartKeys = allKeys.filter(k => k.startsWith('cart_'));
-                      if (cartKeys.length > 0) await AsyncStorage.multiRemove(cartKeys);
-                    } catch (e) { console.warn('Failed to clear carts:', e?.message); }
-                    navigation.dispatch(
-                      CommonActions.reset({
-                        index: 0,
-                        routes: [{ name: 'LoginScreenOdoo' }],
-                      })
-                    );
-                  } catch (error) {
-                    console.error('Error logging out:', error);
-                  }
-                },
-              },
-            ]);
+            setLogoutNavigation(navigation);
+            setShowLogoutAlert(true);
           },
         })}
         options={{
@@ -103,6 +104,16 @@ const AppNavigator = () => {
         }}
       />
     </Tab.Navigator>
+    <StyledAlertModal
+      isVisible={showLogoutAlert}
+      message="Are you sure you want to logout?"
+      confirmText="YES"
+      cancelText="NO"
+      destructive
+      onConfirm={executeLogout}
+      onCancel={() => setShowLogoutAlert(false)}
+    />
+    </>
   );
 };
 

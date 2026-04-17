@@ -26,6 +26,7 @@ import {
 } from '@api/services/generalApi';
 import { isOnline } from '@utils/networkStatus';
 import { useAuthStore } from '@stores/auth';
+import { StyledAlertModal } from '@components/Modal';
 
 const ProductCreationForm = ({ navigation }) => {
   const user = useAuthStore((state) => state.user);
@@ -80,20 +81,16 @@ const ProductCreationForm = ({ navigation }) => {
     }).catch(() => {});
   }, []);
 
+  const [showImagePicker, setShowImagePicker] = useState(false);
+  const [showOfflineAlert, setShowOfflineAlert] = useState(false);
+
   const handlePickImage = async () => {
     const online = await isOnline();
     if (!online) {
-      Alert.alert(
-        'You\'re Offline',
-        'Can\'t add image right now. Please add the image once you\'re connected to the internet.'
-      );
+      setShowOfflineAlert(true);
       return;
     }
-    Alert.alert('Select Image', 'Choose an option', [
-      { text: 'Camera', onPress: () => openCamera() },
-      { text: 'Gallery', onPress: () => openGallery() },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setShowImagePicker(true);
   };
 
   const openCamera = async () => {
@@ -486,6 +483,24 @@ const ProductCreationForm = ({ navigation }) => {
         </Modal>
       </RoundedScrollContainer>
       <OverlayLoader visible={isSubmitting} />
+      <StyledAlertModal
+        isVisible={showImagePicker}
+        message="Choose an option to add image"
+        confirmText="CAMERA"
+        middleText="GALLERY"
+        cancelText="CANCEL"
+        onConfirm={() => { setShowImagePicker(false); openCamera(); }}
+        onMiddle={() => { setShowImagePicker(false); openGallery(); }}
+        onCancel={() => setShowImagePicker(false)}
+      />
+      <StyledAlertModal
+        isVisible={showOfflineAlert}
+        message="Can't add image right now. Please add the image once you're connected to the internet."
+        confirmText="OK"
+        cancelText=""
+        onConfirm={() => setShowOfflineAlert(false)}
+        onCancel={() => setShowOfflineAlert(false)}
+      />
     </SafeAreaView>
   );
 };

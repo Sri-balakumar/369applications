@@ -21,6 +21,7 @@ import {
 } from '@api/services/generalApi';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import OfflineBanner from '@components/common/OfflineBanner';
+import { StyledAlertModal } from '@components/Modal';
 import { useCurrencyStore } from '@stores/currency';
 import { useProductStore } from '@stores/product';
 import BelowCostApprovalModal from '@components/BelowCostApprovalModal';
@@ -413,24 +414,20 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   };
 
   const [cancelling, setCancelling] = useState(false);
-  const handleCancelOrder = () => {
-    Alert.alert('Cancel Order', 'Are you sure you want to cancel this order?', [
-      { text: 'No', style: 'cancel' },
-      {
-        text: 'Yes, Cancel', style: 'destructive', onPress: async () => {
-          setCancelling(true);
-          try {
-            await cancelSaleOrderOdoo(orderId);
-            Alert.alert('Order Cancelled', 'The order has been cancelled successfully.');
-            await fetchDetail(false);
-          } catch (err) {
-            Alert.alert('Error', err?.message || 'Failed to cancel order.');
-          } finally {
-            setCancelling(false);
-          }
-        },
-      },
-    ]);
+  const [showCancelAlert, setShowCancelAlert] = useState(false);
+  const handleCancelOrder = () => { setShowCancelAlert(true); };
+  const executeCancelOrder = async () => {
+    setShowCancelAlert(false);
+    setCancelling(true);
+    try {
+      await cancelSaleOrderOdoo(orderId);
+      showToastMessage('Order cancelled successfully');
+      await fetchDetail(false);
+    } catch (err) {
+      showToastMessage(err?.message || 'Failed to cancel order.');
+    } finally {
+      setCancelling(false);
+    }
   };
 
   if (!record) {
@@ -714,6 +711,15 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
         onApprove={handleBelowCostApprove}
         onReject={handleBelowCostReject}
         onCancel={() => { setShowBelowCostModal(false); setBelowCostLines([]); setBelowCostAction(null); }}
+      />
+      <StyledAlertModal
+        isVisible={showCancelAlert}
+        message="Are you sure you want to cancel this order?"
+        confirmText="YES, CANCEL"
+        cancelText="NO"
+        destructive
+        onConfirm={executeCancelOrder}
+        onCancel={() => setShowCancelAlert(false)}
       />
     </SafeAreaView>
   );

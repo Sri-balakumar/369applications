@@ -351,7 +351,7 @@ const EstimateSaleForm = ({ navigation }) => {
     <SafeAreaView>
       <NavigationHeader title="New Estimate Sale" onBackPress={() => navigation.goBack()} logo={false} />
       <RoundedScrollContainer>
-        <FormInput label="Customer" placeholder="Select Customer" dropIcon="menu-down" editable={false} value={customer?.name || ''} validate={errors.customer} required onPress={() => openDropdown('customer')} />
+        <FormInput label="Customer" placeholder="Select Customer" dropIcon="menu-down" editable={false} value={customer?.name || ''} validate={errors.customer} required onPress={() => navigation.navigate('CustomerScreen', { selectMode: true, companyId: warehouse?.company_id || null, onSelect: (selected) => { setCustomer(selected); if (errors.customer) setErrors((p) => ({ ...p, customer: null })); } })} />
         <FormInput label="Warehouse" placeholder="Select Warehouse" dropIcon="menu-down" editable={false} value={warehouse?.name || ''} validate={errors.warehouse} required onPress={() => openDropdown('warehouse')} />
         <FormInput label="Payment Method" placeholder="Select Payment Method" dropIcon="menu-down" editable={false} value={paymentMethod?.name || ''} validate={errors.payment_method} required onPress={() => openDropdown('payment_method')} />
         <FormInput label="Customer Reference" placeholder="Enter reference (optional)" value={reference} onChangeText={setReference} />

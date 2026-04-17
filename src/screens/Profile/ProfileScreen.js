@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from "react";
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Alert, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaView } from "@components/containers";
 import { COLORS, FONT_FAMILY } from "@constants/theme";
 import { useAuthStore } from "@stores/auth";
 import { switchCompany, fetchUserCompanies } from "@api/services/companyApi";
+import { StyledAlertModal } from "@components/Modal";
 import { showToastMessage } from "@components/Toast";
 import { LogoutModal } from "@components/Modal";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -15,6 +16,7 @@ const ProfileScreen = ({ navigation }) => {
   const updateUser = useAuthStore((state) => state.updateUser);
   const [isVisible, setIsVisible] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [switchTarget, setSwitchTarget] = useState(null);
   const hideLogoutAlert = () => setIsVisible(false);
 
   const isAdmin = userDetails?.is_admin === true ||
@@ -50,48 +52,39 @@ const ProfileScreen = ({ navigation }) => {
     }, [userDetails?.uid, isAdmin])
   );
 
-  const handleSwitchCompany = async (company) => {
+  const handleSwitchCompany = (company) => {
     if (company.id === userDetails?.company_id) return;
-    Alert.alert(
-      "Switch Branch",
-      `Switch to "${company.name}"? The app will reload data for this branch.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Switch",
-          onPress: async () => {
-            setSwitching(true);
-            try {
-              await switchCompany(userDetails.uid, company.id);
-              updateUser({ company_id: company.id, company_name: company.name });
-              // Update persisted userData
-              try {
-                const raw = await AsyncStorage.getItem("userData");
-                if (raw) {
-                  const parsed = JSON.parse(raw);
-                  parsed.company_id = company.id;
-                  parsed.company_name = company.name;
-                  await AsyncStorage.setItem("userData", JSON.stringify(parsed));
-                }
-              } catch (_) {}
-              // Clear branch-specific caches
-              try {
-                const allKeys = await AsyncStorage.getAllKeys();
-                const keysToRemove = allKeys.filter(
-                  (k) => k.startsWith("cart_")
-                );
-                if (keysToRemove.length > 0) await AsyncStorage.multiRemove(keysToRemove);
-              } catch (_) {}
-              showToastMessage(`Switched to ${company.name}`);
-            } catch (e) {
-              showToastMessage("Failed to switch branch: " + (e?.message || "Unknown error"));
-            } finally {
-              setSwitching(false);
-            }
-          },
-        },
-      ]
-    );
+    setSwitchTarget(company);
+  };
+
+  const executeSwitchCompany = async () => {
+    const company = switchTarget;
+    setSwitchTarget(null);
+    if (!company) return;
+    setSwitching(true);
+    try {
+      await switchCompany(userDetails.uid, company.id);
+      updateUser({ company_id: company.id, company_name: company.name });
+      try {
+        const raw = await AsyncStorage.getItem("userData");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          parsed.company_id = company.id;
+          parsed.company_name = company.name;
+          await AsyncStorage.setItem("userData", JSON.stringify(parsed));
+        }
+      } catch (_) {}
+      try {
+        const allKeys = await AsyncStorage.getAllKeys();
+        const keysToRemove = allKeys.filter((k) => k.startsWith("cart_"));
+        if (keysToRemove.length > 0) await AsyncStorage.multiRemove(keysToRemove);
+      } catch (_) {}
+      showToastMessage(`Switched to ${company.name}`);
+    } catch (e) {
+      showToastMessage("Failed to switch branch: " + (e?.message || "Unknown error"));
+    } finally {
+      setSwitching(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -120,13 +113,7 @@ const ProfileScreen = ({ navigation }) => {
     <SafeAreaView backgroundColor={COLORS.primaryThemeColor}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Header Banner */}
-        <View style={styles.header}>
-          <Image
-            source={require("@assets/images/Home/Header/header_transparent_bg.png")}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-        </View>
+        <View style={styles.header} />
 
         {/* Profile Card */}
         <View style={styles.card}>
@@ -220,10 +207,22 @@ const ProfileScreen = ({ navigation }) => {
         <Text style={styles.version}>Powered by 369ai | v1.0.0</Text>
       </ScrollView>
 
-      <LogoutModal
+      <StyledAlertModal
         isVisible={isVisible}
-        hideLogoutAlert={hideLogoutAlert}
-        handleLogout={handleLogout}
+        message="Are you sure you want to log out?"
+        confirmText="YES"
+        cancelText="NO"
+        destructive
+        onConfirm={() => { hideLogoutAlert(); handleLogout(); }}
+        onCancel={hideLogoutAlert}
+      />
+      <StyledAlertModal
+        isVisible={!!switchTarget}
+        message={`Switch to "${switchTarget?.name}"? The app will reload data for this branch.`}
+        confirmText="SWITCH"
+        cancelText="CANCEL"
+        onConfirm={executeSwitchCompany}
+        onCancel={() => setSwitchTarget(null)}
       />
     </SafeAreaView>
   );

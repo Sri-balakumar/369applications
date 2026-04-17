@@ -1,12 +1,17 @@
 import React from 'react';
 import { TouchableOpacity, Image, Text, StyleSheet, Platform, View } from 'react-native';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
+import { MaterialIcons } from '@expo/vector-icons';
 
-const ListItem = ({ title, image, onPress }) => {
+const ListItem = ({ title, image, iconName, iconColor, onPress }) => {
   return (
     <TouchableOpacity style={styles.container} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.iconWrapper}>
-        <Image source={image} style={styles.image} />
+        {iconName ? (
+          <MaterialIcons name={iconName} size={28} color={iconColor || COLORS.primaryThemeColor} />
+        ) : (
+          <Image source={image} style={styles.image} />
+        )}
       </View>
       <Text style={styles.title} numberOfLines={2}>{title}</Text>
     </TouchableOpacity>

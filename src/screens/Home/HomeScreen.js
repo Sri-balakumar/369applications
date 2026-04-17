@@ -5,7 +5,11 @@ import {
   FlatList,
   BackHandler,
   ScrollView,
+  TouchableOpacity,
+  Platform,
+  Image,
 } from "react-native";
+import { MaterialIcons } from "@expo/vector-icons";
 import {
   CarouselPagination,
   ImageContainer,
@@ -128,11 +132,25 @@ const HomeScreen = ({ navigation }) => {
               backgroundColor="#4CAF50"
               title="Sales Order"
             />
-            <ImageContainer
+            <TouchableOpacity
+              style={styles.optionsCard}
+              activeOpacity={0.85}
               onPress={() => navigation.navigate("OptionsScreen")}
-              backgroundColor="#FF9800"
-              title="Options"
-            />
+            >
+              <MaterialIcons name="apps" size={28} color={COLORS.primaryThemeColor} style={{ marginBottom: 4, opacity: 0.7 }} />
+              <Text style={styles.optionsTitle}>All Options</Text>
+              <View style={styles.previewRow}>
+                {[
+                  require('@assets/images/Home/options/buy.png'),
+                  require('@assets/images/Home/options/PurchaseOrder.png'),
+                  require('@assets/images/Home/options/search_product.png'),
+                ].map((icon, i) => (
+                  <View key={i} style={styles.previewCircle}>
+                    <Image source={icon} style={styles.previewIcon} />
+                  </View>
+                ))}
+              </View>
+            </TouchableOpacity>
             <ImageContainer
               onPress={() => navigation.navigate("ProductCreationForm")}
               backgroundColor="#9C27B0"
@@ -171,6 +189,44 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     marginTop: 4,
     marginBottom: 8,
+  },
+  optionsCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({
+      android: { elevation: 3 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+    }),
+  },
+  optionsTitle: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  previewRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  previewCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewIcon: {
+    width: 16,
+    height: 16,
+    resizeMode: 'contain',
+    opacity: 0.6,
   },
   categoriesSection: {
     backgroundColor: '#fff',

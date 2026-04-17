@@ -8,6 +8,7 @@ import { NavigationHeader } from '@components/Header';
 import { RoundedContainer } from '@components/containers';
 import { Button } from '@components/common/Button';
 import Text from '@components/Text';
+import { StyledAlertModal } from '@components/Modal';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { showToastMessage } from '@components/Toast';
 import * as DocumentPicker from 'expo-document-picker';
@@ -63,6 +64,15 @@ const WhatsAppScreen = ({ navigation }) => {
       </RoundedContainer>
 
       <ContactsSheet visible={showContacts} onClose={() => setShowContacts(false)} />
+      <StyledAlertModal
+        isVisible={!!deleteTarget}
+        message={deleteTarget?.message || 'Delete this session?'}
+        confirmText="DELETE"
+        cancelText="CANCEL"
+        destructive
+        onConfirm={executeDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </SafeAreaView>
   );
 };
@@ -212,29 +222,27 @@ const SessionTab = () => {
     }
   };
 
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
   const handleDelete = (sessionId, sessionName, status) => {
     const isConnected = status === 'connected';
     const message = isConnected
-      ? `⚠️ This session is currently CONNECTED.\n\nAre you sure you want to delete "${sessionName}"? This will disconnect the active WhatsApp link.`
+      ? `This session is currently CONNECTED.\n\nAre you sure you want to delete "${sessionName}"?`
       : `Are you sure you want to delete "${sessionName}"?`;
-    Alert.alert(
-      isConnected ? '⚠️ Delete Connected Session' : 'Delete Session',
-      message,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete', style: 'destructive', onPress: async () => {
-            try {
-              await deleteWhatsAppSession(sessionId);
-              showToastMessage('Session deleted');
-              loadSessions();
-            } catch (e) {
-              showToastMessage('Failed to delete: ' + e.message);
-            }
-          },
-        },
-      ]
-    );
+    setDeleteTarget({ sessionId, message });
+  };
+
+  const executeDelete = async () => {
+    const { sessionId } = deleteTarget || {};
+    setDeleteTarget(null);
+    if (!sessionId) return;
+    try {
+      await deleteWhatsAppSession(sessionId);
+      showToastMessage('Session deleted');
+      loadSessions();
+    } catch (e) {
+      showToastMessage('Failed to delete: ' + e.message);
+    }
   };
 
   const getStepIndex = (status) => {

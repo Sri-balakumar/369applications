@@ -8,6 +8,7 @@ import { showToastMessage } from '@components/Toast';
 import { OverlayLoader } from '@components/Loader';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { AntDesign } from '@expo/vector-icons';
+import { StyledAlertModal } from '@components/Modal';
 import { fetchAuditingDetailsOdoo, updateAuditStateOdoo, fetchAuditAttachmentsOdoo } from '@api/services/generalApi';
 import Toast from 'react-native-toast-message';
 
@@ -86,57 +87,26 @@ const AuditDetails = ({ navigation, route }) => {
     }, [auditId])
   );
 
-  const handleConfirm = () => {
-    Alert.alert(
-      'Confirm Audit',
-      'Are you sure you want to confirm this audit transaction?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: async () => {
-            setIsLoading(true);
-            try {
-              await updateAuditStateOdoo(auditId, 'audited');
-              showToastMessage('Audit confirmed successfully');
-              fetchDetails();
-            } catch (error) {
-              console.error('Error confirming audit:', error);
-              showToastMessage('Failed to confirm audit. Please try again.');
-            } finally {
-              setIsLoading(false);
-            }
-          },
-        },
-      ]
-    );
-  };
+  const [auditAlertType, setAuditAlertType] = useState(null); // 'confirm' | 'reject'
 
-  const handleReject = () => {
-    Alert.alert(
-      'Reject Audit',
-      'Are you sure you want to reject this audit transaction?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reject',
-          style: 'destructive',
-          onPress: async () => {
-            setIsLoading(true);
-            try {
-              await updateAuditStateOdoo(auditId, 'rejected');
-              showToastMessage('Audit rejected');
-              fetchDetails();
-            } catch (error) {
-              console.error('Error rejecting audit:', error);
-              showToastMessage('Failed to reject audit. Please try again.');
-            } finally {
-              setIsLoading(false);
-            }
-          },
-        },
-      ]
-    );
+  const handleConfirm = () => { setAuditAlertType('confirm'); };
+  const handleReject = () => { setAuditAlertType('reject'); };
+
+  const executeAuditAction = async () => {
+    const action = auditAlertType;
+    setAuditAlertType(null);
+    if (!action) return;
+    setIsLoading(true);
+    try {
+      await updateAuditStateOdoo(auditId, action === 'confirm' ? 'audited' : 'rejected');
+      showToastMessage(action === 'confirm' ? 'Audit confirmed successfully' : 'Audit rejected');
+      fetchDetails();
+    } catch (error) {
+      console.error('Error updating audit:', error);
+      showToastMessage(action === 'confirm' ? 'Failed to confirm audit.' : 'Failed to reject audit.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handlePrintVoucher = () => {
@@ -324,6 +294,17 @@ const AuditDetails = ({ navigation, route }) => {
 
         <OverlayLoader visible={isLoading} />
       </RoundedScrollContainer>
+      <StyledAlertModal
+        isVisible={!!auditAlertType}
+        message={auditAlertType === 'confirm'
+          ? 'Are you sure you want to confirm this audit?'
+          : 'Are you sure you want to reject this audit?'}
+        confirmText={auditAlertType === 'confirm' ? 'CONFIRM' : 'REJECT'}
+        cancelText="CANCEL"
+        destructive={auditAlertType === 'reject'}
+        onConfirm={executeAuditAction}
+        onCancel={() => setAuditAlertType(null)}
+      />
     </SafeAreaView>
   );
 };

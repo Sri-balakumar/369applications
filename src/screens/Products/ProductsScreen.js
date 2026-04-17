@@ -21,6 +21,7 @@ import { showToastMessage } from '@components/Toast';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import Text from '@components/Text';
+import { StyledAlertModal } from '@components/Modal';
 
 const ODOO_COLORS = [
   '#FFFFFF', '#F06050', '#F4A460', '#F7CD1F', '#6CC1ED', '#814968',
@@ -107,13 +108,12 @@ const ProductsScreen = ({ navigation, route }) => {
     setIsEditCatVisible(true);
   };
 
+  const [showOfflineImageAlert, setShowOfflineImageAlert] = useState(false);
+
 const pickEditCatImage = async () => {
   const online = await isOnline();
   if (!online) {
-    Alert.alert(
-      'You\'re Offline',
-      'Can\'t add image right now. Please add the image once you\'re connected to the internet.'
-    );
+    setShowOfflineImageAlert(true);
     return;
     }
     try {
@@ -366,6 +366,14 @@ const pickEditCatImage = async () => {
       </Modal>
 
       <OverlayLoader visible={loading} />
+      <StyledAlertModal
+        isVisible={showOfflineImageAlert}
+        message="Can't add image right now. Please add the image once you're connected to the internet."
+        confirmText="OK"
+        cancelText=""
+        onConfirm={() => setShowOfflineImageAlert(false)}
+        onCancel={() => setShowOfflineImageAlert(false)}
+      />
     </SafeAreaView>
   );
 };

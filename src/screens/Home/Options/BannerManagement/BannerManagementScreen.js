@@ -13,6 +13,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { fetchAppBannersOdoo, createAppBannerOdoo, deleteAppBannerOdoo } from '@api/services/generalApi';
 import OfflineBanner from '@components/common/OfflineBanner';
+import { StyledAlertModal } from '@components/Modal';
 
 const BannerManagementScreen = ({ navigation }) => {
   const [banners, setBanners] = useState([]);
@@ -68,28 +69,31 @@ const BannerManagementScreen = ({ navigation }) => {
     }
   };
 
+  const [deleteBannerTarget, setDeleteBannerTarget] = useState(null);
+
   const handleDeleteBanner = (banner) => {
-    const bannerName = banner.name || `Banner #${banner.id}`;
-    Alert.alert('Delete Banner', `Are you sure you want to delete "${bannerName}"?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        setActionLoading(true);
-        try {
-          const deleteResult = await deleteAppBannerOdoo(banner.id);
-          if (deleteResult?.offline) {
-            showToastMessage('Delete queued offline. Will sync when online.');
-            setBanners((prev) => prev.filter((b) => b.id !== banner.id));
-          } else {
-            showToastMessage('Banner deleted');
-            fetchBanners();
-          }
-        } catch (err) {
-          Alert.alert('Error', err?.message || 'Failed to delete banner');
-        } finally {
-          setActionLoading(false);
-        }
-      }},
-    ]);
+    setDeleteBannerTarget(banner);
+  };
+
+  const executeDeleteBanner = async () => {
+    const banner = deleteBannerTarget;
+    setDeleteBannerTarget(null);
+    if (!banner) return;
+    setActionLoading(true);
+    try {
+      const deleteResult = await deleteAppBannerOdoo(banner.id);
+      if (deleteResult?.offline) {
+        showToastMessage('Delete queued offline. Will sync when online.');
+        setBanners((prev) => prev.filter((b) => b.id !== banner.id));
+      } else {
+        showToastMessage('Banner deleted');
+        fetchBanners();
+      }
+    } catch (err) {
+      showToastMessage(err?.message || 'Failed to delete banner');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   return (
@@ -124,6 +128,15 @@ const BannerManagementScreen = ({ navigation }) => {
         </TouchableOpacity>
       </RoundedContainer>
       <OverlayLoader visible={actionLoading} />
+      <StyledAlertModal
+        isVisible={!!deleteBannerTarget}
+        message={`Are you sure you want to delete "${deleteBannerTarget?.name || 'this banner'}"?`}
+        confirmText="DELETE"
+        cancelText="CANCEL"
+        destructive
+        onConfirm={executeDeleteBanner}
+        onCancel={() => setDeleteBannerTarget(null)}
+      />
     </SafeAreaView>
   );
 };

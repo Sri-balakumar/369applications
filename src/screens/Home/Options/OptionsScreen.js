@@ -54,6 +54,7 @@ const OptionsScreen = ({ navigation }) => {
       items: [
         { title: 'Search Products', image: require('@assets/images/Home/options/search_product.png'), onPress: () => navigation.navigate('Products') },
         { title: 'Scan Barcode', image: require('@assets/images/Home/options/scan_barcode.png'), onPress: () => navigation.navigate('Scanner') },
+        { title: 'Add Product', iconName: 'add-box', iconColor: '#9C27B0', onPress: () => navigation.navigate('ProductCreationForm') },
         { title: 'Product Enquiry', image: require('@assets/images/Home/options/product_enquiry.png'), onPress: () => navigation.navigate('PriceEnquiryScreen') },
       ],
     },
@@ -143,7 +144,7 @@ const OptionsScreen = ({ navigation }) => {
       renderItem={({ item }) =>
         item.empty
           ? <EmptyItem />
-          : <ListItem title={item.title} image={item.image} onPress={item.onPress} />
+          : <ListItem title={item.title} image={item.image} iconName={item.iconName} iconColor={item.iconColor} onPress={item.onPress} />
       }
     />
   );

@@ -432,7 +432,7 @@ const EstimatePurchaseForm = ({ navigation }) => {
           value={vendor?.name || vendor?.label || ''}
           validate={errors.vendor}
           required
-          onPress={() => openDropdown('vendor')}
+          onPress={() => navigation.navigate('CustomerScreen', { selectMode: true, companyId: warehouse?.company_id || null, onSelect: (selected) => { setVendor(selected); if (errors.vendor) setErrors((p) => ({ ...p, vendor: null })); } })}
         />
         <FormInput
           label="Warehouse"
