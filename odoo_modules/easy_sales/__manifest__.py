@@ -1,6 +1,6 @@
 {
     'name': 'Easy Sales',
-    'version': '19.0.1.7.0',
+    'version': '19.0.1.6.0',
     'category': 'Sales/Sales',
     'summary': 'One-click sales entry for small businesses with payment modes',
     'description': """
@@ -25,7 +25,6 @@
     ],
     'data': [
         'security/ir.model.access.csv',
-        'security/ir_rules.xml',
         'data/easy_sales_data.xml',
         'views/easy_sales_payment_method_views.xml',
         'views/easy_sales_views.xml',

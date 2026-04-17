@@ -6,7 +6,7 @@ import { SafeAreaView, RoundedScrollContainer } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { TextInput as FormInput } from '@components/common/TextInput';
 import { Button } from '@components/common/Button';
-import { DropdownSheet } from '@components/common/BottomSheets';
+import { CustomListModal } from '@components/Modal';
 import { OverlayLoader } from '@components/Loader';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
@@ -24,6 +24,7 @@ import {
   createBelowCostApprovalLogOdoo,
 } from '@api/services/generalApi';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import OfflineBanner from '@components/common/OfflineBanner';
 import BelowCostApprovalModal from '@components/BelowCostApprovalModal';
 import { checkBelowCostLines, generateBelowCostDetailsText } from '@utils/belowCostCheck';
 
@@ -180,7 +181,7 @@ const EasySalesForm = ({ navigation }) => {
       const customerId = customer.id || customer._id;
       console.log('[EasySales] Creating easy sale, customer:', customerId, 'lines:', orderLines.length);
 
-      const saleId = await createEasySaleOdoo({
+      const createResult = await createEasySaleOdoo({
         partnerId: customerId,
         orderLines,
         warehouseId: warehouse?.id || undefined,
@@ -189,16 +190,25 @@ const EasySalesForm = ({ navigation }) => {
         customerRef: customerRef || undefined,
       });
 
-      if (!saleId) {
+      if (!createResult) {
         Alert.alert('Error', 'Failed to create easy sale in Odoo.');
         return null;
       }
 
-      console.log('[EasySales] Easy sale created:', saleId);
+      const isOfflineResult = typeof createResult === 'object' && createResult?.offline;
+      const saleId = isOfflineResult ? createResult.id : createResult;
+
+      console.log('[EasySales] Easy sale created:', saleId, isOfflineResult ? '(offline)' : '');
       clearProducts();
-      Alert.alert('Sale Created', `Easy sale created successfully.\nSale ID: ${saleId}`, [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      if (isOfflineResult) {
+        Alert.alert('Saved Offline', 'Easy sale saved locally. Will sync when you reconnect.', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+      } else {
+        Alert.alert('Sale Created', `Easy sale created successfully.\nSale ID: ${saleId}`, [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+      }
       return saleId;
     } catch (err) {
       console.error('[EasySales] Error:', err?.message || err);
@@ -319,6 +329,7 @@ const EasySalesForm = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Easy Sales" onBackPress={() => navigation.goBack()} />
+      <OfflineBanner message="OFFLINE MODE — sale will sync when you reconnect" />
       <RoundedScrollContainer scrollEnabled={scrollEnabled}>
 
         {/* Form Fields */}
@@ -436,13 +447,14 @@ const EasySalesForm = ({ navigation }) => {
 
       </RoundedScrollContainer>
 
-      {/* Dropdown Sheet */}
-      <DropdownSheet
+      {/* Dropdown Modal */}
+      <CustomListModal
         isVisible={isDropdownVisible}
         items={getDropdownItems()}
         title={dropdownType || ''}
         onClose={() => setIsDropdownVisible(false)}
         onValueChange={handleDropdownSelect}
+        onAddIcon={false}
       />
 
       <OverlayLoader visible={isSubmitting} />

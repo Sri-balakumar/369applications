@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { FlatList } from 'react-native';
+import { View, ScrollView, StyleSheet, FlatList } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { RoundedContainer, SafeAreaView } from '@components/containers';
 import { ListItem } from '@components/Options';
 import { formatData } from '@utils/formatters';
 import { EmptyItem } from '@components/common/empty';
-import { COLORS } from '@constants/theme';
+import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useLoader } from '@hooks';
 import { fetchProductByBarcodeOdoo } from '@api/services/generalApi';
 import { showToastMessage } from '@components/Toast';
@@ -14,6 +14,7 @@ import { ConfirmationModal } from '@components/Modal';
 import { useAuthStore } from '@stores/auth';
 import { post } from '@api/services/utils';
 import ContactsSheet from '@screens/Home/Options/WhatsApp/ContactsSheet';
+import Text from '@components/Text';
 
 const OptionsScreen = ({ navigation }) => {
   const [isConfirmationModalVisible, setIsConfirmationModalVisible] = useState(false);
@@ -46,62 +47,106 @@ const OptionsScreen = ({ navigation }) => {
     }
   };
 
-  const baseOptions = [
-    { title: 'Search Products', image: require('@assets/images/Home/options/search_product.png'), onPress: () => navigation.navigate('Products') },
-    { title: 'Scan Barcode', image: require('@assets/images/Home/options/scan_barcode.png'), onPress: () => navigation.navigate('Scanner') },
-    { title: 'User Attendance', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('UserAttendanceScreen') },
-    { title: 'Offline Sync', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('OfflineSyncScreen') },
-    { title: 'Customers', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('CustomersPage1Screen') },
-    { title: 'Purchases', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('PurchasesScreen') },
-    { title: 'Easy Sales', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('EasySalesListScreen') },
-    { title: 'Register Payment', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('RegisterPaymentScreen') },
-    { title: 'Vehicle Tracking', image: require('@assets/images/Home/section/pickup.png'), onPress: () => navigation.navigate('VehicleTrackingScreen') },
-    { title: 'Vehicle Maintenance', image: require('@assets/images/Home/section/service.png'), onPress: () => navigation.navigate('VehicleMaintenanceScreen') },
-    { title: 'Visits Plan', image: require('@assets/images/Home/options/visits_plan.png'), onPress: () => navigation.navigate('VisitsPlanScreen') },
-    { title: 'Customer Visits', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('VisitScreen') },
-{ title: 'Stock Transfer', image: require('@assets/images/Home/options/inventory_management_1.png'), onPress: () => navigation.navigate('StockTransferScreen') },
-    { title: 'Estimate Purchase', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('EstimatePurchaseListScreen') },
-    { title: 'Estimate Sale', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('EstimateSaleListScreen') },
-    { title: 'Purchase Return', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('QuickPurchaseReturnListScreen') },
-    { title: 'Sales Return', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('QuickSalesReturnListScreen') },
-    { title: 'Gross Profit', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('GrossProfitReportScreen') },
-    { title: 'Partner Ledger', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('PartnerLedgerScreen') },
-    { title: 'Credit Management', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('CreditManagementScreen') },
-    { title: 'WhatsApp', image: require('@assets/icons/common/watsapp.png'), onPress: () => navigation.navigate('WhatsAppScreen') },
-    { title: 'Contacts', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => setShowContacts(true) },
-    { title: 'Cost Protection', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('SaleCostApprovalLogsScreen') },
-    { title: 'Product Enquiry', image: require('@assets/images/Home/options/product_enquiry.png'), onPress: () => navigation.navigate('PriceEnquiryScreen') },
-    { title: 'Transaction Auditing', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('AuditScreen') },
-    { title: 'CRM', image: require('@assets/images/Home/options/crm.png'), onPress: () => navigation.navigate('CRM') },
-    { title: 'Task Manager', image: require('@assets/images/Home/options/tasK_manager_1.png'), onPress: () => navigation.navigate('TaskManagerScreen') },
-    { title: 'Market Study', image: require('@assets/images/Home/options/market_study_1.png'), onPress: () => navigation.navigate('MarketStudyScreen') },
-    { title: 'Spare Management', image: require('@assets/images/Home/options/inventory_management.png'), onPress: () => navigation.navigate('SpareManagementScreen') },
-    { title: 'Mobile Repair', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('MobileRepairDashboard') },
-    { title: 'Inventory Management', image: require('@assets/images/Home/options/inventory_management_1.png'), onPress: () => navigation.navigate('InventoryScreen') },
-    { title: 'Box Inspection', image: require('@assets/images/Home/options/box_inspection.png'), onPress: () => setIsConfirmationModalVisible(true) },
-    { title: 'Late Records', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('LateRecordsScreen') },
+  // ─── Sections ─────────────────────────────────────────────
+  const sections = [
+    {
+      title: 'Products',
+      items: [
+        { title: 'Search Products', image: require('@assets/images/Home/options/search_product.png'), onPress: () => navigation.navigate('Products') },
+        { title: 'Scan Barcode', image: require('@assets/images/Home/options/scan_barcode.png'), onPress: () => navigation.navigate('Scanner') },
+        { title: 'Product Enquiry', image: require('@assets/images/Home/options/product_enquiry.png'), onPress: () => navigation.navigate('PriceEnquiryScreen') },
+      ],
+    },
+    {
+      title: 'Sales & Purchase',
+      items: [
+        { title: 'Sales Order', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('SalesOrderChoice') },
+        { title: 'Purchase', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('PurchaseListScreen') },
+        { title: 'Purchases', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('PurchasesScreen') },
+        { title: 'Easy Sales', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('EasySalesListScreen') },
+        { title: 'Easy Purchase', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('EasyPurchaseListScreen') },
+        { title: 'Register Payment', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('RegisterPaymentScreen') },
+        { title: 'Estimate Purchase', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('EstimatePurchaseListScreen') },
+        { title: 'Estimate Sale', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('EstimateSaleListScreen') },
+        { title: 'Purchase Return', image: require('@assets/images/Home/options/product_purchase_requisition.png'), onPress: () => navigation.navigate('QuickPurchaseReturnListScreen') },
+        { title: 'Sales Return', image: require('@assets/images/Home/options/buy.png'), onPress: () => navigation.navigate('QuickSalesReturnListScreen') },
+        { title: 'Cost Protection', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('SaleCostApprovalLogsScreen') },
+      ],
+    },
+    {
+      title: 'Customers & Contacts',
+      items: [
+        { title: 'Customers', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('CustomersPage1Screen') },
+        { title: 'Contacts', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => setShowContacts(true) },
+        { title: 'WhatsApp', image: require('@assets/icons/common/watsapp.png'), onPress: () => navigation.navigate('WhatsAppScreen') },
+        { title: 'CRM', image: require('@assets/images/Home/options/crm.png'), onPress: () => navigation.navigate('CRM') },
+      ],
+    },
+    {
+      title: 'Inventory',
+      items: [
+        { title: 'Stock Transfer', image: require('@assets/images/Home/options/inventory_management_1.png'), onPress: () => navigation.navigate('StockTransferScreen') },
+        { title: 'Inventory Management', image: require('@assets/images/Home/options/inventory_management_1.png'), onPress: () => navigation.navigate('InventoryScreen') },
+        { title: 'Spare Management', image: require('@assets/images/Home/options/inventory_management.png'), onPress: () => navigation.navigate('SpareManagementScreen') },
+        { title: 'Box Inspection', image: require('@assets/images/Home/options/box_inspection.png'), onPress: () => setIsConfirmationModalVisible(true) },
+      ],
+    },
+    {
+      title: 'Reports & Finance',
+      items: [
+        { title: 'Gross Profit', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('GrossProfitReportScreen') },
+        { title: 'Partner Ledger', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('PartnerLedgerScreen') },
+        { title: 'Credit Management', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('CreditManagementScreen') },
+        { title: 'Transaction Auditing', image: require('@assets/images/Home/options/transaction_auditing.png'), onPress: () => navigation.navigate('AuditScreen') },
+      ],
+    },
+    {
+      title: 'HR & Tracking',
+      items: [
+        { title: 'User Attendance', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('UserAttendanceScreen') },
+        { title: 'Late Records', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('LateRecordsScreen') },
+        isAdmin
+          ? { title: 'Staff Tracking', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('StaffTrackingScreen') }
+          : { title: 'My Location', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('MyLocation') },
+        { title: 'Vehicle Tracking', image: require('@assets/images/Home/section/pickup.png'), onPress: () => navigation.navigate('VehicleTrackingScreen') },
+        { title: 'Vehicle Maintenance', image: require('@assets/images/Home/section/service.png'), onPress: () => navigation.navigate('VehicleMaintenanceScreen') },
+        { title: 'Visits Plan', image: require('@assets/images/Home/options/visits_plan.png'), onPress: () => navigation.navigate('VisitsPlanScreen') },
+        { title: 'Customer Visits', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('VisitScreen') },
+      ],
+    },
+    {
+      title: 'Services',
+      items: [
+        { title: 'Services', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('ServicesScreen') },
+      ],
+    },
+    {
+      title: 'Other',
+      items: [
+        { title: 'Offline Sync', image: require('@assets/images/Home/options/inventory_management.png'), onPress: () => navigation.navigate('OfflineSyncScreen') },
+        { title: 'Task Manager', image: require('@assets/images/Home/options/tasK_manager_1.png'), onPress: () => navigation.navigate('TaskManagerScreen') },
+        { title: 'Market Study', image: require('@assets/images/Home/options/market_study_1.png'), onPress: () => navigation.navigate('MarketStudyScreen') },
+        { title: 'Mobile Repair', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('MobileRepairDashboard') },
+        ...(isAdmin ? [{ title: 'Banner Management', image: require('@assets/images/Home/options/market_study_1.png'), onPress: () => navigation.navigate('BannerManagementScreen') }] : []),
+      ],
+    },
   ];
 
-  // Add Staff Tracking option for admin users, My Location for non-admin users
-  const options = isAdmin
-    ? [
-        ...baseOptions.slice(0, 6),
-        { title: 'Staff Tracking', image: require('@assets/images/Home/options/attendance.png'), onPress: () => navigation.navigate('StaffTrackingScreen') },
-        ...baseOptions.slice(6),
-        { title: 'Banner Management', image: require('@assets/images/Home/options/market_study_1.png'), onPress: () => navigation.navigate('BannerManagementScreen') },
-      ]
-    : [
-        ...baseOptions.slice(0, 6),
-        { title: 'My Location', image: require('@assets/images/Home/options/customer_visit.png'), onPress: () => navigation.navigate('MyLocation') },
-        ...baseOptions.slice(6),
-      ];
-
-  const renderItem = ({ item }) => {
-    if (item.empty) {
-      return <EmptyItem />;
-    }
-    return <ListItem title={item.title} image={item.image} onPress={item.onPress} />;
-  };
+  // Render a 3-column grid per section using a non-scrolling FlatList
+  // (same numColumns=3 as the old flat layout, so ListItem's flex:1 works).
+  const renderGrid = (items) => (
+    <FlatList
+      data={formatData(items, 3)}
+      numColumns={3}
+      scrollEnabled={false}
+      keyExtractor={(item, i) => (item.title || 'empty') + i}
+      renderItem={({ item }) =>
+        item.empty
+          ? <EmptyItem />
+          : <ListItem title={item.title} image={item.image} onPress={item.onPress} />
+      }
+    />
+  );
 
   const handleBoxInspectionStart = async () => {
     setIsLoading(true);
@@ -129,14 +174,14 @@ const OptionsScreen = ({ navigation }) => {
         onBackPress={() => navigation.goBack()}
       />
       <RoundedContainer backgroundColor={'#f5f5f5'}>
-        <FlatList
-          data={formatData(options, 3)}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ padding: 10, paddingBottom: 100 }}
-          renderItem={renderItem}
-          numColumns={3}
-          keyExtractor={(item, index) => index.toString()}
-        />
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 10, paddingBottom: 100 }}>
+          {sections.map((section) => (
+            <View key={section.title} style={sectionStyles.section}>
+              <Text style={sectionStyles.title}>{section.title}</Text>
+              {renderGrid(section.items)}
+            </View>
+          ))}
+        </ScrollView>
         <OverlayLoader visible={loading || isLoading} />
       </RoundedContainer>
 
@@ -154,5 +199,18 @@ const OptionsScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
+
+const sectionStyles = StyleSheet.create({
+  section: {
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 15,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#2e2a4f',
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+});
 
 export default OptionsScreen;

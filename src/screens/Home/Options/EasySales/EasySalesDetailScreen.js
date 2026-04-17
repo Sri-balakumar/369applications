@@ -9,6 +9,7 @@ import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchEasySaleDetailOdoo, confirmEasySaleOdoo } from '@api/services/generalApi';
 import { useCurrencyStore } from '@stores/currency';
+import OfflineBanner from '@components/common/OfflineBanner';
 
 const STATE_COLORS = {
   draft: '#FF9800',
@@ -44,10 +45,18 @@ const EasySalesDetailScreen = ({ navigation, route }) => {
   const handleConfirmSale = async () => {
     setConfirming(true);
     try {
-      await confirmEasySaleOdoo(saleId);
-      Alert.alert('Sale Confirmed', 'Easy sale confirmed successfully.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      const result = await confirmEasySaleOdoo(saleId);
+      if (result && typeof result === 'object' && result.offline) {
+        Alert.alert('Confirmed Offline', 'Confirmation queued. Will sync when you reconnect.', [
+          { text: 'OK', onPress: async () => {
+            try { const rec = await fetchEasySaleDetailOdoo(saleId); setRecord(rec); } catch (_) {}
+          }},
+        ]);
+      } else {
+        Alert.alert('Sale Confirmed', 'Easy sale confirmed successfully.', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+      }
     } catch (err) {
       Alert.alert('Error', err?.message || 'Failed to confirm sale.');
     } finally {
@@ -76,7 +85,7 @@ const EasySalesDetailScreen = ({ navigation, route }) => {
     }
     return '-';
   })();
-  const currencyName = Array.isArray(record.currency_id) ? record.currency_id[1] : (record.currency || currency || '-');
+  const currencyName = Array.isArray(record.currency_id) ? record.currency_id[1] : (currencySymbol || '-');
   const customerRef = record.client_order_ref || record.customer_ref || record.reference || '';
   const rawDate = record.date || record.date_order || record.create_date?.split(' ')[0] || '';
   const dateStr = rawDate ? rawDate.split('-').reverse().join('-') : '-';
@@ -94,6 +103,7 @@ const EasySalesDetailScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title={record.name || `ES-${record.id}`} onBackPress={() => navigation.goBack()} />
+      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" />
       <RoundedScrollContainer>
 
         {/* Status Badge */}

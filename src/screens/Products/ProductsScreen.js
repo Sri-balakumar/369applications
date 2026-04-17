@@ -107,14 +107,14 @@ const ProductsScreen = ({ navigation, route }) => {
     setIsEditCatVisible(true);
   };
 
-  const pickEditCatImage = async () => {
-    const online = await isOnline();
-    if (!online) {
-      Alert.alert(
-        'You\'re Offline',
-        'Can\'t add image right now. Please add the image once you\'re connected to the internet.'
-      );
-      return;
+const pickEditCatImage = async () => {
+  const online = await isOnline();
+  if (!online) {
+    Alert.alert(
+      'You\'re Offline',
+      'Can\'t add image right now. Please add the image once you\'re connected to the internet.'
+    );
+    return;
     }
     try {
       const result = await ImagePicker.launchImageLibraryAsync({

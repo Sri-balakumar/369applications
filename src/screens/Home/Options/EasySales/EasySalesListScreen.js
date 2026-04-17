@@ -12,6 +12,7 @@ import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchEasySalesOdoo } from '@api/services/generalApi';
 import { useCurrencyStore } from '@stores/currency';
+import OfflineBanner from '@components/common/OfflineBanner';
 
 const STATE_COLORS = {
   draft: '#FF9800',
@@ -83,6 +84,7 @@ const EasySalesListScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Easy Sales" onBackPress={() => navigation.goBack()} />
+      <OfflineBanner message="OFFLINE MODE — showing cached sales" />
       <RoundedContainer>
         {data.length === 0 && !loading ? (
           <EmptyState

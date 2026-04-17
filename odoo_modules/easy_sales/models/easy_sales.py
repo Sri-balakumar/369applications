@@ -40,6 +40,10 @@ class EasySales(models.Model):
         required=True,
         default=lambda self: self.env.company.currency_id
     )
+    discount_type = fields.Selection([
+        ('percentage', 'Percentage'),
+        ('amount', 'Amount'),
+    ], string='Discount Type', default='percentage', required=True)
     line_ids = fields.One2many(
         'easy.sales.line',
         'sales_id',
@@ -173,18 +177,6 @@ class EasySales(models.Model):
         help='Select payment method before proceeding. This determines how the payment is processed.'
     )
 
-    payment_term_id = fields.Many2one(
-        'account.payment.term',
-        string='Payment Terms',
-        help='Payment terms for this sale (e.g., Immediate, 15 Days, 30 Days).',
-    )
-
-    is_credit_payment = fields.Boolean(
-        related='quick_payment_method_id.is_customer_account',
-        string='Is Credit Payment',
-        store=False,
-    )
-
     @api.depends('partner_id')
     def _compute_pricelist_id(self):
         for record in self:
@@ -194,11 +186,6 @@ class EasySales(models.Model):
                 record.pricelist_id = self.env['product.pricelist'].search(
                     [('company_id', 'in', [record.company_id.id, False])], limit=1
                 )
-
-    @api.onchange('partner_id')
-    def _onchange_partner_payment_term(self):
-        if self.partner_id and self.partner_id.property_payment_term_id:
-            self.payment_term_id = self.partner_id.property_payment_term_id
 
     @api.onchange('quick_payment_method_id')
     def _onchange_quick_payment_method_id(self):
@@ -267,12 +254,7 @@ class EasySales(models.Model):
     def create(self, vals_list):
         for vals in vals_list:
             if vals.get('name', _('New')) == _('New'):
-                company_id = vals.get('company_id', self.env.company.id)
-                company = self.env['res.company'].browse(company_id)
-                vals['name'] = (
-                    self.env['ir.sequence'].with_company(company).next_by_code('easy.sales')
-                    or _('New')
-                )
+                vals['name'] = self.env['ir.sequence'].next_by_code('easy.sales') or _('New')
         return super().create(vals_list)
 
     def action_add_payment(self):
@@ -312,66 +294,8 @@ class EasySales(models.Model):
         })
         return True
 
-    def _check_credit_limits(self):
-        """
-        Check credit management rules before confirming the sale.
-
-        Blocks the sale if:
-          - Customer is on credit hold (and no one-time release is active)
-          - This sale would push the customer over their credit limit
-
-        Uses getattr() so this gracefully does nothing when
-        credit_management_system is not installed.
-        """
-        partner = self.partner_id
-        if not partner:
-            return
-
-        # ── Credit hold ──────────────────────────────────────────────────
-        if getattr(partner, 'is_credit_hold', False):
-            if not getattr(partner, 'one_time_release', False):
-                raise UserError(_(
-                    'CUSTOMER ON CREDIT HOLD\n\n'
-                    'Customer "%s" is currently blocked from new purchases.\n'
-                    'Reason: %s\n\n'
-                    'Contact your administrator to release the credit hold.'
-                ) % (
-                    partner.name,
-                    getattr(partner, 'credit_hold_reason', None) or _('No reason specified'),
-                ))
-
-        # ── Credit limit ─────────────────────────────────────────────────
-        credit_limit = getattr(partner, 'custom_credit_limit', 0) or 0
-        if credit_limit > 0:
-            total_due = getattr(partner, 'total_due', 0) or 0
-            future_due = total_due + self.amount_total
-            if future_due > credit_limit:
-                sym = self.currency_id.symbol or ''
-                raise UserError(_(
-                    'CREDIT LIMIT EXCEEDED\n\n'
-                    'This sale cannot be completed — it will exceed the '
-                    "customer's credit limit.\n\n"
-                    'Customer:     %s\n'
-                    'Credit Limit: %s %s\n'
-                    'Current Due:  %s %s\n'
-                    'This Sale:    %s %s\n'
-                    'Future Total: %s %s\n'
-                    'Exceeds By:   %s %s\n\n'
-                    'Contact your administrator for a credit override.'
-                ) % (
-                    partner.name,
-                    sym, '{:,.2f}'.format(credit_limit),
-                    sym, '{:,.2f}'.format(total_due),
-                    sym, '{:,.2f}'.format(self.amount_total),
-                    sym, '{:,.2f}'.format(future_due),
-                    sym, '{:,.2f}'.format(future_due - credit_limit),
-                ))
-
     def action_confirm(self):
         for record in self:
-            # ── Credit Management check (before anything is created) ──────
-            record._check_credit_limits()
-
             # ── Validate: Customer is mandatory ──
             if not record.partner_id:
                 raise UserError(_('Please select a Customer before confirming the sale.'))
@@ -408,21 +332,8 @@ class EasySales(models.Model):
             so = record_company._create_sale_order()
             record.sale_order_id = so.id
             
-            so.with_company(record.company_id).action_confirm()
-
-            # ── Safety: ensure SO was actually confirmed ──────────────────
-            # credit_management_system returns a wizard dict instead of
-            # confirming when credit is exceeded. If the SO is still in
-            # draft, abort cleanly rather than creating invoice/payment on
-            # an unconfirmed order.
-            if so.state == 'draft':
-                so.action_cancel()
-                raise UserError(_(
-                    'Sale order could not be confirmed due to a credit '
-                    'management restriction.\n'
-                    'Please check the credit status of customer "%s".'
-                ) % record.partner_id.name)
-
+            so.action_confirm()
+            
             picking = so.picking_ids.filtered(lambda p: p.state not in ('done', 'cancel'))
             if picking:
                 picking = picking[0]
@@ -457,6 +368,7 @@ class EasySales(models.Model):
                 'product_uom_qty': line.quantity,
                 'product_uom_id': line.uom_id.id if line.uom_id else line.product_id.uom_id.id,
                 'price_unit': line.price_unit,
+                'discount': (line.discount / line.price_unit * 100.0) if self.discount_type == 'amount' and line.price_unit else line.discount,
                 'tax_ids': [(6, 0, line.tax_ids.ids)] if line.tax_ids else False,
             }))
         
@@ -468,7 +380,6 @@ class EasySales(models.Model):
             'client_order_ref': self.reference,
             'pricelist_id': self.pricelist_id.id,
             'warehouse_id': self.warehouse_id.id,
-            'payment_term_id': self.payment_term_id.id if self.payment_term_id else False,
             'order_line': so_lines,
             'origin': self.name,
         }
@@ -525,7 +436,6 @@ class EasySales(models.Model):
             invoice.write({
                 'invoice_date': self.date,
                 'ref': self.reference or self.name,
-                'source_module': 'easy_sale',
             })
         return invoice
 
@@ -572,31 +482,17 @@ class EasySales(models.Model):
                       journal.name, journal.name)
                 )
             
-            # ── STEP 1: Force direct payment by bypassing the outstanding account ──
-            # When payment_account_id == journal.default_account_id (or is False),
-            # Odoo's payment goes directly to the bank/cash account → "Paid".
-            # When payment_account_id points to an Outstanding Receipts account,
-            # payment stays in "In Payment" until bank statement is matched.
+            # ── STEP 1: Force direct payment by setting outstanding = default account ──
+            # Save original outstanding account to restore later
             original_outstanding_account = payment_method_line.payment_account_id
-            journal_direct_account = journal.default_account_id
+            journal_default_account = journal.default_account_id
             need_restore = False
-
-            if original_outstanding_account:
-                # Outstanding account is set — we need to bypass it
-                if journal_direct_account and original_outstanding_account != journal_direct_account:
-                    # Use the journal's direct bank/cash account
-                    payment_method_line.sudo().write({
-                        'payment_account_id': journal_direct_account.id,
-                    })
-                    need_restore = True
-                elif not journal_direct_account:
-                    # journal.default_account_id not configured — clear the
-                    # outstanding account so Odoo falls back to the journal's
-                    # native account directly (also results in "Paid")
-                    payment_method_line.sudo().write({
-                        'payment_account_id': False,
-                    })
-                    need_restore = True
+            
+            if journal_default_account and original_outstanding_account != journal_default_account:
+                payment_method_line.sudo().write({
+                    'payment_account_id': journal_default_account.id,
+                })
+                need_restore = True
             
             try:
                 # ── STEP 2: Register payment via wizard ──
@@ -773,6 +669,15 @@ class EasySalesLine(models.Model):
         required=True,
         digits='Product Price'
     )
+    discount = fields.Float(
+        string='Discount',
+        digits='Discount',
+        default=0.0,
+    )
+    discount_type = fields.Selection(
+        related='sales_id.discount_type',
+        string='Discount Type',
+    )
     tax_ids = fields.Many2many(
         'account.tax',
         string='Taxes',
@@ -817,13 +722,18 @@ class EasySalesLine(models.Model):
                 vals['uom_id'] = product.uom_id.id
         return super().create(vals_list)
 
-    @api.depends('quantity', 'price_unit', 'tax_ids')
+    @api.depends('quantity', 'price_unit', 'discount', 'discount_type', 'tax_ids')
     def _compute_amounts(self):
         for line in self:
-            line.subtotal = line.quantity * line.price_unit
+            if line.discount_type == 'amount':
+                price = line.price_unit - (line.discount or 0.0)
+            else:
+                price = line.price_unit * (1 - (line.discount or 0.0) / 100.0)
+            price = max(price, 0.0)
+            line.subtotal = line.quantity * price
             if line.tax_ids:
                 taxes = line.tax_ids.compute_all(
-                    line.price_unit,
+                    price,
                     line.currency_id,
                     line.quantity,
                     product=line.product_id,

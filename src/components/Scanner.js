@@ -6,6 +6,7 @@ import { NavigationHeader } from '@components/Header';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchProductByBarcodeOdoo } from '@api/services/generalApi';
 import { showToastMessage } from '@components/Toast';
+import OfflineBanner from '@components/common/OfflineBanner';
 
 const Scanner = ({ navigation, route }) => {
   const onScanCallback = route?.params?.onScan;
@@ -60,6 +61,7 @@ const Scanner = ({ navigation, route }) => {
           backgroundColor={COLORS.white}
           onBackPress={() => navigation.goBack()}
         />
+        <OfflineBanner message="OFFLINE MODE — scanning from cached products" />
         <View style={styles.centered}>
           <Text style={styles.permissionText}>Requesting camera permission...</Text>
         </View>
@@ -76,6 +78,7 @@ const Scanner = ({ navigation, route }) => {
           backgroundColor={COLORS.white}
           onBackPress={() => navigation.goBack()}
         />
+        <OfflineBanner message="OFFLINE MODE — scanning from cached products" />
         <View style={styles.centered}>
           <Text style={styles.permissionText}>
             Camera permission is required to scan barcodes.
@@ -93,6 +96,7 @@ const Scanner = ({ navigation, route }) => {
         backgroundColor={COLORS.white}
         onBackPress={() => navigation.goBack()}
       />
+      <OfflineBanner message="OFFLINE MODE — scanning from cached products" />
       <View style={styles.cameraContainer}>
         <BarCodeScanner
           style={StyleSheet.absoluteFillObject}

@@ -63,6 +63,12 @@ import { DeliveryNoteCreation, DeliveryNoteDetails, DeliveryNoteScreen } from "@
 import { VendorBillDetails, VendorBillScreen } from "@screens/Home/Options/Purchases/VendorBill";
 import { AddVendorProducts, VendorBillFormTabs } from "@screens/Home/Options/Purchases/VendorBill/VendorBillFormTabs";
 import { SupplierPaymentCreation, SupplierPaymentScreen } from "@screens/Home/Options/Purchases/SupplierPayment";
+import PurchaseListScreen from "@screens/Home/Options/Purchase/PurchaseListScreen";
+import EasyPurchaseListScreen from "@screens/Home/Options/EasyPurchase/EasyPurchaseListScreen";
+import EasyPurchaseDetailScreen from "@screens/Home/Options/EasyPurchase/EasyPurchaseDetailScreen";
+import EasyPurchaseForm from "@screens/Home/Options/EasyPurchase/EasyPurchaseForm";
+import PurchaseDetailScreen from "@screens/Home/Options/Purchase/PurchaseDetailScreen";
+import PurchaseFormScreen from "@screens/Home/Options/Purchase/PurchaseFormScreen";
 import POSReceiptScreen from '@screens/Home/Sections/Customer/POSReceiptScreen';
 import DirectInvoiceScreen from '@screens/Home/Sections/Customer/DirectInvoiceScreen';
 import { PaymentForm, RegisterPaymentScreen } from '@screens/Home/Options/Payment';
@@ -778,6 +784,28 @@ const StackNavigator = () => {
         component={AddParticipants}
         options={{ headerShown: false }}
       />
+
+      {/* Purchase (Odoo-parity RFQ / Purchase Order) */}
+      <Stack.Screen
+        name="PurchaseListScreen"
+        component={PurchaseListScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="PurchaseDetailScreen"
+        component={PurchaseDetailScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="PurchaseFormScreen"
+        component={PurchaseFormScreen}
+        options={{ headerShown: false }}
+      />
+
+      {/* Easy Purchase */}
+      <Stack.Screen name="EasyPurchaseListScreen" component={EasyPurchaseListScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="EasyPurchaseDetailScreen" component={EasyPurchaseDetailScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="EasyPurchaseForm" component={EasyPurchaseForm} options={{ headerShown: false }} />
 
       {/* Purchases */}
       <Stack.Screen

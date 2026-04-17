@@ -356,6 +356,155 @@ const syncItemDirectly = async (item) => {
         return recordId;
     }
 
+    // Easy purchase create — mirrors easy.sales but for easy.purchase model.
+    if (item.model === 'easy.purchase' && item.operation === 'create') {
+        const offlineId = `offline_${item.id}`;
+        const existingMap = await readOfflineIdMap();
+        if (existingMap[offlineId] !== undefined) return existingMap[offlineId];
+        const { _confirmAfterCreate, partnerId, warehouseId, warehouseCompanyId, paymentMethodId, vendorRef, orderLines } = values;
+        const vals = { partner_id: partnerId };
+        if (warehouseId) vals.warehouse_id = warehouseId;
+        if (paymentMethodId) vals.payment_method_id = paymentMethodId;
+        if (vendorRef) vals.reference = vendorRef;
+        if (orderLines && orderLines.length > 0) {
+            vals.line_ids = orderLines.map((l) => [0, 0, {
+                product_id: l.product_id, quantity: l.qty || l.quantity || 1,
+                price_unit: l.price_unit || l.price || 0,
+                ...(l.discount ? { discount: l.discount } : {}),
+            }]);
+        }
+        const createKwargs = {};
+        if (warehouseCompanyId) {
+            try { const cr = await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } }, { headers }); const allIds = (cr.data?.result || []).map((c) => c.id); createKwargs.context = { allowed_company_ids: [warehouseCompanyId, ...allIds.filter((id) => id !== warehouseCompanyId)] }; } catch (_) { createKwargs.context = { allowed_company_ids: [warehouseCompanyId] }; }
+        }
+        const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'easy.purchase', method: 'create', args: [vals], kwargs: createKwargs } }, { headers, timeout: 30000 });
+        if (response.data?.error) throw new Error(response.data.error?.data?.message || 'Easy purchase create failed');
+        const recordId = response.data?.result;
+        console.log('[OfflineSyncService] Created easy.purchase id:', recordId);
+        await saveOfflineIdMapping(offlineId, recordId);
+        try { const raw = await AsyncStorage.getItem('@cache:easyPurchases'); if (raw) { const list = JSON.parse(raw); let ch = false; const next = list.map((o) => { if (String(o.id) === offlineId) { ch = true; return { ...o, id: recordId, offline: false }; } return o; }); if (ch) await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(next)); } } catch (_) {}
+        try { const rawD = await AsyncStorage.getItem(`@cache:easyPurchaseDetail:${offlineId}`); if (rawD) { const prev = JSON.parse(rawD); await AsyncStorage.setItem(`@cache:easyPurchaseDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, offline: false })); await AsyncStorage.removeItem(`@cache:easyPurchaseDetail:${offlineId}`); } } catch (_) {}
+        if (_confirmAfterCreate) {
+            try { await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'easy.purchase', method: 'action_confirm', args: [[recordId]], kwargs: {} } }, { headers, timeout: 30000 }); console.log('[OfflineSyncService] Confirmed easy.purchase id:', recordId); } catch (e) { console.warn('[OfflineSyncService] easy.purchase confirm chain error:', e?.message); }
+        }
+        logSyncHistory(baseUrl, headers, { model: 'easy.purchase', operation: 'create', values: { partnerId }, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // Easy purchase confirm
+    if (item.model === 'easy.purchase' && item.operation === 'action_confirm') {
+        const { _recordId, companyId } = values;
+        let realId = _recordId;
+        if (typeof realId === 'string' && realId.startsWith('offline_')) { const map = await readOfflineIdMap(); if (map[realId] === undefined) throw new Error(`Record ${realId} not yet synced`); realId = map[realId]; }
+        await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'easy.purchase', method: 'action_confirm', args: [[Number(realId)]], kwargs: {} } }, { headers, timeout: 30000 });
+        console.log('[OfflineSyncService] Confirmed easy.purchase id:', realId);
+        logSyncHistory(baseUrl, headers, { model: 'easy.purchase', operation: 'action_confirm', values: { id: realId }, syncedRecordId: realId }).catch(() => {});
+        return realId;
+    }
+
+    // Easy sales create — uses hardcoded field names from the easy_sales module:
+    //   line_ids (one2many → easy.sales.line), quantity, price_unit,
+    //   quick_payment_method_id, reference, warehouse_id.
+    if (item.model === 'easy.sales' && item.operation === 'create') {
+        const offlineId = `offline_${item.id}`;
+        const existingMap = await readOfflineIdMap();
+        if (existingMap[offlineId] !== undefined) {
+            console.log('[OfflineSyncService] easy.sales already synced, reusing id:', existingMap[offlineId]);
+            return existingMap[offlineId];
+        }
+        const { _confirmAfterCreate, partnerId, warehouseId, warehouseCompanyId, paymentMethodId, customerRef, orderLines } = values;
+
+        // Build vals directly (no fields_get discovery needed)
+        const vals = { partner_id: partnerId };
+        if (warehouseId) vals.warehouse_id = warehouseId;
+        if (paymentMethodId) vals.quick_payment_method_id = paymentMethodId;
+        if (customerRef) vals.reference = customerRef;
+        if (orderLines && orderLines.length > 0) {
+            vals.line_ids = orderLines.map((l) => [0, 0, {
+                product_id: l.product_id,
+                quantity: l.qty || l.quantity || 1,
+                price_unit: l.price_unit || l.price || 0,
+                ...(l.discount ? { discount: l.discount } : {}),
+            }]);
+        }
+
+        // Multi-company context
+        const createKwargs = {};
+        if (warehouseCompanyId) {
+            try {
+                const compResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                    jsonrpc: '2.0', method: 'call',
+                    params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } },
+                }, { headers });
+                const allIds = (compResp.data?.result || []).map((c) => c.id);
+                createKwargs.context = { allowed_company_ids: [warehouseCompanyId, ...allIds.filter((id) => id !== warehouseCompanyId)] };
+            } catch (_) { createKwargs.context = { allowed_company_ids: [warehouseCompanyId] }; }
+        }
+
+        const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'easy.sales', method: 'create', args: [vals], kwargs: createKwargs },
+        }, { headers, timeout: 30000 });
+
+        if (response.data?.error) throw new Error(response.data.error?.data?.message || 'Easy sales create failed');
+        const recordId = response.data?.result;
+        console.log('[OfflineSyncService] Created easy.sales id:', recordId);
+        await saveOfflineIdMapping(offlineId, recordId);
+
+        // Swap placeholder in caches
+        try {
+            const raw = await AsyncStorage.getItem('@cache:easySales');
+            if (raw) {
+                const list = JSON.parse(raw);
+                let changed = false;
+                const next = list.map((o) => {
+                    if (String(o.id) === offlineId) { changed = true; return { ...o, id: recordId, offline: false }; }
+                    return o;
+                });
+                if (changed) await AsyncStorage.setItem('@cache:easySales', JSON.stringify(next));
+            }
+        } catch (_) {}
+        try {
+            const rawD = await AsyncStorage.getItem(`@cache:easySaleDetail:${offlineId}`);
+            if (rawD) {
+                const prev = JSON.parse(rawD);
+                await AsyncStorage.setItem(`@cache:easySaleDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, offline: false }));
+                await AsyncStorage.removeItem(`@cache:easySaleDetail:${offlineId}`);
+            }
+        } catch (_) {}
+
+        if (_confirmAfterCreate) {
+            try {
+                await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                    jsonrpc: '2.0', method: 'call',
+                    params: { model: 'easy.sales', method: 'action_confirm', args: [[recordId]], kwargs: {} },
+                }, { headers, timeout: 30000 });
+                console.log('[OfflineSyncService] Confirmed easy.sales id:', recordId);
+            } catch (e) { console.warn('[OfflineSyncService] easy.sales confirm chain error:', e?.message); }
+        }
+
+        logSyncHistory(baseUrl, headers, { model: 'easy.sales', operation: 'create', values: { partnerId }, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // Easy sales confirm (action_confirm on an already-synced record)
+    if (item.model === 'easy.sales' && item.operation === 'action_confirm') {
+        const { _recordId, companyId } = values;
+        let realRecordId = _recordId;
+        if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
+            const map = await readOfflineIdMap();
+            if (map[realRecordId] === undefined) throw new Error(`Record ${realRecordId} not yet synced`);
+            realRecordId = map[realRecordId];
+        }
+        await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: { model: 'easy.sales', method: 'action_confirm', args: [[Number(realRecordId)]], kwargs: {} },
+        }, { headers, timeout: 30000 });
+        console.log('[OfflineSyncService] Confirmed easy.sales id:', realRecordId);
+        logSyncHistory(baseUrl, headers, { model: 'easy.sales', operation: 'action_confirm', values: { id: realRecordId }, syncedRecordId: realRecordId }).catch(() => {});
+        return realRecordId;
+    }
+
     // Sale order create (quotation). Supports an optional _confirmAfterCreate
     // flag which chains action_confirm after the order is created.
     if (item.model === 'sale.order' && item.operation === 'create') {

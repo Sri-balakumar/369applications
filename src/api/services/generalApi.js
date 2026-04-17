@@ -1067,6 +1067,26 @@ export const fetchProductByBarcodeOdoo = async (barcode) => {
     });
   } catch (error) {
     console.error("fetchProductByBarcodeOdoo error:", error);
+    // Offline fallback — search cached product lists by barcode / default_code.
+    try {
+      const allKeys = await AsyncStorage.getAllKeys();
+      const productKeys = allKeys.filter((k) => k.startsWith('@cache:products') && !k.includes('Detail'));
+      for (const key of productKeys) {
+        try {
+          const raw = await AsyncStorage.getItem(key);
+          if (!raw) continue;
+          const list = JSON.parse(raw);
+          const match = list.find((p) =>
+            (p.code && String(p.code).toLowerCase() === String(barcode).toLowerCase()) ||
+            (p.barcode && String(p.barcode).toLowerCase() === String(barcode).toLowerCase())
+          );
+          if (match) {
+            console.log('[fetchProductByBarcodeOdoo] Offline match found in', key, 'id:', match.id);
+            return [match];
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
     throw error;
   }
 };
@@ -2973,13 +2993,19 @@ export const fetchWarehousesOdoo = async () => {
       console.error('fetchWarehousesOdoo error:', response.data.error);
       return [];
     }
-    return (response.data.result || []).map(w => ({
+    const mapped = (response.data.result || []).map(w => ({
       id: w.id, name: w.name, code: w.code, label: w.name,
       company_id: Array.isArray(w.company_id) ? w.company_id[0] : w.company_id,
       company_name: Array.isArray(w.company_id) ? w.company_id[1] : '',
     }));
+    try { await AsyncStorage.setItem('@cache:warehouses', JSON.stringify(mapped)); } catch (_) {}
+    return mapped;
   } catch (error) {
     console.error('fetchWarehousesOdoo error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:warehouses');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return [];
   }
 };
@@ -3137,7 +3163,10 @@ export const fetchEasySalesOdoo = async ({ offset = 0, limit = 50, searchText = 
           model: 'easy.sales',
           method: 'search_read',
           args: [domain],
-          kwargs: { fields: [], offset, limit, order: 'id desc' },
+          kwargs: {
+            fields: ['id', 'name', 'date', 'partner_id', 'state', 'amount_untaxed', 'amount_tax', 'amount_total', 'payment_state', 'warehouse_id', 'quick_payment_method_id', 'currency_id', 'company_id', 'reference'],
+            offset, limit, order: 'date desc, id desc',
+          },
         },
       },
       { headers }
@@ -3148,15 +3177,40 @@ export const fetchEasySalesOdoo = async ({ offset = 0, limit = 50, searchText = 
     }
     const records = response.data.result || [];
     console.log('[EasySales] Fetched', records.length, 'records');
+    if (!searchText && offset === 0) {
+      try { await AsyncStorage.setItem('@cache:easySales', JSON.stringify(records)); } catch (_) {}
+    }
     return records;
   } catch (error) {
     console.error('[EasySales] fetchEasySales error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:easySales');
+      if (cached) {
+        let list = JSON.parse(cached);
+        if (searchText && searchText.trim()) {
+          const term = searchText.trim().toLowerCase();
+          list = list.filter((o) =>
+            (o.name || '').toLowerCase().includes(term) ||
+            (Array.isArray(o.partner_id) ? (o.partner_id[1] || '').toLowerCase().includes(term) : false)
+          );
+        }
+        return list;
+      }
+    } catch (_) {}
     return [];
   }
 };
 
 // Fetch a single easy.sales record by ID
 export const fetchEasySaleDetailOdoo = async (saleId) => {
+  const idStr = String(saleId);
+  if (idStr.startsWith('offline_')) {
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:easySaleDetail:${idStr}`);
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
+    return null;
+  }
   try {
     const { headers, baseUrl } = await authenticateOdoo();
     const response = await axios.post(
@@ -3168,7 +3222,11 @@ export const fetchEasySaleDetailOdoo = async (saleId) => {
           model: 'easy.sales',
           method: 'read',
           args: [[saleId]],
-          kwargs: { fields: [] },
+          kwargs: {
+            fields: ['id', 'name', 'date', 'partner_id', 'state', 'amount_untaxed', 'amount_tax', 'amount_total',
+              'payment_state', 'warehouse_id', 'quick_payment_method_id', 'currency_id', 'company_id',
+              'reference', 'notes', 'line_ids', 'sale_order_id', 'invoice_id', 'is_paid', 'amount_paid', 'amount_due'],
+          },
         },
       },
       { headers }
@@ -3179,9 +3237,36 @@ export const fetchEasySaleDetailOdoo = async (saleId) => {
     }
     const records = response.data.result || [];
     console.log('[EasySales] Detail record:', records.length > 0 ? records[0].name : 'not found');
-    return records.length > 0 ? records[0] : null;
+    const rec = records.length > 0 ? records[0] : null;
+    if (rec) {
+      // Fetch line details
+      if (rec.line_ids && rec.line_ids.length > 0) {
+        try {
+          const linesResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+              jsonrpc: '2.0', method: 'call',
+              params: {
+                model: 'easy.sales.line', method: 'read', args: [rec.line_ids],
+                kwargs: { fields: ['id', 'product_id', 'description', 'quantity', 'uom_id', 'price_unit', 'discount', 'subtotal', 'tax_amount', 'total'] },
+              },
+            },
+            { headers }
+          );
+          rec.lines_detail = linesResp.data?.result || [];
+        } catch (_) { rec.lines_detail = []; }
+      } else {
+        rec.lines_detail = [];
+      }
+      try { await AsyncStorage.setItem(`@cache:easySaleDetail:${saleId}`, JSON.stringify(rec)); } catch (_) {}
+    }
+    return rec;
   } catch (error) {
     console.error('[EasySales] fetchEasySaleDetail error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:easySaleDetail:${saleId}`);
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return null;
   }
 };
@@ -3210,7 +3295,7 @@ export const fetchEasySalesPaymentMethodsOdoo = async () => {
     }
     const records = response.data.result || [];
     console.log('[EasySales] Payment methods:', records.length);
-    return records.map(r => ({
+    const mapped = records.map(r => ({
       id: r.id,
       name: r.name,
       label: r.name,
@@ -3219,8 +3304,14 @@ export const fetchEasySalesPaymentMethodsOdoo = async () => {
       is_default: r.is_default || false,
       is_customer_account: r.is_customer_account || false,
     }));
+    try { await AsyncStorage.setItem('@cache:easySalesPaymentMethods', JSON.stringify(mapped)); } catch (_) {}
+    return mapped;
   } catch (error) {
     console.error('[EasySales] fetchPaymentMethods error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:easySalesPaymentMethods');
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
     return [];
   }
 };
@@ -3258,66 +3349,88 @@ export const discoverEasySalesFieldsOdoo = async () => {
 
 // Create an easy.sales record
 export const createEasySaleOdoo = async ({ partnerId, warehouseId, warehouseCompanyId, paymentMethodId, customerRef, orderLines, customerSignature }) => {
+  // Offline branch — queue create, cache placeholder
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const localId = await offlineQueue.enqueue({
+        model: 'easy.sales',
+        operation: 'create',
+        values: { partnerId, warehouseId, warehouseCompanyId, paymentMethodId, customerRef, orderLines, customerSignature },
+      });
+
+      let partnerName = '';
+      try {
+        const raw = await AsyncStorage.getItem('@cache:contacts');
+        if (raw) { const list = JSON.parse(raw); const p = list.find((c) => String(c.id) === String(partnerId)); partnerName = p?.name || ''; }
+      } catch (_) {}
+
+      let amountUntaxed = 0;
+      (orderLines || []).forEach((l) => { amountUntaxed += (l.qty || l.quantity || 1) * (l.price_unit || l.price || 0); });
+      const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+      const placeholder = {
+        id: `offline_${localId}`,
+        name: 'NEW (offline)',
+        partner_id: partnerId ? [partnerId, partnerName] : false,
+        state: 'draft',
+        amount_total: amountUntaxed,
+        amount_untaxed: amountUntaxed,
+        amount_tax: 0,
+        date: nowIso,
+        warehouse_id: warehouseId ? [warehouseId, ''] : false,
+        currency_id: false,
+        company_id: false,
+        payment_state: 'not_paid',
+        offline: true,
+      };
+
+      try {
+        const rawList = await AsyncStorage.getItem('@cache:easySales');
+        const list = rawList ? JSON.parse(rawList) : [];
+        list.unshift(placeholder);
+        await AsyncStorage.setItem('@cache:easySales', JSON.stringify(list));
+      } catch (_) {}
+      try {
+        await AsyncStorage.setItem(`@cache:easySaleDetail:offline_${localId}`, JSON.stringify({
+          ...placeholder,
+          order_lines: (orderLines || []).map((l, i) => ({
+            id: `offline_line_${i}`,
+            product_id: [l.product_id, l.product_name || `#${l.product_id}`],
+            product_uom_qty: l.qty || l.quantity || 1,
+            price_unit: l.price_unit || l.price || 0,
+          })),
+        }));
+      } catch (_) {}
+
+      console.log('[createEasySaleOdoo] Queued offline, localId:', localId);
+      return { offline: true, localId, id: `offline_${localId}` };
+    }
+  } catch (_) {}
+
   try {
     const { headers, baseUrl } = await authenticateOdoo();
 
-    // Discover field names first
-    const fields = await discoverEasySalesFieldsOdoo();
-    if (!fields) throw new Error('Could not discover easy.sales fields');
-
-    const fieldNames = Object.keys(fields);
-    console.log('[EasySales] Available fields:', fieldNames.filter(f => !f.startsWith('__')).join(', '));
-
-    // Find the line relation field (one2many to easy.sales.line or similar)
-    const lineField = fieldNames.find(f => fields[f].type === 'one2many' && (f.includes('line') || f.includes('order_line')));
-    // Find payment method field
-    const paymentField = fieldNames.find(f => f.includes('payment_method') && fields[f].type === 'many2one');
-    // Find customer ref field
-    const refField = fieldNames.find(f => f.includes('client_order_ref') || f.includes('customer_ref') || f.includes('reference'));
-
-    console.log('[EasySales] Detected: lineField=', lineField, 'paymentField=', paymentField, 'refField=', refField);
-
-    // Build vals
+    // Build vals using exact field names from easy_sales Odoo module
     const vals = { partner_id: partnerId };
-    if (warehouseId && fieldNames.includes('warehouse_id')) vals.warehouse_id = warehouseId;
-    if (paymentMethodId && paymentField) vals[paymentField] = paymentMethodId;
-    if (customerRef && refField) vals[refField] = customerRef;
-    if (customerSignature && fieldNames.includes('customer_signature')) vals.customer_signature = customerSignature;
+    if (warehouseId) vals.warehouse_id = warehouseId;
+    if (paymentMethodId) vals.quick_payment_method_id = paymentMethodId;
+    if (customerRef) vals.reference = customerRef;
 
-    // Build order lines
-    if (lineField && orderLines && orderLines.length > 0) {
-      // Discover line model fields
-      const lineModel = fields[lineField].relation;
-      let lineFieldDefs = null;
-      if (lineModel) {
-        try {
-          const lfResp = await axios.post(
-            `${baseUrl}/web/dataset/call_kw`,
-            {
-              jsonrpc: '2.0', method: 'call',
-              params: { model: lineModel, method: 'fields_get', args: [], kwargs: { attributes: ['string', 'type'] } },
-            },
-            { headers }
-          );
-          lineFieldDefs = lfResp.data?.result || {};
-          console.log('[EasySales] Line model:', lineModel, 'fields:', Object.keys(lineFieldDefs).join(', '));
-        } catch (e) { console.warn('[EasySales] Could not get line fields:', e?.message); }
-      }
-
-      const lf = lineFieldDefs ? Object.keys(lineFieldDefs) : [];
-      const qtyField = lf.find(f => f === 'product_uom_qty' || f === 'quantity' || f === 'qty') || 'product_uom_qty';
-      const priceField = lf.find(f => f === 'price_unit' || f === 'unit_price') || 'price_unit';
-
-      vals[lineField] = orderLines.map(line => [0, 0, {
+    // Order lines — field: line_ids, line model: easy.sales.line
+    // Line qty field: quantity, price field: price_unit
+    if (orderLines && orderLines.length > 0) {
+      vals.line_ids = orderLines.map((line) => [0, 0, {
         product_id: line.product_id,
-        [qtyField]: line.qty || line.quantity || 1,
-        [priceField]: line.price_unit || line.price || 0,
+        quantity: line.qty || line.quantity || 1,
+        price_unit: line.price_unit || line.price || 0,
+        ...(line.discount ? { discount: line.discount } : {}),
       }]);
     }
 
     console.log('[EasySales] Creating with vals:', JSON.stringify(vals).substring(0, 500));
 
-    // Pass allowed_company_ids — warehouse company first (sets env.company), then all others for journal/record access
+    // Pass allowed_company_ids for multi-company
     const createKwargs = {};
     if (warehouseCompanyId) {
       try {
@@ -3329,8 +3442,8 @@ export const createEasySaleOdoo = async ({ partnerId, warehouseId, warehouseComp
           },
           { headers }
         );
-        const allIds = (compResp.data?.result || []).map(c => c.id);
-        createKwargs.context = { allowed_company_ids: [warehouseCompanyId, ...allIds.filter(id => id !== warehouseCompanyId)] };
+        const allIds = (compResp.data?.result || []).map((c) => c.id);
+        createKwargs.context = { allowed_company_ids: [warehouseCompanyId, ...allIds.filter((id) => id !== warehouseCompanyId)] };
       } catch (e) {
         createKwargs.context = { allowed_company_ids: [warehouseCompanyId] };
       }
@@ -3365,8 +3478,258 @@ export const createEasySaleOdoo = async ({ partnerId, warehouseId, warehouseComp
   }
 };
 
+// ─── Easy Purchase (easy.purchase) ──────────────────────────────────────────
+// Mirrors easy.sales but for vendor purchases. Field names from the
+// easy_purchase Odoo module: line_ids, payment_method_id, reference, etc.
+
+export const fetchEasyPurchasesOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    let domain = [];
+    if (searchText) {
+      domain = ['|', ['name', 'ilike', searchText], ['partner_id.name', 'ilike', searchText]];
+    }
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'easy.purchase', method: 'search_read', args: [domain],
+        kwargs: {
+          fields: ['id', 'name', 'date', 'partner_id', 'state', 'amount_untaxed', 'amount_tax', 'amount_total', 'payment_state', 'warehouse_id', 'payment_method_id', 'currency_id', 'company_id', 'reference'],
+          offset, limit, order: 'date desc, id desc',
+        },
+      },
+    }, { headers });
+    if (response.data.error) { console.error('[EasyPurchase] list error:', response.data.error?.data?.message); return []; }
+    const records = response.data.result || [];
+    if (!searchText && offset === 0) {
+      try { await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(records)); } catch (_) {}
+    }
+    return records;
+  } catch (error) {
+    console.error('[EasyPurchase] fetch error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:easyPurchases');
+      if (cached) {
+        let list = JSON.parse(cached);
+        if (searchText && searchText.trim()) {
+          const term = searchText.trim().toLowerCase();
+          list = list.filter((o) => (o.name || '').toLowerCase().includes(term) || (Array.isArray(o.partner_id) ? (o.partner_id[1] || '').toLowerCase().includes(term) : false));
+        }
+        return list;
+      }
+    } catch (_) {}
+    return [];
+  }
+};
+
+export const fetchEasyPurchaseDetailOdoo = async (purchaseId) => {
+  const idStr = String(purchaseId);
+  if (idStr.startsWith('offline_')) {
+    try { const c = await AsyncStorage.getItem(`@cache:easyPurchaseDetail:${idStr}`); if (c) return JSON.parse(c); } catch (_) {}
+    return null;
+  }
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'easy.purchase', method: 'read', args: [[purchaseId]],
+        kwargs: {
+          fields: ['id', 'name', 'date', 'partner_id', 'state', 'amount_untaxed', 'amount_tax', 'amount_total',
+            'payment_state', 'warehouse_id', 'payment_method_id', 'currency_id', 'company_id',
+            'reference', 'notes', 'line_ids', 'purchase_order_id', 'invoice_id', 'payment_ids'],
+        },
+      },
+    }, { headers });
+    if (response.data.error) return null;
+    const rec = (response.data.result || [])[0] || null;
+    if (rec && rec.line_ids && rec.line_ids.length > 0) {
+      try {
+        const lResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: {
+            model: 'easy.purchase.line', method: 'read', args: [rec.line_ids],
+            kwargs: { fields: ['id', 'product_id', 'description', 'quantity', 'uom_id', 'price_unit', 'discount', 'subtotal', 'tax_amount', 'total'] },
+          },
+        }, { headers });
+        rec.lines_detail = lResp.data?.result || [];
+      } catch (_) { rec.lines_detail = []; }
+    } else if (rec) { rec.lines_detail = []; }
+    if (rec) { try { await AsyncStorage.setItem(`@cache:easyPurchaseDetail:${purchaseId}`, JSON.stringify(rec)); } catch (_) {} }
+    return rec;
+  } catch (error) {
+    console.error('[EasyPurchase] detail error:', error?.message || error);
+    try { const c = await AsyncStorage.getItem(`@cache:easyPurchaseDetail:${purchaseId}`); if (c) return JSON.parse(c); } catch (_) {}
+    return null;
+  }
+};
+
+export const fetchEasyPurchasePaymentMethodsOdoo = async () => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'easy.purchase.payment.method', method: 'search_read', args: [[]],
+        kwargs: { fields: ['id', 'name', 'sequence', 'journal_id', 'is_default', 'is_vendor_account'], limit: 50, order: 'sequence asc' },
+      },
+    }, { headers });
+    if (response.data.error) return [];
+    const mapped = (response.data.result || []).map((r) => ({
+      id: r.id, name: r.name, label: r.name,
+      journal_id: r.journal_id ? r.journal_id[0] : null,
+      is_default: r.is_default || false,
+      is_vendor_account: r.is_vendor_account || false,
+    }));
+    try { await AsyncStorage.setItem('@cache:easyPurchasePaymentMethods', JSON.stringify(mapped)); } catch (_) {}
+    return mapped;
+  } catch (error) {
+    console.error('[EasyPurchase] paymentMethods error:', error?.message || error);
+    try { const c = await AsyncStorage.getItem('@cache:easyPurchasePaymentMethods'); if (c) return JSON.parse(c); } catch (_) {}
+    return [];
+  }
+};
+
+export const createEasyPurchaseOdoo = async ({ partnerId, warehouseId, warehouseCompanyId, paymentMethodId, vendorRef, orderLines }) => {
+  // Offline branch
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const localId = await offlineQueue.enqueue({
+        model: 'easy.purchase', operation: 'create',
+        values: { partnerId, warehouseId, warehouseCompanyId, paymentMethodId, vendorRef, orderLines },
+      });
+      let partnerName = '';
+      try { const raw = await AsyncStorage.getItem('@cache:contacts'); if (raw) { const list = JSON.parse(raw); const p = list.find((c) => String(c.id) === String(partnerId)); partnerName = p?.name || ''; } } catch (_) {}
+      let amountUntaxed = 0;
+      (orderLines || []).forEach((l) => { amountUntaxed += (l.qty || l.quantity || 1) * (l.price_unit || l.price || 0); });
+      const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      const placeholder = {
+        id: `offline_${localId}`, name: 'NEW (offline)',
+        partner_id: partnerId ? [partnerId, partnerName] : false,
+        state: 'draft', amount_total: amountUntaxed, amount_untaxed: amountUntaxed, amount_tax: 0,
+        date: nowIso, warehouse_id: warehouseId ? [warehouseId, ''] : false,
+        currency_id: false, company_id: false, payment_state: 'not_paid', offline: true,
+      };
+      try { const rawList = await AsyncStorage.getItem('@cache:easyPurchases'); const list = rawList ? JSON.parse(rawList) : []; list.unshift(placeholder); await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(list)); } catch (_) {}
+      try {
+        await AsyncStorage.setItem(`@cache:easyPurchaseDetail:offline_${localId}`, JSON.stringify({
+          ...placeholder,
+          order_lines: (orderLines || []).map((l, i) => ({
+            id: `offline_line_${i}`, product_id: [l.product_id, l.product_name || `#${l.product_id}`],
+            quantity: l.qty || l.quantity || 1, price_unit: l.price_unit || l.price || 0,
+          })),
+        }));
+      } catch (_) {}
+      return { offline: true, localId, id: `offline_${localId}` };
+    }
+  } catch (_) {}
+
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const vals = { partner_id: partnerId };
+    if (warehouseId) vals.warehouse_id = warehouseId;
+    if (paymentMethodId) vals.payment_method_id = paymentMethodId;
+    if (vendorRef) vals.reference = vendorRef;
+    if (orderLines && orderLines.length > 0) {
+      vals.line_ids = orderLines.map((l) => [0, 0, {
+        product_id: l.product_id,
+        quantity: l.qty || l.quantity || 1,
+        price_unit: l.price_unit || l.price || 0,
+        ...(l.discount ? { discount: l.discount } : {}),
+      }]);
+    }
+    const createKwargs = {};
+    if (warehouseCompanyId) {
+      try {
+        const compResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } }, { headers });
+        const allIds = (compResp.data?.result || []).map((c) => c.id);
+        createKwargs.context = { allowed_company_ids: [warehouseCompanyId, ...allIds.filter((id) => id !== warehouseCompanyId)] };
+      } catch (_) { createKwargs.context = { allowed_company_ids: [warehouseCompanyId] }; }
+    }
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'easy.purchase', method: 'create', args: [vals], kwargs: createKwargs },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create easy purchase');
+    return response.data.result;
+  } catch (error) {
+    console.error('[EasyPurchase] create error:', error?.message || error);
+    throw error;
+  }
+};
+
+export const confirmEasyPurchaseOdoo = async (purchaseId, companyId = null) => {
+  // Offline branch
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const idStr = String(purchaseId);
+      if (idStr.startsWith('offline_')) {
+        await offlineQueue.updateValues(idStr.replace('offline_', ''), { _confirmAfterCreate: true });
+      } else {
+        await offlineQueue.enqueue({ model: 'easy.purchase', operation: 'action_confirm', values: { _recordId: purchaseId, companyId } });
+      }
+      try {
+        const raw = await AsyncStorage.getItem('@cache:easyPurchases');
+        if (raw) { const list = JSON.parse(raw); const idx = list.findIndex((o) => String(o.id) === idStr); if (idx >= 0) { list[idx] = { ...list[idx], state: 'done', payment_state: 'paid' }; await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(list)); } }
+      } catch (_) {}
+      try {
+        const dk = `@cache:easyPurchaseDetail:${idStr}`;
+        const rawD = await AsyncStorage.getItem(dk);
+        if (rawD) { const prev = JSON.parse(rawD); await AsyncStorage.setItem(dk, JSON.stringify({ ...prev, state: 'done', payment_state: 'paid' })); }
+      } catch (_) {}
+      return { offline: true };
+    }
+  } catch (_) {}
+
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    let targetCompanyId = companyId;
+    if (!targetCompanyId) {
+      try { const rr = await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'easy.purchase', method: 'read', args: [[purchaseId]], kwargs: { fields: ['company_id'] } } }, { headers }); const rec = rr.data?.result?.[0]; if (rec?.company_id) targetCompanyId = Array.isArray(rec.company_id) ? rec.company_id[0] : rec.company_id; } catch (_) {}
+    }
+    let allCompanyIds = [1];
+    try { const cr = await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } }, { headers }); allCompanyIds = (cr.data?.result || []).map((c) => c.id); } catch (_) {}
+    const companyIds = targetCompanyId ? [targetCompanyId, ...allCompanyIds.filter((id) => id !== targetCompanyId)] : allCompanyIds;
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'easy.purchase', method: 'action_confirm', args: [[purchaseId]], kwargs: { context: { allowed_company_ids: companyIds } } },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to confirm purchase');
+    return response.data.result;
+  } catch (error) {
+    console.error('[EasyPurchase] confirm error:', error?.message || error);
+    throw error;
+  }
+};
+
 // Confirm an easy.sales record
 export const confirmEasySaleOdoo = async (saleId, companyId = null) => {
+  // Offline branch
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const idStr = String(saleId);
+      if (idStr.startsWith('offline_')) {
+        const queueItemId = idStr.replace('offline_', '');
+        await offlineQueue.updateValues(queueItemId, { _confirmAfterCreate: true });
+      } else {
+        await offlineQueue.enqueue({ model: 'easy.sales', operation: 'action_confirm', values: { _recordId: saleId, companyId } });
+      }
+      try {
+        const raw = await AsyncStorage.getItem('@cache:easySales');
+        if (raw) { const list = JSON.parse(raw); const idx = list.findIndex((o) => String(o.id) === idStr); if (idx >= 0) { list[idx] = { ...list[idx], state: 'done', payment_state: 'paid', is_paid: true }; await AsyncStorage.setItem('@cache:easySales', JSON.stringify(list)); } }
+      } catch (_) {}
+      try {
+        const detailKey = `@cache:easySaleDetail:${idStr}`;
+        const rawD = await AsyncStorage.getItem(detailKey);
+        if (rawD) { const prev = JSON.parse(rawD); await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, state: 'done', payment_state: 'paid', is_paid: true })); }
+      } catch (_) {}
+      return { offline: true };
+    }
+  } catch (_) {}
+
   try {
     const { headers, baseUrl } = await authenticateOdoo();
 
@@ -4686,6 +5049,246 @@ export const fetchSaleOrderDetailOdoo = async (orderId) => {
       if (cached) return JSON.parse(cached);
     } catch (_) {}
     return null;
+  }
+};
+
+// ─── Odoo-native Purchase Order (purchase.order) ────────────────────────────
+// Used by the new "Purchase" option which mirrors Odoo's Request for Quotation
+// screen. Separate from the legacy fetchPurchaseOrder which hits the old backend.
+
+// State mapping mirrors Odoo's purchase.order.state selection:
+//   'draft'   → RFQ
+//   'sent'    → RFQ Sent
+//   'to approve' → To Approve
+//   'purchase' → Purchase Order
+//   'done'    → Locked
+//   'cancel'  → Cancelled
+export const fetchPurchaseOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '', state = '' } = {}) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const domain = [];
+    if (state) domain.push(['state', '=', state]);
+    if (searchText) {
+      if (domain.length > 0) domain.unshift('&');
+      domain.push('|', ['name', 'ilike', searchText], ['partner_id.name', 'ilike', searchText]);
+    }
+
+    let allCompanyIds = [1];
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
+        { headers }
+      );
+      allCompanyIds = (compResp.data?.result || []).map((c) => c.id);
+    } catch (_) {}
+
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'purchase.order',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: ['id', 'name', 'partner_id', 'state', 'amount_total', 'amount_untaxed', 'amount_tax', 'date_order', 'date_planned', 'currency_id', 'partner_ref', 'company_id'],
+            limit, offset, order: 'id desc',
+            context: { allowed_company_ids: allCompanyIds },
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[PurchaseOrdersOdoo] list error:', response.data.error?.data?.message);
+      return [];
+    }
+    const records = response.data.result || [];
+    if (!searchText && !state && offset === 0) {
+      try { await AsyncStorage.setItem('@cache:purchaseOrdersOdoo', JSON.stringify(records)); } catch (_) {}
+    }
+    return records;
+  } catch (error) {
+    console.error('[PurchaseOrdersOdoo] fetch error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem('@cache:purchaseOrdersOdoo');
+      if (cached) {
+        let list = JSON.parse(cached);
+        if (state) list = list.filter((o) => o.state === state);
+        if (searchText && searchText.trim() !== '') {
+          const term = searchText.trim().toLowerCase();
+          list = list.filter((o) =>
+            (o.name || '').toLowerCase().includes(term) ||
+            (Array.isArray(o.partner_id) ? (o.partner_id[1] || '').toLowerCase().includes(term) : false)
+          );
+        }
+        return list;
+      }
+    } catch (_) {}
+    return [];
+  }
+};
+
+export const fetchPurchaseOrderDetailOdoo = async (orderId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'purchase.order', method: 'read', args: [[orderId]],
+          kwargs: {
+            fields: ['id', 'name', 'partner_id', 'state', 'amount_total', 'amount_untaxed', 'amount_tax', 'date_order', 'date_planned', 'currency_id', 'partner_ref', 'company_id', 'order_line', 'notes', 'picking_type_id'],
+          },
+        },
+      },
+      { headers }
+    );
+    if (response.data.error) {
+      console.error('[PurchaseOrderDetailOdoo] error:', response.data.error?.data?.message);
+      return null;
+    }
+    const record = (response.data.result || [])[0];
+    if (!record) return null;
+
+    // Fetch order line details
+    if (record.order_line && record.order_line.length > 0) {
+      try {
+        const linesResp = await axios.post(
+          `${baseUrl}/web/dataset/call_kw`,
+          {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'purchase.order.line',
+              method: 'read',
+              args: [record.order_line],
+              kwargs: { fields: ['id', 'product_id', 'name', 'product_qty', 'price_unit', 'taxes_id', 'price_subtotal', 'price_total'] },
+            },
+          },
+          { headers }
+        );
+        record.order_lines_detail = linesResp.data?.result || [];
+      } catch (_) { record.order_lines_detail = []; }
+    } else {
+      record.order_lines_detail = [];
+    }
+
+    try { await AsyncStorage.setItem(`@cache:purchaseOrderDetailOdoo:${orderId}`, JSON.stringify(record)); } catch (_) {}
+    return record;
+  } catch (error) {
+    console.error('[PurchaseOrderDetailOdoo] fetch error:', error?.message || error);
+    try {
+      const cached = await AsyncStorage.getItem(`@cache:purchaseOrderDetailOdoo:${orderId}`);
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
+    return null;
+  }
+};
+
+// Create a purchase.order (RFQ) in Odoo. Online-only for now; offline comes later.
+//
+// `orderLines` shape:
+//   [{ product_id, product_qty, price_unit, taxes_id: [id, ...] }, ...]
+export const createPurchaseOrderOdoo = async ({ partnerId, orderLines, partnerRef, dateOrder, datePlanned, currencyId, pickingTypeId, notes }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const lines = (orderLines || []).map((l) => [0, 0, {
+      product_id: l.product_id,
+      product_qty: l.product_qty || l.qty || 1,
+      price_unit: l.price_unit || 0,
+      ...(l.name ? { name: l.name } : {}),
+      ...(Array.isArray(l.taxes_id) && l.taxes_id.length > 0 ? { taxes_id: [[6, 0, l.taxes_id]] } : {}),
+    }]);
+    const vals = { partner_id: partnerId, order_line: lines };
+    if (partnerRef) vals.partner_ref = partnerRef;
+    if (dateOrder) vals.date_order = dateOrder;
+    if (datePlanned) vals.date_planned = datePlanned;
+    if (currencyId) vals.currency_id = currencyId;
+    if (pickingTypeId) vals.picking_type_id = pickingTypeId;
+    if (notes) vals.notes = notes;
+
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'purchase.order', method: 'create', args: [vals], kwargs: {} },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to create purchase order');
+    return response.data.result;
+  } catch (error) {
+    console.error('[createPurchaseOrderOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Update an existing purchase.order. Same shape as create, minus lines (use
+// separate line helpers when you need to edit lines in place).
+export const updatePurchaseOrderOdoo = async (orderId, { partnerId, partnerRef, dateOrder, datePlanned, notes }) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const vals = {};
+    if (partnerId !== undefined) vals.partner_id = partnerId;
+    if (partnerRef !== undefined) vals.partner_ref = partnerRef;
+    if (dateOrder !== undefined) vals.date_order = dateOrder;
+    if (datePlanned !== undefined) vals.date_planned = datePlanned;
+    if (notes !== undefined) vals.notes = notes;
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'purchase.order', method: 'write', args: [[Number(orderId)], vals], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to update purchase order');
+    return response.data.result;
+  } catch (error) {
+    console.error('[updatePurchaseOrderOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Mark the RFQ as "sent" (Odoo's state 'sent' — the Send RFQ button).
+export const sendRfqPurchaseOrderOdoo = async (orderId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'purchase.order', method: 'write', args: [[Number(orderId)], { state: 'sent' }], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to send RFQ');
+    return response.data.result;
+  } catch (error) {
+    console.error('[sendRfqPurchaseOrderOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Confirm the RFQ into a Purchase Order (action_confirm → state 'purchase').
+export const confirmPurchaseOrderOdoo = async (orderId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'purchase.order', method: 'button_confirm', args: [[Number(orderId)]], kwargs: {} },
+    }, { headers, timeout: 30000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to confirm purchase order');
+    return response.data.result;
+  } catch (error) {
+    console.error('[confirmPurchaseOrderOdoo] error:', error?.message || error);
+    throw error;
+  }
+};
+
+// Cancel any purchase.order regardless of state (button_cancel).
+export const cancelPurchaseOrderOdoo = async (orderId) => {
+  try {
+    const { headers, baseUrl } = await authenticateOdoo();
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'purchase.order', method: 'button_cancel', args: [[Number(orderId)]], kwargs: {} },
+    }, { headers, timeout: 15000 });
+    if (response.data.error) throw new Error(response.data.error?.data?.message || 'Failed to cancel purchase order');
+    return response.data.result;
+  } catch (error) {
+    console.error('[cancelPurchaseOrderOdoo] error:', error?.message || error);
+    throw error;
   }
 };
 

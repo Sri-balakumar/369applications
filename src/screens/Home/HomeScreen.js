@@ -129,9 +129,9 @@ const HomeScreen = ({ navigation }) => {
               title="Sales Order"
             />
             <ImageContainer
-              onPress={() => navigation.navigate("ServicesScreen")}
+              onPress={() => navigation.navigate("OptionsScreen")}
               backgroundColor="#FF9800"
-              title="Services"
+              title="Options"
             />
             <ImageContainer
               onPress={() => navigation.navigate("ProductCreationForm")}

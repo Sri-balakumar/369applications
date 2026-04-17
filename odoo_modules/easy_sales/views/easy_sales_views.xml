@@ -6,7 +6,7 @@
         <field name="code">easy.sales</field>
         <field name="prefix">ES/%(year)s/</field>
         <field name="padding">5</field>
-        <field name="company_id" ref="base.main_company"/>
+        <field name="company_id" eval="False"/>
     </record>
 
     <record id="easy_sales_form_view" model="ir.ui.view">
@@ -49,10 +49,6 @@
                         </group>
                         <group>
                             <field name="quick_payment_method_id" readonly="state != 'draft'" options="{'no_create': True}" placeholder="Select Payment Method..."/>
-                            <field name="is_credit_payment" invisible="1"/>
-                            <field name="payment_term_id" readonly="state != 'draft'"
-                                   invisible="not is_credit_payment"
-                                   options="{'no_create': True}" placeholder="e.g. Immediate, 15 Days, 30 Days..."/>
                             <field name="warehouse_id" readonly="state != 'draft'"/>
                             <field name="pricelist_id" readonly="state != 'draft'" groups="product.group_product_pricelist"/>
                             <field name="currency_id" groups="base.group_multi_currency" readonly="state != 'draft'"/>
