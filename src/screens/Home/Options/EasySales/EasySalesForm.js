@@ -99,10 +99,11 @@ const EasySalesForm = ({ navigation }) => {
     loadData();
   }, []);
 
-  // Customer selector
+  // Customer selector — filter by the selected warehouse's company
   const openCustomerSelector = () => {
     navigation.navigate('CustomerScreen', {
       selectMode: true,
+      companyId: warehouse?.company_id || null,
       onSelect: (selected) => {
         setCustomer(selected);
       },

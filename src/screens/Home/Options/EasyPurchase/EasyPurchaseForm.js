@@ -179,6 +179,7 @@ const EasyPurchaseForm = ({ navigation }) => {
           value={vendor?.name || vendor?.label || ''}
           onPress={() => navigation.navigate('CustomerScreen', {
             selectMode: true,
+            companyId: warehouse?.company_id || null,
             onSelect: (selected) => { setVendor(selected); },
           })} />
 

@@ -1,14 +1,14 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Alert, ActivityIndicator } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaView } from "@components/containers";
 import { COLORS, FONT_FAMILY } from "@constants/theme";
 import { useAuthStore } from "@stores/auth";
-import { switchCompany } from "@api/services/companyApi";
+import { switchCompany, fetchUserCompanies } from "@api/services/companyApi";
 import { showToastMessage } from "@components/Toast";
 import { LogoutModal } from "@components/Modal";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { CommonActions } from "@react-navigation/native";
+import { CommonActions, useFocusEffect } from "@react-navigation/native";
 
 const ProfileScreen = ({ navigation }) => {
   const userDetails = useAuthStore((state) => state.user);
@@ -32,7 +32,23 @@ const ProfileScreen = ({ navigation }) => {
     { icon: "business", label: "Current Branch", value: userDetails?.company_name || "-", color: "#00897B" },
   ];
 
-  const companies = userDetails?.allowed_companies || [];
+  const [companies, setCompanies] = useState(userDetails?.allowed_companies || []);
+
+  // Refresh companies on every focus so the branch selector always shows for admin
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAdmin || !userDetails?.uid) return;
+      (async () => {
+        try {
+          const data = await fetchUserCompanies(userDetails.uid);
+          if (data?.allowed_companies?.length > 0) {
+            setCompanies(data.allowed_companies);
+            updateUser({ allowed_companies: data.allowed_companies });
+          }
+        } catch (_) {}
+      })();
+    }, [userDetails?.uid, isAdmin])
+  );
 
   const handleSwitchCompany = async (company) => {
     if (company.id === userDetails?.company_id) return;

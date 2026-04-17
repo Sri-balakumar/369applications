@@ -20,17 +20,18 @@ const CustomerScreen = ({ navigation, route }) => {
   const [showContacts, setShowContacts] = useState(false);
   const [editContactId, setEditContactId] = useState(null);
   const isFocused = useIsFocused();
+  const companyId = route?.params?.companyId || null;
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchCustomersOdoo);
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text }),
+    (text) => fetchData({ searchText: text, companyId }),
     500
   );
 
   useFocusEffect(
     useCallback(() => {
-      fetchData({ searchText });
-    }, [searchText])
+      fetchData({ searchText, companyId });
+    }, [searchText, companyId])
   );
 
   useEffect(() => {

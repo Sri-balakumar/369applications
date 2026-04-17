@@ -1835,18 +1835,23 @@ export const fetchCustomers = async ({ offset, limit, searchText }) => {
     throw error;
   }
 };// 🔹 Fetch customers directly from Odoo 19 via JSON-RPC (no mobile field)
-export const fetchCustomersOdoo = async ({ offset = 0, limit = 50, searchText } = {}) => {
+export const fetchCustomersOdoo = async ({ offset = 0, limit = 50, searchText, companyId } = {}) => {
   try {
     // 🔍 Domain for search (optional)
     let domain = [];
 
+    // Company filter — show only global contacts + contacts matching the company
+    if (companyId) {
+      domain.push('|', ['company_id', '=', false], ['company_id', '=', companyId]);
+    }
+
     if (searchText && searchText.trim() !== "") {
       const term = searchText.trim();
-      domain = [
-        "|",
-        ["name", "ilike", term],
-        ["phone", "ilike", term],
-      ];
+      if (domain.length > 0) {
+        domain = ['&', ...domain, '|', ['name', 'ilike', term], ['phone', 'ilike', term]];
+      } else {
+        domain = ['|', ['name', 'ilike', term], ['phone', 'ilike', term]];
+      }
     }
     const headers = await getOdooAuthHeaders();
     const response = await axios.post(
