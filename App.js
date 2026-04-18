@@ -11,6 +11,7 @@ import { Provider } from 'react-native-paper';
 import OfflineSyncService from '@services/OfflineSyncService';
 import CacheWarmer from '@services/CacheWarmer';
 import offlineQueue from '@utils/offlineQueue';
+import { Asset } from 'expo-asset';
 export default function App() {
 
   LogBox.ignoreLogs(["new NativeEventEmitter"]);
@@ -44,6 +45,17 @@ export default function App() {
     // in + online) and again on every offline → online transition, so the
     // user doesn't have to visit each screen to populate offline data.
     CacheWarmer.start();
+
+    // Pre-cache the 369 logo so the confirmation popups (StyledAlertModal,
+    // LogoutModal) can render it offline. In Expo Go / dev client, required
+    // images are normally served over Metro — if the device goes offline
+    // before the image has been rendered once, the <Image> stays blank.
+    // Downloading via expo-asset copies the bundled file to the on-device
+    // cache so subsequent renders resolve from disk.
+    Asset.fromModule(require('@assets/images/logo/logo.png'))
+      .downloadAsync()
+      .catch(() => { /* ignore — nothing we can do if preload fails */ });
+
     return () => {
       OfflineSyncService.stop();
       CacheWarmer.stop();

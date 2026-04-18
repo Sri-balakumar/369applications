@@ -101,6 +101,7 @@ const SaleOrderListScreen = ({ navigation }) => {
   const [invMap, setInvMap] = useState({});
   const [generatingInvoices, setGeneratingInvoices] = useState(false);
   const [isDeviceOnline, setIsDeviceOnline] = useState(false);
+  const [refreshingManually, setRefreshingManually] = useState(false);
 
   // Check online status on focus + subscribe to changes
   useFocusEffect(useCallback(() => {
@@ -161,6 +162,24 @@ const SaleOrderListScreen = ({ navigation }) => {
   }, []);
 
   useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
+
+  // Manual refresh handler wired to the NavigationHeader's refresh icon.
+  // Waits for any pending offline-queued writes to flush before re-fetching,
+  // so the list always shows real Odoo refs instead of offline placeholders.
+  const onHeaderRefresh = async () => {
+    if (refreshingManually) return;
+    if (!(await isOnline())) {
+      showToastMessage('You are offline');
+      return;
+    }
+    setRefreshingManually(true);
+    try {
+      try { await waitForFlush(8000); } catch (_) {}
+      await fetchData();
+    } finally {
+      setRefreshingManually(false);
+    }
+  };
 
   const filteredData = activeFilter === 'all'
     ? data
@@ -277,7 +296,12 @@ const SaleOrderListScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView>
-      <NavigationHeader title="Sales Orders" onBackPress={() => navigation.goBack()} />
+      <NavigationHeader
+        title="Sales Orders"
+        onBackPress={() => navigation.goBack()}
+        refreshIcon
+        refreshPress={onHeaderRefresh}
+      />
       <OfflineBanner message="OFFLINE MODE — showing cached orders" onOnline={() => { setIsDeviceOnline(true); fetchData(); }} />
       <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff' }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterRow, { flex: 1, borderBottomWidth: 0 }]} contentContainerStyle={styles.filterRowContent}>
