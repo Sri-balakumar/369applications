@@ -116,19 +116,24 @@ class HrAttendance(models.Model):
                 rec.is_first_checkin_of_day = True
                 rec.checkin_session = '1'
             elif shift_type == 'split' and len(earlier) >= 1:
-                # For split shift: check if this is the first check-in of session 2
-                # Use session 1 end time as the boundary — anything after S1 end is S2
+                # For split shift: check if this is the first check-in of session 2.
+                # Boundary = min(session 1 end, session 2 start). Using min lets
+                # us handle configs where session 2 starts before session 1 ends
+                # (overlapping or reversed configs) without silently dropping
+                # every session-2 check-in.
                 session1_end = config_data.get('office_end_hour', 14.0)
+                session2_start = config_data.get('office_start_hour_2', 14.0)
+                boundary = min(session1_end, session2_start)
                 local_hour = local_dt.hour + local_dt.minute / 60.0
 
-                # If check-in is at or after session 1 end time, it belongs to session 2
-                if local_hour >= session1_end:
+                # If check-in is at or after the boundary, it belongs to session 2
+                if local_hour >= boundary:
                     # Check if no earlier check-in was already in session 2 territory
                     has_session2 = False
                     for e in earlier:
                         e_local = pytz.utc.localize(e.check_in).astimezone(tz)
                         e_hour = e_local.hour + e_local.minute / 60.0
-                        if e_hour >= session1_end:
+                        if e_hour >= boundary:
                             has_session2 = True
                             break
 

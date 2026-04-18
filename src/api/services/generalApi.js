@@ -634,6 +634,7 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
               "standard_price",  // cost price
               "product_tmpl_id", // product template ID (for pricelist matching)
               "default_code",    // internal reference
+              "barcode",         // EAN/UPC — needed so offline scans can match
               "uom_id",          // many2one [id, name]
               "image_128",       // product image
               "taxes_id",        // customer taxes
@@ -861,6 +862,7 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
         list_price: p.list_price || 0,
         standard_price: p.standard_price || 0,
         code: p.default_code || "",
+        barcode: p.barcode || "",
         uom: p.uom_id
           ? { uom_id: p.uom_id[0], uom_name: p.uom_id[1] }
           : null,
@@ -961,8 +963,65 @@ export const fetchProductsOdoo = async ({ offset, limit, searchText, categoryId,
   }
 };
 
+// Search the AsyncStorage product caches (populated by fetchProductsOdoo) for
+// a barcode or default_code match. Returns [match] or [] — never throws.
+const _findProductInCacheByBarcode = async (barcode) => {
+  const target = String(barcode || '').trim().toLowerCase();
+  if (!target) return [];
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const productKeys = allKeys.filter((k) => k.startsWith('@cache:products') && !k.includes('Detail'));
+    for (const key of productKeys) {
+      try {
+        const raw = await AsyncStorage.getItem(key);
+        if (!raw) continue;
+        const list = JSON.parse(raw);
+        const match = list.find((p) => {
+          const code = p?.code != null ? String(p.code).trim().toLowerCase() : '';
+          const bc = p?.barcode != null ? String(p.barcode).trim().toLowerCase() : '';
+          return (code && code === target) || (bc && bc === target);
+        });
+        if (match) {
+          console.log('[fetchProductByBarcodeOdoo] Offline match in', key, 'id:', match.id);
+          return [match];
+        }
+      } catch (_) {}
+    }
+    // Last-resort: search per-product detail caches — individual products
+    // viewed in detail get written to @cache:productDetail:<id> with their
+    // barcode, so a scanned product that was previously opened online can
+    // still be resolved even if its category list isn't cached.
+    const detailKeys = allKeys.filter((k) => k.startsWith('@cache:productDetail:'));
+    for (const key of detailKeys) {
+      try {
+        const raw = await AsyncStorage.getItem(key);
+        if (!raw) continue;
+        const p = JSON.parse(raw);
+        const code = p?.code != null ? String(p.code).trim().toLowerCase() : '';
+        const bc = p?.barcode != null ? String(p.barcode).trim().toLowerCase() : '';
+        if ((code && code === target) || (bc && bc === target)) {
+          console.log('[fetchProductByBarcodeOdoo] Offline match in detail cache', key, 'id:', p.id);
+          return [p];
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return [];
+};
+
 // Fetch product by barcode from Odoo
 export const fetchProductByBarcodeOdoo = async (barcode) => {
+  // Offline short-circuit — skip the axios call entirely and use the same
+  // cache that the online list view writes to. This matches how the online
+  // flow resolves a scanned barcode (search cached products → return match),
+  // just without going through Odoo.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      return await _findProductInCacheByBarcode(barcode);
+    }
+  } catch (_) { /* fall through to online path */ }
+
   try {
     const headers = await getOdooAuthHeaders();
     const response = await axios.post(
@@ -1067,28 +1126,42 @@ export const fetchProductByBarcodeOdoo = async (barcode) => {
     });
   } catch (error) {
     console.error("fetchProductByBarcodeOdoo error:", error);
-    // Offline fallback — search cached product lists by barcode / default_code.
-    try {
-      const allKeys = await AsyncStorage.getAllKeys();
-      const productKeys = allKeys.filter((k) => k.startsWith('@cache:products') && !k.includes('Detail'));
-      for (const key of productKeys) {
-        try {
-          const raw = await AsyncStorage.getItem(key);
-          if (!raw) continue;
-          const list = JSON.parse(raw);
-          const match = list.find((p) =>
-            (p.code && String(p.code).toLowerCase() === String(barcode).toLowerCase()) ||
-            (p.barcode && String(p.barcode).toLowerCase() === String(barcode).toLowerCase())
-          );
-          if (match) {
-            console.log('[fetchProductByBarcodeOdoo] Offline match found in', key, 'id:', match.id);
-            return [match];
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
+    // Network error fallback — try the same offline cache path.
+    const offline = await _findProductInCacheByBarcode(barcode);
+    if (offline.length > 0) return offline;
     throw error;
   }
+};
+
+// Upsert a product into the cached product lists so an offline barcode scan
+// can find it immediately after the product is created/edited — without
+// waiting for a full fetchProductsOdoo refresh. Safe to call after a
+// successful product save even if we're offline (the product shape coming
+// back from create/update matches the cached list shape).
+export const upsertProductInBarcodeCache = async (product) => {
+  if (!product || !product.id) return;
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const productKeys = allKeys.filter((k) => k.startsWith('@cache:products') && !k.includes('Detail'));
+    // Always write to the main list so an "All" scan finds it, even if the
+    // product has no category cache yet.
+    if (!productKeys.includes('@cache:products')) productKeys.push('@cache:products');
+    for (const key of productKeys) {
+      try {
+        const raw = await AsyncStorage.getItem(key);
+        const list = raw ? JSON.parse(raw) : [];
+        const idx = list.findIndex((p) => p.id === product.id);
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...product };
+        } else if (key === '@cache:products') {
+          list.unshift(product);
+        } else {
+          continue; // don't add to a category cache we can't verify membership for
+        }
+        await AsyncStorage.setItem(key, JSON.stringify(list));
+      } catch (_) {}
+    }
+  } catch (_) {}
 };
 
 // Fetch users from Odoo using JSON-RPC (res.users model)
@@ -11604,6 +11677,7 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
           list_price: parseFloat(listPrice) || 0,
           standard_price: parseFloat(standardPrice) || 0,
           code: defaultCode || '',
+          barcode: barcode || '',
           uom: uomId ? { uom_id: uomId, uom_name: '' } : null,
           tax_percent: 0,
           taxes: [],
@@ -11842,6 +11916,42 @@ export const updateProductOdoo = async (productId, { name, posCategoryId, categI
       console.error('[updateProductOdoo] Odoo error:', errMsg);
       throw new Error(errMsg);
     }
+
+    // Patch the cached product lists so an offline scan picks up the new
+    // barcode / code immediately without waiting for a product-list refresh.
+    try {
+      const patch = {};
+      if (name !== undefined && name !== '') patch.product_name = name;
+      if (listPrice !== undefined && listPrice !== '') { patch.price = parseFloat(listPrice) || 0; patch.list_price = parseFloat(listPrice) || 0; }
+      if (standardPrice !== undefined && standardPrice !== '') patch.standard_price = parseFloat(standardPrice) || 0;
+      if (barcode !== undefined) patch.barcode = barcode || '';
+      if (defaultCode !== undefined) patch.code = defaultCode || '';
+      if (Object.keys(patch).length > 0) {
+        const keys = await AsyncStorage.getAllKeys();
+        const productKeys = keys.filter(k => k.startsWith('@cache:products') && !k.startsWith('@cache:productDetail'));
+        for (const key of productKeys) {
+          try {
+            const raw = await AsyncStorage.getItem(key);
+            if (!raw) continue;
+            const list = JSON.parse(raw);
+            const idx = list.findIndex(p => p.id === Number(productId) || p.id === productId);
+            if (idx >= 0) {
+              list[idx] = { ...list[idx], ...patch };
+              await AsyncStorage.setItem(key, JSON.stringify(list));
+            }
+          } catch (_) {}
+        }
+        try {
+          const detailKey = `@cache:productDetail:${productId}`;
+          const raw = await AsyncStorage.getItem(detailKey);
+          if (raw) {
+            const prev = JSON.parse(raw);
+            await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, ...patch }));
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
     return response.data.result;
   } catch (error) {
     console.error('[updateProductOdoo] error:', error?.message || error);

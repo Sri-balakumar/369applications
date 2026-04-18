@@ -109,180 +109,254 @@ const getDistanceMeters = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
-// Get current device location
-const getCurrentLocation = async () => {
+// Cache the permission check across the session so repeat check-ins don't
+// pay the permission round-trip.
+let _permissionGranted = null;
+
+const _ensureLocationPermission = async () => {
+  if (_permissionGranted === true) return true;
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      return { success: false, error: 'Location permission denied' };
-    }
-
-    const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
-    });
-
-    return {
-      success: true,
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-    };
-  } catch (error) {
-    console.error('[Attendance] Error getting location:', error);
-    return { success: false, error: 'Failed to get current location' };
+    _permissionGranted = status === 'granted';
+    return _permissionGranted;
+  } catch (e) {
+    _permissionGranted = false;
+    return false;
   }
 };
 
-// Get workplace location from Odoo (company or employee work location)
-export const getWorkplaceLocation = async (userId) => {
-  console.log('[Attendance] Getting workplace location for user:', userId);
+// Fire-and-forget: warm the OS GPS cache so the next call hits fast.
+const _warmGpsCache = () => {
+  Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+    .catch(() => { /* ignore */ });
+};
 
-  // Helper that caches every successful workplace fetch keyed by user id.
-  const _ok = (val) => { cachePut('wp', userId, val); return val; };
+// Get current device location — fast path first, bounded wait, never hang.
+const getCurrentLocation = async () => {
+  const granted = await _ensureLocationPermission();
+  if (!granted) {
+    return { success: false, error: 'Location permission denied' };
+  }
 
+  // 1) Fast path: recent OS-cached fix (returns in milliseconds).
   try {
-    const headers = await getOdooAuthHeaders();
+    const last = await Location.getLastKnownPositionAsync({
+      maxAge: 60_000,
+      requiredAccuracy: 200,
+    });
+    if (last?.coords) {
+      _warmGpsCache();
+      return {
+        success: true,
+        latitude: last.coords.latitude,
+        longitude: last.coords.longitude,
+        fromCache: true,
+      };
+    }
+  } catch (_) { /* fall through */ }
 
-    // First try to get employee's work location
-    const employeeResponse = await axios.post(
+  // 2) Bounded live fetch: 3s timeout, Balanced accuracy (enough for 100m geofence).
+  try {
+    const live = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('gps-timeout')), 3000)
+      ),
+    ]);
+    if (live?.coords) {
+      return {
+        success: true,
+        latitude: live.coords.latitude,
+        longitude: live.coords.longitude,
+      };
+    }
+  } catch (err) {
+    // 3) Last-resort: any known fix, regardless of age.
+    try {
+      const anyLast = await Location.getLastKnownPositionAsync({});
+      if (anyLast?.coords) {
+        return {
+          success: true,
+          latitude: anyLast.coords.latitude,
+          longitude: anyLast.coords.longitude,
+          fromCache: true,
+          stale: true,
+        };
+      }
+    } catch (_) { /* ignore */ }
+    console.error('[Attendance] Error getting location:', err?.message);
+    return { success: false, error: 'Location timed out. Please try again.' };
+  }
+
+  return { success: false, error: 'Failed to get current location' };
+};
+
+// Exposed so the screen can pre-warm caches on mount / verification.
+export const prewarmLocation = () => {
+  _ensureLocationPermission().then((ok) => { if (ok) _warmGpsCache(); });
+};
+
+// Network fetch for workplace location — always hits Odoo. 4s timeout per call.
+const _fetchWorkplaceLocationFromOdoo = async (userId) => {
+  const _ok = (val) => { cachePut('wp', userId, val); return val; };
+  const headers = await getOdooAuthHeaders();
+  const reqCfg = { headers, timeout: 4000 };
+
+  const employeeResponse = await axios.post(
+    `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+    {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'hr.employee',
+        method: 'search_read',
+        args: [[['user_id', '=', userId]]],
+        kwargs: {
+          fields: ['id', 'name', 'work_location_id', 'company_id'],
+          limit: 1,
+        },
+      },
+    },
+    reqCfg
+  );
+
+  const employee = employeeResponse.data?.result?.[0];
+  if (!employee) {
+    return { success: false, error: 'No employee record found' };
+  }
+
+  if (employee.work_location_id) {
+    const workLocationResponse = await axios.post(
       `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          model: 'hr.employee',
+          model: 'hr.work.location',
           method: 'search_read',
-          args: [[['user_id', '=', userId]]],
+          args: [[['id', '=', employee.work_location_id[0]]]],
           kwargs: {
-            fields: ['id', 'name', 'work_location_id', 'company_id'],
+            fields: ['id', 'name', 'address_id'],
             limit: 1,
           },
         },
       },
-      { headers }
+      reqCfg
     );
 
-    const employee = employeeResponse.data?.result?.[0];
-    if (!employee) {
-      return { success: false, error: 'No employee record found' };
-    }
-
-    // Try to get work location coordinates
-    if (employee.work_location_id) {
-      const workLocationResponse = await axios.post(
+    const workLocation = workLocationResponse.data?.result?.[0];
+    if (workLocation?.address_id) {
+      const partnerResponse = await axios.post(
         `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
           params: {
-            model: 'hr.work.location',
+            model: 'res.partner',
             method: 'search_read',
-            args: [[['id', '=', employee.work_location_id[0]]]],
+            args: [[['id', '=', workLocation.address_id[0]]]],
             kwargs: {
-              fields: ['id', 'name', 'address_id'],
+              fields: ['id', 'name', 'partner_latitude', 'partner_longitude'],
               limit: 1,
             },
           },
         },
-        { headers }
+        reqCfg
       );
 
-      const workLocation = workLocationResponse.data?.result?.[0];
-      if (workLocation?.address_id) {
-        // Get partner address with coordinates
-        const partnerResponse = await axios.post(
-          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
-          {
-            jsonrpc: '2.0',
-            method: 'call',
-            params: {
-              model: 'res.partner',
-              method: 'search_read',
-              args: [[['id', '=', workLocation.address_id[0]]]],
-              kwargs: {
-                fields: ['id', 'name', 'partner_latitude', 'partner_longitude'],
-                limit: 1,
-              },
-            },
-          },
-          { headers }
-        );
-
-        const partner = partnerResponse.data?.result?.[0];
-        if (partner?.partner_latitude && partner?.partner_longitude) {
-          return _ok({
-            success: true,
-            latitude: partner.partner_latitude,
-            longitude: partner.partner_longitude,
-            locationName: workLocation.name || partner.name,
-          });
-        }
+      const partner = partnerResponse.data?.result?.[0];
+      if (partner?.partner_latitude && partner?.partner_longitude) {
+        return _ok({
+          success: true,
+          latitude: partner.partner_latitude,
+          longitude: partner.partner_longitude,
+          locationName: workLocation.name || partner.name,
+        });
       }
     }
+  }
 
-    // Fallback: Try to get company address coordinates
-    if (employee.company_id) {
-      const companyResponse = await axios.post(
+  if (employee.company_id) {
+    const companyResponse = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.company',
+          method: 'search_read',
+          args: [[['id', '=', employee.company_id[0]]]],
+          kwargs: {
+            fields: ['id', 'name', 'partner_id'],
+            limit: 1,
+          },
+        },
+      },
+      reqCfg
+    );
+
+    const company = companyResponse.data?.result?.[0];
+    if (company?.partner_id) {
+      const partnerResponse = await axios.post(
         `${ODOO_BASE_URL()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
           params: {
-            model: 'res.company',
+            model: 'res.partner',
             method: 'search_read',
-            args: [[['id', '=', employee.company_id[0]]]],
+            args: [[['id', '=', company.partner_id[0]]]],
             kwargs: {
-              fields: ['id', 'name', 'partner_id'],
+              fields: ['id', 'name', 'partner_latitude', 'partner_longitude'],
               limit: 1,
             },
           },
         },
-        { headers }
+        reqCfg
       );
 
-      const company = companyResponse.data?.result?.[0];
-      if (company?.partner_id) {
-        const partnerResponse = await axios.post(
-          `${ODOO_BASE_URL()}/web/dataset/call_kw`,
-          {
-            jsonrpc: '2.0',
-            method: 'call',
-            params: {
-              model: 'res.partner',
-              method: 'search_read',
-              args: [[['id', '=', company.partner_id[0]]]],
-              kwargs: {
-                fields: ['id', 'name', 'partner_latitude', 'partner_longitude'],
-                limit: 1,
-              },
-            },
-          },
-          { headers }
-        );
-
-        const partner = partnerResponse.data?.result?.[0];
-        if (partner?.partner_latitude && partner?.partner_longitude) {
-          return _ok({
-            success: true,
-            latitude: partner.partner_latitude,
-            longitude: partner.partner_longitude,
-            locationName: company.name,
-          });
-        }
+      const partner = partnerResponse.data?.result?.[0];
+      if (partner?.partner_latitude && partner?.partner_longitude) {
+        return _ok({
+          success: true,
+          latitude: partner.partner_latitude,
+          longitude: partner.partner_longitude,
+          locationName: company.name,
+        });
       }
     }
+  }
 
-    return {
-      success: false,
-      error: 'No workplace coordinates configured. Please contact admin.',
-    };
+  return {
+    success: false,
+    error: 'No workplace coordinates configured. Please contact admin.',
+  };
+};
+
+// Get workplace location — stale-while-revalidate. Returns cached value
+// instantly if present, triggers a background refresh for next time.
+export const getWorkplaceLocation = async (userId) => {
+  console.log('[Attendance] Getting workplace location for user:', userId);
+
+  const cached = await cacheGet('wp', userId);
+
+  if (cached?.success) {
+    // Kick a background refresh so the next check-in has fresh coords.
+    _fetchWorkplaceLocationFromOdoo(userId).catch((e) => {
+      console.log('[Attendance] Background workplace refresh failed:', e?.message);
+    });
+    return { ...cached, fromCache: true };
+  }
+
+  try {
+    return await _fetchWorkplaceLocationFromOdoo(userId);
   } catch (error) {
     console.error('[Attendance] Error getting workplace location:', error?.message);
-    // Offline / unreachable → use the last cached workplace for this user.
     if (_isNetworkLikeErr(error)) {
-      const cached = await cacheGet('wp', userId);
-      if (cached) {
+      const fallback = await cacheGet('wp', userId);
+      if (fallback) {
         console.log('[Attendance] Using cached workplace for user:', userId);
-        return { ...cached, fromCache: true };
+        return { ...fallback, fromCache: true };
       }
     }
     return { success: false, error: 'Failed to get workplace location' };
@@ -294,8 +368,13 @@ export const verifyAttendanceLocation = async (userId) => {
   console.log('[Attendance] Verifying attendance location for user:', userId);
 
   try {
-    // Get current location
-    const currentLocation = await getCurrentLocation();
+    // Run GPS fetch and workplace lookup in parallel — they don't depend on
+    // each other, so the total wait is max(gps, workplace) not gps + workplace.
+    const [currentLocation, workplaceLocation] = await Promise.all([
+      getCurrentLocation(),
+      getWorkplaceLocation(userId),
+    ]);
+
     if (!currentLocation.success) {
       return {
         success: false,
@@ -304,8 +383,6 @@ export const verifyAttendanceLocation = async (userId) => {
       };
     }
 
-    // Get workplace location
-    const workplaceLocation = await getWorkplaceLocation(userId);
     if (!workplaceLocation.success) {
       return {
         success: false,

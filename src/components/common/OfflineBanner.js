@@ -45,7 +45,7 @@ const OfflineBanner = ({ message = 'OFFLINE MODE — changes will sync automatic
 
   return (
     <View style={styles.banner}>
-      <MaterialIcons name="cloud-off" size={16} color="#7a4f00" />
+      <MaterialIcons name="wifi-off" size={16} color="#7a4f00" />
       <Text style={styles.text}>{message}</Text>
     </View>
   );

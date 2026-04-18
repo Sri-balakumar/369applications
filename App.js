@@ -9,6 +9,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'; // Import
 import StackNavigator from '@navigation/StackNavigator';
 import { Provider } from 'react-native-paper';
 import OfflineSyncService from '@services/OfflineSyncService';
+import CacheWarmer from '@services/CacheWarmer';
 import offlineQueue from '@utils/offlineQueue';
 export default function App() {
 
@@ -39,7 +40,14 @@ export default function App() {
     }).catch(() => {});
 
     OfflineSyncService.start();
-    return () => OfflineSyncService.stop();
+    // Pull-side background worker: warms every list cache on boot (if logged
+    // in + online) and again on every offline → online transition, so the
+    // user doesn't have to visit each screen to populate offline data.
+    CacheWarmer.start();
+    return () => {
+      OfflineSyncService.stop();
+      CacheWarmer.stop();
+    };
   }, []);
 
   return (

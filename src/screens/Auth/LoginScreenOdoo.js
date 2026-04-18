@@ -29,6 +29,7 @@ import { useAuthStore } from "@stores/auth";
 import { showToastMessage } from "@components/Toast";
 import { Checkbox } from "react-native-paper";
 import { startLocationTracking } from "@services/LocationTrackingService";
+import CacheWarmer from "@services/CacheWarmer";
 import * as Location from 'expo-location';
 
 import API_BASE_URL from "@api/config";
@@ -339,6 +340,14 @@ const LoginScreenOdoo = () => {
             if (userData.uid && !userData.is_admin) {
               startLocationTracking(userData.uid);
             }
+            // Fire-and-forget: pre-populate every AsyncStorage list cache so
+            // offline screens (Products, Easy Sales, Sale Orders, Customers,
+            // barcode scan, etc.) work without the user visiting each screen.
+            CacheWarmer.warmAll({
+              userId: userData.uid,
+              companyId: userData.company_id,
+              force: true,
+            });
             navigation.navigate("AppNavigator");
           } else {
             showToastMessage("Invalid Odoo credentials or login failed");

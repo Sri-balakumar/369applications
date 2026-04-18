@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform, Dimensions, Modal, Alert, TextInput, ScrollView } from 'react-native';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { StyledAlertModal } from '@components/Modal';
+import { View, Text, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform, Dimensions, Modal, TextInput, ScrollView } from 'react-native';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { RoundedScrollContainer } from '@components/containers';
@@ -7,7 +8,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { OverlayLoader } from '@components/Loader';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
-import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests, getWorkplaceLocation } from '@services/AttendanceService';
+import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests, getWorkplaceLocation, prewarmLocation } from '@services/AttendanceService';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { MaterialIcons, Feather, Ionicons } from '@expo/vector-icons';
 import { Camera } from 'expo-camera';
@@ -80,6 +81,33 @@ const UserAttendanceScreen = ({ navigation }) => {
   const [isCapturing, setIsCapturing] = useState(false);
   const cameraRef = useRef(null);
 
+  // Single styled alert modal state for all in-screen confirmations/errors.
+  // Use showAlert({ message, confirmText?, cancelText?, destructive?, onConfirm?, onCancel? })
+  // to open; buttons auto-close the modal after firing their callback.
+  const [alertModal, setAlertModal] = useState({
+    visible: false,
+    message: '',
+    confirmText: 'OK',
+    cancelText: '',
+    destructive: false,
+    onConfirm: null,
+    onCancel: null,
+  });
+  const hideAlert = useCallback(() => {
+    setAlertModal((s) => ({ ...s, visible: false }));
+  }, []);
+  const showAlert = useCallback((opts) => {
+    setAlertModal({
+      visible: true,
+      message: opts?.message || '',
+      confirmText: opts?.confirmText || 'OK',
+      cancelText: opts?.cancelText || '',
+      destructive: !!opts?.destructive,
+      onConfirm: opts?.onConfirm || null,
+      onCancel: opts?.onCancel || null,
+    });
+  }, []);
+
   // Track device connectivity so we can show an OFFLINE banner and disable
   // network-only features. Subscribes via the same poll-based helper used by
   // OfflineSyncService — fires when state flips between online/offline.
@@ -121,6 +149,21 @@ const UserAttendanceScreen = ({ navigation }) => {
     };
     fetchDeviceId();
   }, []);
+
+  // Pre-warm GPS + workplace cache as soon as the employee is verified, so the
+  // location step on Check In / Check Out returns in milliseconds instead of
+  // blocking on a cold GPS lock and 3 serial Odoo calls.
+  useEffect(() => {
+    if (!isVerified) return;
+    if (offline) return;
+    const uid = verifiedEmployee?.userId || currentUser?.uid;
+    if (!uid) return;
+
+    prewarmLocation();
+    getWorkplaceLocation(uid).catch((e) => {
+      console.log('[Attendance] Prewarm workplace failed:', e?.message);
+    });
+  }, [isVerified, verifiedEmployee, currentUser, offline]);
 
   // Auto-refresh WFH status every 5 seconds when waiting for approval
   useEffect(() => {
@@ -396,23 +439,20 @@ const UserAttendanceScreen = ({ navigation }) => {
       return;
     }
 
-    Alert.alert(
-      'Confirm Check In',
-      `Are you sure you want to check in at ${formatTimeOnly(new Date())}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: async () => {
-            setLoading(true);
-            const cameraOpened = await openCamera('check_in');
-            if (!cameraOpened) {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
+    showAlert({
+      message: `Are you sure you want to check in at ${formatTimeOnly(new Date())}?`,
+      confirmText: 'YES',
+      cancelText: 'NO',
+      onConfirm: async () => {
+        hideAlert();
+        setLoading(true);
+        const cameraOpened = await openCamera('check_in');
+        if (!cameraOpened) {
+          setLoading(false);
+        }
+      },
+      onCancel: hideAlert,
+    });
   };
 
   const processCheckIn = async (photoBase64) => {
@@ -420,14 +460,14 @@ const UserAttendanceScreen = ({ navigation }) => {
       const locationResult = await verifyAttendanceLocation(verifiedEmployee.userId || currentUser?.uid);
 
       if (!locationResult.success) {
-        Alert.alert('Location Error', locationResult.error || 'Location verification failed');
+        showAlert({ message: locationResult.error || 'Location verification failed' });
         setLocationStatus({ verified: false, error: locationResult.error });
         setLoading(false);
         return;
       }
 
       if (!locationResult.withinRange) {
-        Alert.alert('Out of Range', `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}. Must be within ${locationResult.threshold}m.`);
+        showAlert({ message: `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}. Must be within ${locationResult.threshold}m.` });
         setLocationStatus({
           verified: false,
           distance: locationResult.distance,
@@ -491,20 +531,23 @@ const UserAttendanceScreen = ({ navigation }) => {
           employeeName: result.employeeName,
         });
 
-        // Check if employee is late and prompt for reason
+        // Check if the just-created check-in is late and prompt for reason.
+        // Target the record we just created (by attendanceId) — not "first of
+        // the day" — so the popup also fires for split-shift session-2 and any
+        // subsequent late check-in, per the Odoo late config.
         try {
           const lateResult = await getTodayAttendanceWithLateInfo(verifiedEmployee.id);
           if (lateResult.success && lateResult.records.length > 0) {
-            const firstCheckin = lateResult.records.find(r => r.isFirstCheckinOfDay);
-            if (firstCheckin && firstCheckin.isLate) {
+            const justCreated = lateResult.records.find(r => r.id === result.attendanceId);
+            if (justCreated && justCreated.isLate) {
               setLateInfo({
                 isLate: true,
-                lateMinutes: firstCheckin.lateMinutes,
-                lateMinutesDisplay: firstCheckin.lateMinutesDisplay,
-                lateSequence: firstCheckin.lateSequence,
-                deductionAmount: firstCheckin.deductionAmount,
+                lateMinutes: justCreated.lateMinutes,
+                lateMinutesDisplay: justCreated.lateMinutesDisplay,
+                lateSequence: justCreated.lateSequence,
+                deductionAmount: justCreated.deductionAmount,
               });
-              setPendingLateAttendanceId(firstCheckin.id);
+              setPendingLateAttendanceId(justCreated.id);
               setShowLateReasonModal(true);
             }
           }
@@ -512,11 +555,11 @@ const UserAttendanceScreen = ({ navigation }) => {
           console.log('[Attendance] Late check skipped:', lateErr?.message);
         }
       } else {
-        Alert.alert('Check-in Failed', result.error || 'Check-in failed');
+        showAlert({ message: result.error || 'Check-in failed' });
       }
     } catch (error) {
       console.error('Check-in error:', error);
-      Alert.alert('Check-in Error', error?.message || 'Failed to check in');
+      showAlert({ message: error?.message || 'Failed to check in' });
     } finally {
       setLoading(false);
     }
@@ -534,45 +577,40 @@ const UserAttendanceScreen = ({ navigation }) => {
       return;
     }
 
-    Alert.alert(
-      'Confirm Check Out',
-      `Are you sure you want to check out at ${formatTimeOnly(new Date())}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          style: 'destructive',
-          onPress: async () => {
-            // Only require fingerprint re-auth if originally verified by fingerprint
-            if (verificationMethod === 'fingerprint') {
-              try {
-                const authResult = await LocalAuthentication.authenticateAsync({
-                  promptMessage: 'Scan fingerprint to check out',
-                  fallbackLabel: 'Use device PIN',
-                  disableDeviceFallback: false,
-                });
+    showAlert({
+      message: `Are you sure you want to check out at ${formatTimeOnly(new Date())}?`,
+      confirmText: 'YES',
+      cancelText: 'NO',
+      destructive: true,
+      onConfirm: async () => {
+        hideAlert();
+        if (verificationMethod === 'fingerprint') {
+          try {
+            const authResult = await LocalAuthentication.authenticateAsync({
+              promptMessage: 'Scan fingerprint to check out',
+              fallbackLabel: 'Use device PIN',
+              disableDeviceFallback: false,
+            });
 
-                if (!authResult.success) {
-                  showToastMessage('Authentication failed');
-                  return;
-                }
-              } catch (error) {
-                console.error('Fingerprint re-auth error:', error);
-                showToastMessage('Authentication failed');
-                return;
-              }
+            if (!authResult.success) {
+              showToastMessage('Authentication failed');
+              return;
             }
-            // PIN users already verified — no re-auth needed
+          } catch (error) {
+            console.error('Fingerprint re-auth error:', error);
+            showToastMessage('Authentication failed');
+            return;
+          }
+        }
 
-            setLoading(true);
-            const cameraOpened = await openCamera('check_out');
-            if (!cameraOpened) {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
+        setLoading(true);
+        const cameraOpened = await openCamera('check_out');
+        if (!cameraOpened) {
+          setLoading(false);
+        }
+      },
+      onCancel: hideAlert,
+    });
   };
 
   const processCheckOut = async (photoBase64) => {
@@ -582,14 +620,14 @@ const UserAttendanceScreen = ({ navigation }) => {
         const locationResult = await verifyAttendanceLocation(verifiedEmployee.userId || currentUser?.uid);
 
         if (!locationResult.success) {
-          Alert.alert('Location Error', locationResult.error || 'Location verification failed');
+          showAlert({ message: locationResult.error || 'Location verification failed' });
           setLocationStatus({ verified: false, error: locationResult.error });
           setLoading(false);
           return;
         }
 
         if (!locationResult.withinRange) {
-          Alert.alert('Out of Range', `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}. Must be within ${locationResult.threshold}m.`);
+          showAlert({ message: `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}. Must be within ${locationResult.threshold}m.` });
           setLocationStatus({
             verified: false,
             distance: locationResult.distance,
@@ -674,11 +712,11 @@ const UserAttendanceScreen = ({ navigation }) => {
         // The whole record is cleared when the user leaves the screen via handleBackPress.
         setTodayAttendance((prev) => prev ? { ...prev, checkOut: result.checkOutTime } : prev);
       } else {
-        Alert.alert('Check-out Failed', result.error || 'Check-out failed');
+        showAlert({ message: result.error || 'Check-out failed' });
       }
     } catch (error) {
       console.error('Check-out error:', error);
-      Alert.alert('Check-out Error', error?.message || 'Failed to check out');
+      showAlert({ message: error?.message || 'Failed to check out' });
     } finally {
       setLoading(false);
     }
@@ -699,32 +737,28 @@ const UserAttendanceScreen = ({ navigation }) => {
       return;
     }
 
-    Alert.alert(
-      'Submit WFH Request',
-      `Submit work from home request for today?\n\nReason: ${wfhReason.trim()}`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Submit',
-          onPress: async () => {
-            setLoading(true);
-            const today = getTodayDateString();
-            const result = await submitWfhRequest(userId, today, wfhReason.trim());
+    showAlert({
+      message: `Submit work from home request for today?\n\nReason: ${wfhReason.trim()}`,
+      confirmText: 'SUBMIT',
+      cancelText: 'CANCEL',
+      onConfirm: async () => {
+        hideAlert();
+        setLoading(true);
+        const today = getTodayDateString();
+        const result = await submitWfhRequest(userId, today, wfhReason.trim());
 
-            if (result.success) {
-              showToastMessage('WFH request submitted for approval!');
-              setWfhReason('');
-              // Refresh requests list
-              const requests = await getMyWfhRequests(userId);
-              setWfhRequests(requests);
-            } else {
-              showToastMessage(result.error || 'Failed to submit WFH request');
-            }
-            setLoading(false);
-          },
-        },
-      ]
-    );
+        if (result.success) {
+          showToastMessage('WFH request submitted for approval!');
+          setWfhReason('');
+          const requests = await getMyWfhRequests(userId);
+          setWfhRequests(requests);
+        } else {
+          showToastMessage(result.error || 'Failed to submit WFH request');
+        }
+        setLoading(false);
+      },
+      onCancel: hideAlert,
+    });
   };
 
   // =============================================
@@ -736,37 +770,34 @@ const UserAttendanceScreen = ({ navigation }) => {
       return;
     }
 
-    Alert.alert(
-      'WFH Check In',
-      `Check in for Work From Home at ${formatTimeOnly(new Date())}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: async () => {
-            setLoading(true);
-            try {
-              const result = await wfhCheckIn(todayWfhRequest.id);
-              if (result.success) {
-                showToastMessage('WFH Check-in successful!');
-                setTodayWfhRequest({
-                  ...todayWfhRequest,
-                  state: 'checked_in',
-                  checkIn: result.checkInTime,
-                });
-              } else {
-                showToastMessage(result.error || 'WFH check-in failed');
-              }
-            } catch (error) {
-              console.error('WFH check-in error:', error);
-              showToastMessage('Failed to check in');
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
+    showAlert({
+      message: `Check in for Work From Home at ${formatTimeOnly(new Date())}?`,
+      confirmText: 'YES',
+      cancelText: 'NO',
+      onConfirm: async () => {
+        hideAlert();
+        setLoading(true);
+        try {
+          const result = await wfhCheckIn(todayWfhRequest.id);
+          if (result.success) {
+            showToastMessage('WFH Check-in successful!');
+            setTodayWfhRequest({
+              ...todayWfhRequest,
+              state: 'checked_in',
+              checkIn: result.checkInTime,
+            });
+          } else {
+            showToastMessage(result.error || 'WFH check-in failed');
+          }
+        } catch (error) {
+          console.error('WFH check-in error:', error);
+          showToastMessage('Failed to check in');
+        } finally {
+          setLoading(false);
+        }
+      },
+      onCancel: hideAlert,
+    });
   };
 
   const handleWfhCheckOut = async () => {
@@ -775,57 +806,53 @@ const UserAttendanceScreen = ({ navigation }) => {
       return;
     }
 
-    Alert.alert(
-      'WFH Check Out',
-      `Check out from Work From Home at ${formatTimeOnly(new Date())}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          style: 'destructive',
-          onPress: async () => {
-            // Only require fingerprint re-auth if originally verified by fingerprint
-            if (verificationMethod === 'fingerprint') {
-              try {
-                const authResult = await LocalAuthentication.authenticateAsync({
-                  promptMessage: 'Scan fingerprint to check out',
-                  fallbackLabel: 'Use device PIN',
-                  disableDeviceFallback: false,
-                });
+    showAlert({
+      message: `Check out from Work From Home at ${formatTimeOnly(new Date())}?`,
+      confirmText: 'YES',
+      cancelText: 'NO',
+      destructive: true,
+      onConfirm: async () => {
+        hideAlert();
+        if (verificationMethod === 'fingerprint') {
+          try {
+            const authResult = await LocalAuthentication.authenticateAsync({
+              promptMessage: 'Scan fingerprint to check out',
+              fallbackLabel: 'Use device PIN',
+              disableDeviceFallback: false,
+            });
 
-                if (!authResult.success) {
-                  showToastMessage('Authentication failed');
-                  return;
-                }
-              } catch (error) {
-                showToastMessage('Authentication failed');
-                return;
-              }
+            if (!authResult.success) {
+              showToastMessage('Authentication failed');
+              return;
             }
+          } catch (error) {
+            showToastMessage('Authentication failed');
+            return;
+          }
+        }
 
-            setLoading(true);
-            try {
-              const result = await wfhCheckOut(todayWfhRequest.id);
-              if (result.success) {
-                showToastMessage('WFH Check-out successful!');
-                setTodayWfhRequest({
-                  ...todayWfhRequest,
-                  state: 'checked_out',
-                  checkOut: result.checkOutTime,
-                });
-              } else {
-                showToastMessage(result.error || 'WFH check-out failed');
-              }
-            } catch (error) {
-              console.error('WFH check-out error:', error);
-              showToastMessage('Failed to check out');
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
+        setLoading(true);
+        try {
+          const result = await wfhCheckOut(todayWfhRequest.id);
+          if (result.success) {
+            showToastMessage('WFH Check-out successful!');
+            setTodayWfhRequest({
+              ...todayWfhRequest,
+              state: 'checked_out',
+              checkOut: result.checkOutTime,
+            });
+          } else {
+            showToastMessage(result.error || 'WFH check-out failed');
+          }
+        } catch (error) {
+          console.error('WFH check-out error:', error);
+          showToastMessage('Failed to check out');
+        } finally {
+          setLoading(false);
+        }
+      },
+      onCancel: hideAlert,
+    });
   };
 
   // =============================================
@@ -1237,56 +1264,55 @@ const UserAttendanceScreen = ({ navigation }) => {
     const toStr = leaveToDate ? formatLeaveDateForOdoo(leaveToDate) : null;
     const typeLabel = LEAVE_TYPES.find(t => t.value === leaveType)?.label || leaveType;
 
-    Alert.alert(
-      'Submit Leave Request',
-      `Type: ${typeLabel}\nFrom: ${formatLeaveDate(leaveFromDate)}\n${leaveToDate ? `To: ${formatLeaveDate(leaveToDate)}` : '(Single day)'}\n\nReason: ${leaveReason.trim()}`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Submit',
-          onPress: async () => {
-            setLoading(true);
-            try {
-              const uid = verifiedEmployee?.userId || currentUser?.uid;
-              const empId = verifiedEmployee?.id || null;
-              const result = await submitLeaveRequest(uid, leaveType, fromStr, isHalfDay ? null : toStr, leaveReason.trim(), empId, isHalfDay);
-              if (result.success) {
-                showToastMessage('Leave request submitted for approval!');
-                setLeaveReason('');
-                setLeaveToDate(null);
-                setLeaveFromDate(new Date());
-                setLeaveType('casual');
-                setIsHalfDay(false);
-                await fetchLeaveHistory();
-                setLeaveTab('history');
-              } else {
-                Alert.alert('Error', result.error || 'Failed to submit');
-              }
-            } catch (error) {
-              Alert.alert('Error', error?.message || 'Failed to submit');
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
+    showAlert({
+      message: `Type: ${typeLabel}\nFrom: ${formatLeaveDate(leaveFromDate)}\n${leaveToDate ? `To: ${formatLeaveDate(leaveToDate)}` : '(Single day)'}\n\nReason: ${leaveReason.trim()}`,
+      confirmText: 'SUBMIT',
+      cancelText: 'CANCEL',
+      onConfirm: async () => {
+        hideAlert();
+        setLoading(true);
+        try {
+          const uid = verifiedEmployee?.userId || currentUser?.uid;
+          const empId = verifiedEmployee?.id || null;
+          const result = await submitLeaveRequest(uid, leaveType, fromStr, isHalfDay ? null : toStr, leaveReason.trim(), empId, isHalfDay);
+          if (result.success) {
+            showToastMessage('Leave request submitted for approval!');
+            setLeaveReason('');
+            setLeaveToDate(null);
+            setLeaveFromDate(new Date());
+            setLeaveType('casual');
+            setIsHalfDay(false);
+            await fetchLeaveHistory();
+            setLeaveTab('history');
+          } else {
+            showAlert({ message: result.error || 'Failed to submit' });
+          }
+        } catch (error) {
+          showAlert({ message: error?.message || 'Failed to submit' });
+        } finally {
+          setLoading(false);
+        }
+      },
+      onCancel: hideAlert,
+    });
   };
 
   const handleLeaveCancel = (requestId) => {
-    Alert.alert('Cancel Leave', 'Are you sure?', [
-      { text: 'No', style: 'cancel' },
-      {
-        text: 'Yes', style: 'destructive',
-        onPress: async () => {
-          setLoading(true);
-          const result = await cancelLeaveRequest(requestId);
-          if (result.success) { showToastMessage('Cancelled'); await fetchLeaveHistory(); }
-          else { showToastMessage(result.error || 'Failed'); }
-          setLoading(false);
-        },
+    showAlert({
+      message: 'Cancel this leave request?',
+      confirmText: 'YES',
+      cancelText: 'NO',
+      destructive: true,
+      onConfirm: async () => {
+        hideAlert();
+        setLoading(true);
+        const result = await cancelLeaveRequest(requestId);
+        if (result.success) { showToastMessage('Cancelled'); await fetchLeaveHistory(); }
+        else { showToastMessage(result.error || 'Failed'); }
+        setLoading(false);
       },
-    ]);
+      onCancel: hideAlert,
+    });
   };
 
   const renderLeaveSection = () => (
@@ -1534,37 +1560,34 @@ const UserAttendanceScreen = ({ navigation }) => {
       return;
     }
     const selected = eligibleLateAttendances.find(r => r.id === selectedWaiverAttendanceId);
-    Alert.alert(
-      'Submit Waiver Request',
-      `Date: ${selected?.date || ''}\nLate: ${formatLateDuration(selected?.lateMinutes, selected?.lateMinutesDisplay)}\nDeduction: ${selected?.deductionAmount || 0}\n\nReason: ${waiverReason.trim()}`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Submit',
-          onPress: async () => {
-            setLoading(true);
-            try {
-              const empId = verifiedEmployee?.id;
-              const result = await submitWaiverRequest(empId, selectedWaiverAttendanceId, waiverReason.trim());
-              if (result.success) {
-                showToastMessage('Waiver request submitted for approval!');
-                setWaiverReason('');
-                setSelectedWaiverAttendanceId(null);
-                await fetchWaiverRequests();
-                await fetchEligibleLateAttendances();
-                setWaiverTab('history');
-              } else {
-                Alert.alert('Error', result.error || 'Failed to submit');
-              }
-            } catch (error) {
-              Alert.alert('Error', error?.message || 'Failed to submit');
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
+    showAlert({
+      message: `Date: ${selected?.date || ''}\nLate: ${formatLateDuration(selected?.lateMinutes, selected?.lateMinutesDisplay)}\nDeduction: ${selected?.deductionAmount || 0}\n\nReason: ${waiverReason.trim()}`,
+      confirmText: 'SUBMIT',
+      cancelText: 'CANCEL',
+      onConfirm: async () => {
+        hideAlert();
+        setLoading(true);
+        try {
+          const empId = verifiedEmployee?.id;
+          const result = await submitWaiverRequest(empId, selectedWaiverAttendanceId, waiverReason.trim());
+          if (result.success) {
+            showToastMessage('Waiver request submitted for approval!');
+            setWaiverReason('');
+            setSelectedWaiverAttendanceId(null);
+            await fetchWaiverRequests();
+            await fetchEligibleLateAttendances();
+            setWaiverTab('history');
+          } else {
+            showAlert({ message: result.error || 'Failed to submit' });
+          }
+        } catch (error) {
+          showAlert({ message: error?.message || 'Failed to submit' });
+        } finally {
+          setLoading(false);
+        }
+      },
+      onCancel: hideAlert,
+    });
   };
 
   // Auto-fetch eligible records & waiver list when entering waiver mode
@@ -1890,7 +1913,7 @@ const UserAttendanceScreen = ({ navigation }) => {
 
       {offline && (
         <View style={styles.offlineBanner}>
-          <MaterialIcons name="cloud-off" size={scale(16)} color="#7a4f00" />
+          <MaterialIcons name="wifi-off" size={scale(16)} color="#7a4f00" />
           <Text style={styles.offlineBannerText}>
             OFFLINE MODE — punches will sync automatically when you reconnect
           </Text>
@@ -2107,6 +2130,23 @@ const UserAttendanceScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Styled alert modal — matches the logout popup design */}
+      <StyledAlertModal
+        isVisible={alertModal.visible}
+        message={alertModal.message}
+        confirmText={alertModal.confirmText}
+        cancelText={alertModal.cancelText}
+        destructive={alertModal.destructive}
+        onConfirm={() => {
+          const cb = alertModal.onConfirm;
+          if (cb) cb(); else hideAlert();
+        }}
+        onCancel={() => {
+          const cb = alertModal.onCancel;
+          if (cb) cb(); else hideAlert();
+        }}
+      />
     </SafeAreaView>
   );
 };

@@ -13,7 +13,7 @@
       "backgroundColor": "#ffffff"
     },
     "assetBundlePatterns": [
-    "**/*"
+      "**/*"
     ],
     "ios": {
       "supportsTablet": true,
@@ -100,7 +100,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "ebe9d448-cb53-4f6d-b06c-4039d0d9d454"
+        "projectId": "f32c9dc4-d9af-4fae-835b-e1aa9c67f292"
       }
     }
   }
