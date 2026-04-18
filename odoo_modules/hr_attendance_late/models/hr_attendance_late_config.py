@@ -312,7 +312,7 @@ def get_config_for_employee(self, employee_id):
             'grace_late_days': config.grace_late_times,
         }
 
-     @api.model
+     after internet connected and fetch @api.model
     def get_config_record_for_employee(self, employee_id):
         employee = self.env['hr.employee'].browse(employee_id)
         if not employee.exists():

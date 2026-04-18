@@ -103,7 +103,7 @@ const EasySalesDetailScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title={record.name || `ES-${record.id}`} onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" />
+      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" onOnline={fetchDetail} />
       <RoundedScrollContainer>
 
         {/* Status Badge */}

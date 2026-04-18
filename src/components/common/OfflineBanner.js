@@ -14,6 +14,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { FONT_FAMILY } from '@constants/theme';
 import networkStatus from '@utils/networkStatus';
+import { waitForFlush } from '@services/OfflineSyncService';
 
 const OfflineBanner = ({ message = 'OFFLINE MODE — changes will sync automatically when you reconnect', onOnline }) => {
   const [offline, setOffline] = useState(false);
@@ -32,10 +33,19 @@ const OfflineBanner = ({ message = 'OFFLINE MODE — changes will sync automatic
       const wasOff = wasOfflineRef.current;
       setOffline(!online);
       wasOfflineRef.current = !online;
-      // When flipping from offline → online, trigger refresh callback
+      // When flipping from offline → online, trigger refresh callback AFTER
+      // the push-side OfflineSyncService finishes uploading queued writes —
+      // so the subsequent pull sees the real Odoo ids + ref numbers instead
+      // of the offline placeholders.
       if (online && wasOff && onOnline) {
-        // Small delay to let sync flush first
-        setTimeout(() => { if (mounted) onOnline(); }, 2000);
+        (async () => {
+          // 1) Give OfflineSyncService's own 500ms debounce a head-start.
+          await new Promise((r) => setTimeout(r, 600));
+          // 2) Wait for the push flush to complete (bounded to 8s).
+          try { await waitForFlush(8000); } catch (_) {}
+          // 3) Pull fresh data now that the server has the real records.
+          if (mounted) onOnline();
+        })();
       }
     });
     return () => { mounted = false; unsubscribe && unsubscribe(); };

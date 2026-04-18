@@ -126,7 +126,7 @@ const PurchaseDetailScreen = ({ navigation, route }) => {
     return (
       <SafeAreaView>
         <NavigationHeader title="Purchase Order" onBackPress={() => navigation.goBack()} />
-        <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" />
+        <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" onOnline={refresh} />
         <RoundedScrollContainer>
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80 }}>
             <Text style={{ color: '#888' }}>Order not found.</Text>
@@ -147,7 +147,7 @@ const PurchaseDetailScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title={record.name || 'Purchase Order'} onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" />
+      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" onOnline={refresh} />
 
       <RoundedScrollContainer contentContainerStyle={{ padding: 14, paddingBottom: 60 }}>
         {/* Status badge */}

@@ -68,7 +68,7 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
     return (
       <SafeAreaView>
         <NavigationHeader title="Easy Purchase" onBackPress={() => navigation.goBack()} />
-        <OfflineBanner />
+        <OfflineBanner onOnline={fetchDetail} />
         <RoundedScrollContainer>
           <View style={{ paddingVertical: 80, alignItems: 'center' }}>
             <Text style={{ color: '#888' }}>Purchase not found.</Text>
@@ -94,7 +94,7 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title={record.name || `EP-${record.id}`} onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" />
+      <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" onOnline={fetchDetail} />
       <RoundedScrollContainer contentContainerStyle={{ padding: 14, paddingBottom: 60 }}>
         {/* Status */}
         <View style={s.statusRow}>

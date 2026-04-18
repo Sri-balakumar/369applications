@@ -18,6 +18,36 @@ let started = false;
 let unsubscribe = null;
 let appStateSub = null;
 let flushing = false;
+
+// Resolves pending `waitForFlush()` callers the moment `flushing` flips
+// back to false. Lets the pull-side auto-refresh (OfflineBanner onOnline,
+// screen-level network subscribers) wait until offline-queued writes have
+// been uploaded, so the subsequent fetch sees the real Odoo ids + names.
+const _flushIdleWaiters = [];
+const _notifyFlushIdle = () => {
+    while (_flushIdleWaiters.length) {
+        try { _flushIdleWaiters.shift()(); } catch (_) {}
+    }
+};
+
+/**
+ * Wait until the offline queue has drained AND no flush is in progress, or
+ * resolve immediately if already idle. Bounded by `timeoutMs` so the UI can
+ * never hang on a stuck flush. Polls every 250 ms because the scheduler's
+ * own 500 ms debounce may start a flush AFTER the caller began waiting —
+ * relying only on the `flushing` flag would let us resolve before the push
+ * has even started.
+ */
+export const waitForFlush = async (timeoutMs = 8000) => {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+        try {
+            const pending = await offlineQueue.getPendingCount();
+            if (pending === 0 && !flushing) return;
+        } catch (_) { return; }
+        await new Promise((r) => setTimeout(r, 250));
+    }
+};
 let retryTimer = null;
 
 const OFFLINE_ID_MAP_KEY = '@offline_id_map';
@@ -505,8 +535,10 @@ const syncItemDirectly = async (item) => {
         return realRecordId;
     }
 
-    // Sale order create (quotation). Supports an optional _confirmAfterCreate
-    // flag which chains action_confirm after the order is created.
+    // Sale order create (quotation). Supports optional _confirmAfterCreate
+    // and _cancelAfterCreate flags which chain action_confirm / action_cancel
+    // after the order is created. _cancelAfterCreate wins if both are set
+    // (user confirmed then cancelled while still offline).
     if (item.model === 'sale.order' && item.operation === 'create') {
         const offlineId = `offline_${item.id}`;
         const existingMap = await readOfflineIdMap();
@@ -514,7 +546,7 @@ const syncItemDirectly = async (item) => {
             console.log('[OfflineSyncService] sale.order already synced, reusing id:', existingMap[offlineId]);
             return existingMap[offlineId];
         }
-        const { _confirmAfterCreate, ...rest } = values;
+        const { _confirmAfterCreate, _cancelAfterCreate, ...rest } = values;
         const createResp = await axios.post(
             `${baseUrl}/web/dataset/call_kw`,
             {
@@ -579,6 +611,27 @@ const syncItemDirectly = async (item) => {
             }
         } catch (_) {}
 
+        // Chain action_cancel if the user cancelled while offline.
+        if (_cancelAfterCreate) {
+            try {
+                const cancelResp = await axios.post(
+                    `${baseUrl}/web/dataset/call_kw`,
+                    {
+                        jsonrpc: '2.0', method: 'call',
+                        params: { model: 'sale.order', method: 'action_cancel', args: [[recordId]], kwargs: {} },
+                    },
+                    { headers, timeout: 30000 }
+                );
+                if (cancelResp.data?.error) {
+                    console.warn('[OfflineSyncService] sale.order cancel failed:', cancelResp.data.error?.data?.message);
+                } else {
+                    console.log('[OfflineSyncService] Cancelled sale.order id:', recordId);
+                }
+            } catch (e) { console.warn('[OfflineSyncService] cancel chain error:', e?.message); }
+            logSyncHistory(baseUrl, headers, { model: 'sale.order', operation: 'create', values: rest, syncedRecordId: recordId }).catch(() => {});
+            return recordId;
+        }
+
         // Chain action_confirm if requested.
         if (_confirmAfterCreate) {
             try {
@@ -636,6 +689,31 @@ const syncItemDirectly = async (item) => {
         }
         console.log('[OfflineSyncService] Confirmed sale.order id:', realRecordId);
         logSyncHistory(baseUrl, headers, { model: 'sale.order', operation: 'action_confirm', values: { id: realRecordId }, syncedRecordId: realRecordId }).catch(() => {});
+        return realRecordId;
+    }
+
+    // Sale order cancel (action_cancel on an already-synced order)
+    if (item.model === 'sale.order' && item.operation === 'action_cancel') {
+        const { _recordId } = values;
+        let realRecordId = _recordId;
+        if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
+            const map = await readOfflineIdMap();
+            if (map[realRecordId] === undefined) throw new Error(`Record ${realRecordId} not yet synced`);
+            realRecordId = map[realRecordId];
+        }
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'sale.order', method: 'action_cancel', args: [[Number(realRecordId)]], kwargs: {} },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Sale order cancel failed');
+        }
+        console.log('[OfflineSyncService] Cancelled sale.order id:', realRecordId);
+        logSyncHistory(baseUrl, headers, { model: 'sale.order', operation: 'action_cancel', values: { id: realRecordId }, syncedRecordId: realRecordId }).catch(() => {});
         return realRecordId;
     }
 
@@ -835,6 +913,7 @@ const flushOnce = async () => {
         return { synced, failed, total: items.length };
     } finally {
         flushing = false;
+        _notifyFlushIdle();
     }
 };
 

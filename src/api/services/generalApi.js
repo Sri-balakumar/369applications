@@ -10782,6 +10782,49 @@ export const confirmEstimateSaleOdoo = async (id, companyId) => {
 };
 
 export const cancelSaleOrderOdoo = async (id) => {
+  // Offline branch — mirrors confirmSaleOrderOdoo. Queue the cancel action
+  // and patch the cached state so the UI updates immediately. When the
+  // device reconnects, OfflineSyncService runs action_cancel on the real id.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const idStr = String(id);
+      if (idStr.startsWith('offline_')) {
+        // Fold the cancel into the pending create — the sync handler will
+        // create the order then call action_cancel on it.
+        const queueItemId = idStr.replace('offline_', '');
+        await offlineQueue.updateValues(queueItemId, { _cancelAfterCreate: true });
+      } else {
+        await offlineQueue.enqueue({
+          model: 'sale.order',
+          operation: 'action_cancel',
+          values: { _recordId: id },
+        });
+      }
+
+      // Update cached state so the list + detail view show "Cancelled".
+      try {
+        const raw = await AsyncStorage.getItem('@cache:saleOrders');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex((o) => String(o.id) === idStr);
+          if (idx >= 0) { list[idx] = { ...list[idx], state: 'cancel' }; await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list)); }
+        }
+      } catch (_) {}
+      try {
+        const detailKey = `@cache:saleOrderDetail:${idStr}`;
+        const rawD = await AsyncStorage.getItem(detailKey);
+        if (rawD) {
+          const prev = JSON.parse(rawD);
+          await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, state: 'cancel' }));
+        }
+      } catch (_) {}
+
+      console.log('[cancelSaleOrderOdoo] Queued offline for id:', id);
+      return { offline: true };
+    }
+  } catch (_) {}
+
   try {
     const headers = await getOdooAuthHeaders();
     const response = await axios.post(`${ODOO_BASE_URL()}/web/dataset/call_kw`, {

@@ -22,7 +22,8 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import OfflineBanner from '@components/common/OfflineBanner';
 import { StyledAlertModal } from '@components/Modal';
-import { isOnline } from '@utils/networkStatus';
+import networkStatus, { isOnline } from '@utils/networkStatus';
+import { waitForFlush } from '@services/OfflineSyncService';
 import { showToastMessage } from '@components/Toast';
 import { useCurrencyStore } from '@stores/currency';
 import { useProductStore } from '@stores/product';
@@ -64,6 +65,7 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   const [editedLines, setEditedLines] = useState({});
   const [deletedLineIds, setDeletedLineIds] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
+  const [offline, setOffline] = useState(false);
 
   const SO_CART_KEY = `__so_edit_${orderId}__`;
   const { getCurrentCart, setCurrentCustomer, loadCustomerCart, clearProducts } = useProductStore();
@@ -79,6 +81,30 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
   useEffect(() => { editedLinesRef.current = editedLines; }, [editedLines]);
   useEffect(() => { deletedLineIdsRef.current = deletedLineIds; }, [deletedLineIds]);
   useEffect(() => { hasChangesRef.current = hasChanges; }, [hasChanges]);
+
+  // Track connectivity + auto-refresh when internet returns so the page
+  // always shows the latest synced data (e.g., offline-confirm sync flushed).
+  useEffect(() => {
+    let mounted = true;
+    isOnline().then((on) => { if (mounted) setOffline(!on); });
+    const unsub = networkStatus.subscribe((on) => {
+      if (!mounted) return;
+      const wasOff = offline;
+      setOffline(!on);
+      if (on && wasOff) {
+        // Wait for OfflineSyncService to finish pushing queued writes
+        // (e.g. the offline-confirm that created the invoice) so the
+        // refetch sees the real Odoo state instead of stale placeholders.
+        (async () => {
+          await new Promise((r) => setTimeout(r, 600));
+          try { await waitForFlush(8000); } catch (_) {}
+          if (mounted) fetchDetail(false).catch(() => {});
+        })();
+      }
+    });
+    return () => { mounted = false; unsub && unsub(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offline]);
 
   const fetchDetail = useCallback(async (showLoader = true) => {
     if (!orderId) return;
@@ -324,15 +350,14 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
       const confirmRes = await confirmSaleOrderOdoo(orderId, companyId);
       console.log('[ConfirmOrder] SO confirmed, proceeding to create invoice...');
       setConfirming(false);
-      // If the confirm was queued offline, skip the invoice step and just tell
-      // the user the confirm + invoice will happen when they reconnect.
+      // Offline path: the confirm was queued; refresh cached state so the UI
+      // reflects 'sale'. Then fall through to executeCreateInvoice — its own
+      // offline branch will generate the local invoice and navigate to the
+      // receipt screen, matching the online flow (Confirm → Invoice).
       if (confirmRes && typeof confirmRes === 'object' && confirmRes.offline) {
-        showToastMessage('Confirmation queued. Invoice will be created when you reconnect.');
-        // Refresh so the cached 'sale' state shows.
         try { const rec = await fetchSaleOrderDetailOdoo(orderId); setRecord(rec); } catch (_) {}
-        return;
       }
-      // Automatically create invoice after confirming
+      // Automatically create invoice after confirming (works online + offline).
       await executeCreateInvoice();
     } catch (err) {
       Alert.alert('Error', err?.message || 'Failed to confirm order.');
@@ -466,7 +491,9 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
         }
 
         showToastMessage('Invoice generated locally');
-        navigation.navigate('SalesInvoiceReceiptScreen', { orderId, orderData: od });
+        // Pass invoiceId too — matches the online navigation shape so the
+        // receipt screen treats this as a real invoice view (not a preview).
+        navigation.navigate('SalesInvoiceReceiptScreen', { invoiceId: 'offline_inv', orderId, orderData: od });
         setInvoicing(false);
         return;
       }

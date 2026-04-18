@@ -99,7 +99,7 @@ const BannerManagementScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Banner Management" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — banner changes will sync when you reconnect" />
+      <OfflineBanner message="OFFLINE MODE — banner changes will sync when you reconnect" onOnline={fetchBanners} />
       <RoundedContainer>
         {banners.length === 0 && !loading ? (
           <EmptyState imageSource={require('@assets/images/EmptyData/empty.png')} message="No Banners Found" />

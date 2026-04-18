@@ -10,7 +10,8 @@ import { OverlayLoader } from '@components/Loader';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchSaleOrdersOdoo, searchInvoicesByOriginOdoo, createInvoiceFromQuotationOdoo } from '@api/services/generalApi';
-import { isOnline } from '@utils/networkStatus';
+import networkStatus, { isOnline } from '@utils/networkStatus';
+import { waitForFlush } from '@services/OfflineSyncService';
 import { showToastMessage } from '@components/Toast';
 import { useCurrencyStore } from '@stores/currency';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -106,11 +107,30 @@ const SaleOrderListScreen = ({ navigation }) => {
     isOnline().then((o) => setIsDeviceOnline(o));
   }, []));
 
+  // Direct subscribe: on every offline → online transition, wait for the
+  // push-side flush to upload any queued sale.order.create (so Odoo returns
+  // real ids + refs), then re-fetch the list in-place — no need for the
+  // user to navigate away and come back.
   useEffect(() => {
-    const { subscribe } = require('@utils/networkStatus').default;
-    const unsub = subscribe((online) => setIsDeviceOnline(online));
+    let wasOff = null;
+    const unsub = networkStatus.subscribe(async (online) => {
+      setIsDeviceOnline(online);
+      const previouslyOff = wasOff === true;
+      wasOff = !online;
+      if (online && previouslyOff) {
+        console.log('[SaleOrderList] Online transition — waiting for sync, then refetching');
+        try { await waitForFlush(8000); } catch (_) {}
+        try {
+          await fetchData();
+          console.log('[SaleOrderList] Post-reconnect refetch complete');
+        } catch (e) {
+          console.warn('[SaleOrderList] Post-reconnect refetch failed:', e?.message);
+        }
+      }
+    });
+    isOnline().then((o) => { wasOff = !o; setIsDeviceOnline(o); });
     return () => unsub && unsub();
-  }, []);
+  }, [fetchData]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);

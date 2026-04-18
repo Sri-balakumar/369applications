@@ -21,6 +21,10 @@ import { WebView } from 'react-native-webview';
 import { isOnline } from '@utils/networkStatus';
 import { Alert } from 'react-native';
 import OfflineBanner from '@components/common/OfflineBanner';
+import { StyledAlertModal } from '@components/Modal';
+import networkStatus from '@utils/networkStatus';
+import { waitForFlush } from '@services/OfflineSyncService';
+import { MaterialIcons } from '@expo/vector-icons';
 
 const INV_COUNTER_KEY = 'inv_counter_s';
 const INV_MAP_KEY = 'inv_map_s';
@@ -96,9 +100,11 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   });
 
   const [isPreview, setIsPreview] = useState(false);
+  const [showOfflineWAAlert, setShowOfflineWAAlert] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [partnerPhone, setPartnerPhone] = useState('');
 
-  useEffect(() => {
-    const loadInvoice = async () => {
+  const loadInvoice = async () => {
       let invoiceData = null;
       let cameFromSaleOrder = false;
 
@@ -214,12 +220,33 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
         console.warn('[Invoice] All tiers failed - no product data available');
       }
       setLoading(false);
-    };
+  };
 
+  useEffect(() => {
     loadInvoice();
   }, [invoiceId, orderId]);
 
-  const [partnerPhone, setPartnerPhone] = useState('');
+  // Track connectivity + auto-refresh when internet returns.
+  useEffect(() => {
+    let mounted = true;
+    networkStatus.isOnline().then((on) => { if (mounted) setOffline(!on); });
+    const unsub = networkStatus.subscribe((on) => {
+      if (!mounted) return;
+      const wasOffline = offline;
+      setOffline(!on);
+      // offline → online: wait for queued offline-confirm/cancel/invoice ops
+      // to finish syncing so the subsequent loadInvoice sees the real Odoo
+      // ids + names instead of the offline placeholders.
+      if (on && wasOffline) {
+        (async () => {
+          await new Promise((r) => setTimeout(r, 600));
+          try { await waitForFlush(8000); } catch (_) {}
+          if (mounted) loadInvoice().catch(() => {});
+        })();
+      }
+    });
+    return () => { mounted = false; unsub && unsub(); };
+  }, [offline, invoiceId, orderId]);
 
   const cashierName = currentUser?.name || currentUser?.username || currentUser?.login || 'Admin';
 
@@ -408,10 +435,7 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
   const handleWhatsAppTap = async () => {
     const online = await isOnline();
     if (!online) {
-      Alert.alert(
-        'You\'re Offline',
-        'Can\'t send WhatsApp right now. Once your internet is connected, tap the Send WhatsApp button again.'
-      );
+      setShowOfflineWAAlert(true);
       return;
     }
     if (!invoice) return;
@@ -684,6 +708,16 @@ const SalesInvoiceReceiptScreen = ({ navigation, route }) => {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Offline WhatsApp alert — matches the logout popup design. */}
+      <StyledAlertModal
+        isVisible={showOfflineWAAlert}
+        message="You're offline. Can't send WhatsApp right now. Try again once your internet is connected."
+        confirmText="OK"
+        cancelText=""
+        onConfirm={() => setShowOfflineWAAlert(false)}
+        onCancel={() => setShowOfflineWAAlert(false)}
+      />
 
       {/* Print Preview Modal */}
       <Modal visible={showPreview} animationType="slide" onRequestClose={() => setShowPreview(false)}>

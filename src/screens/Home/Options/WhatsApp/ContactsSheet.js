@@ -317,7 +317,7 @@ const ContactList = ({ onClose, onEdit, onNew, refreshKey }) => {
         <View style={{ width: 50 }} />
       </View>
 
-      <OfflineBanner message="OFFLINE MODE — showing cached contacts" />
+      <OfflineBanner message="OFFLINE MODE — showing cached contacts" onOnline={() => loadContacts(search)} />
 
       {/* Search */}
       <View style={s.searchContainer}>
