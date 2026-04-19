@@ -2,7 +2,7 @@ import React, { useEffect, useCallback, useState } from 'react';
 import { View, TouchableOpacity, ScrollView, StyleSheet as RNStyleSheet } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { ProductsList } from '@components/Product';
-import { fetchProductsOdoo, fetchPosCategoriesOdoo } from '@api/services/generalApi';
+import { fetchProductsOdoo, fetchPosCategoriesOdoo, fetchPosCategoryCountsOdoo } from '@api/services/generalApi';
 import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
@@ -34,6 +34,7 @@ const POSProducts = ({ navigation, route }) => {
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
   const [selectedCategorySource, setSelectedCategorySource] = useState(null);
   const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [categoryCounts, setCategoryCounts] = useState({ all: 0 });
 
   const buildParams = (extra = {}) => {
     const base = { searchText: extra.searchText ?? searchText, ...extra };
@@ -52,7 +53,7 @@ const POSProducts = ({ navigation, route }) => {
     500
   );
 
-  // Load categories once
+  // Load categories once, plus product counts per category for chip labels.
   useEffect(() => {
     const loadCategories = async () => {
       setCategoriesLoading(true);
@@ -60,6 +61,13 @@ const POSProducts = ({ navigation, route }) => {
         const cats = await fetchPosCategoriesOdoo();
         console.log('[POSProducts] POS categories loaded:', cats?.length);
         setCategories(cats || []);
+        // Fire-and-forget: counts don't block the UI.
+        try {
+          const ids = (cats || []).map((c) => c._id || c.id).filter(Boolean);
+          const source = cats?.[0]?._source || 'pos.category';
+          const counts = await fetchPosCategoryCountsOdoo(ids, source);
+          setCategoryCounts(counts || { all: 0 });
+        } catch (e) { /* ignore count errors */ }
       } catch (err) {
         console.error('[POSProducts] categories error:', err);
         setCategories([]);
@@ -173,13 +181,16 @@ const POSProducts = ({ navigation, route }) => {
               style={[catStyles.chip, !selectedCategoryId && catStyles.chipActive]}
               onPress={() => handleCategoryPress('')}
             >
-              <Text style={[catStyles.chipText, !selectedCategoryId && catStyles.chipTextActive]}>All</Text>
+              <Text style={[catStyles.chipText, !selectedCategoryId && catStyles.chipTextActive]}>
+                All ({categoryCounts.all ?? 0})
+              </Text>
             </TouchableOpacity>
             {categories.map((cat) => {
               const catId = cat._id || cat.id;
               const isActive = selectedCategoryId === catId;
               const catColor = ODOO_COLORS[cat.color] || null;
               const hasColor = cat.color > 0 && catColor;
+              const count = categoryCounts[catId] ?? 0;
               return (
                 <TouchableOpacity
                   key={catId}
@@ -196,7 +207,7 @@ const POSProducts = ({ navigation, route }) => {
                     hasColor && { color: '#fff' },
                     isActive && catStyles.chipTextActive,
                   ]} numberOfLines={1}>
-                    {cat.category_name || cat.name}
+                    {cat.category_name || cat.name} ({count})
                   </Text>
                 </TouchableOpacity>
               );

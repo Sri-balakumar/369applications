@@ -71,7 +71,7 @@ import PurchaseDetailScreen from "@screens/Home/Options/Purchase/PurchaseDetailS
 import PurchaseFormScreen from "@screens/Home/Options/Purchase/PurchaseFormScreen";
 import POSReceiptScreen from '@screens/Home/Sections/Customer/POSReceiptScreen';
 import DirectInvoiceScreen from '@screens/Home/Sections/Customer/DirectInvoiceScreen';
-import { PaymentForm, RegisterPaymentScreen } from '@screens/Home/Options/Payment';
+import { PaymentForm, RegisterPaymentScreen, PaymentDetailScreen } from '@screens/Home/Options/Payment';
 import { SpareManagementScreen, SpareRequestListScreen, SpareRequestForm, SpareRequestDetails, SpareIssueListScreen, SpareIssueForm, SpareReturnListScreen, SpareReturnForm } from '@screens/Home/Options/SpareManagement';
 import { EasySalesForm, EasySalesListScreen, EasySalesDetailScreen } from '@screens/Home/Options/EasySales';
 import { StockTransferScreen, StockTransferForm, StockTransferDetails } from '@screens/Home/Options/StockTransfer';
@@ -173,6 +173,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="PaymentForm"
         component={PaymentForm}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="PaymentDetailScreen"
+        component={PaymentDetailScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

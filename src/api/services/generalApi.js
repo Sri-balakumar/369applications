@@ -1377,6 +1377,48 @@ export const fetchPosCategoriesOdoo = async () => {
   }
 };
 
+// Fetch a count of products per POS (or product) category. Returns an
+// object keyed by category id with the number of products in that category
+// plus a special "all" key with the total product count. Uses search_count
+// RPCs in parallel so it's cheap.
+export const fetchPosCategoryCountsOdoo = async (categoryIds, source = 'pos.category') => {
+  const out = { all: 0 };
+  if (!categoryIds || categoryIds.length === 0) return out;
+  try {
+    const headers = await getOdooAuthHeaders();
+    const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+    const fieldName = source === 'pos.category' ? 'pos_categ_ids' : 'categ_id';
+
+    const allResp = axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      { jsonrpc: '2.0', method: 'call', params: { model: 'product.product', method: 'search_count', args: [[]], kwargs: {} } },
+      { headers, timeout: 15000 }
+    );
+    const perCatResps = categoryIds.map((cid) =>
+      axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0', method: 'call',
+          params: {
+            model: 'product.product', method: 'search_count',
+            args: [[[fieldName, source === 'pos.category' ? 'in' : '=', source === 'pos.category' ? [cid] : cid]]],
+            kwargs: {},
+          },
+        },
+        { headers, timeout: 15000 }
+      ).then((r) => ({ cid, count: r.data?.result || 0 })).catch(() => ({ cid, count: 0 }))
+    );
+
+    const [allCountResp, ...perCat] = await Promise.all([allResp, ...perCatResps]);
+    out.all = allCountResp?.data?.result || 0;
+    for (const row of perCat) out[row.cid] = row.count;
+    return out;
+  } catch (e) {
+    console.warn('[fetchPosCategoryCountsOdoo] error:', e?.message);
+    return out;
+  }
+};
+
 // Create a new POS category in Odoo
 export const createPosCategoryOdoo = async ({ name, parentId, color, image }) => {
   const vals = { name };
@@ -3885,6 +3927,30 @@ export const confirmEasySaleOdoo = async (saleId, companyId = null) => {
 // Fetch account.payment records from Odoo (customer or vendor)
 // Uses allowed_company_ids context to fetch across all companies
 export const fetchAccountPaymentsOdoo = async ({ paymentType = 'inbound', offset = 0, limit = 20, searchText = '' } = {}) => {
+  // Offline short-circuit — go straight to the cache instead of waiting for
+  // the Odoo call to time out. Matches the pattern used for products / sale
+  // orders elsewhere.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const raw = await AsyncStorage.getItem('@cache:accountPayments');
+      if (raw) {
+        let list = JSON.parse(raw);
+        list = list.filter((o) => (o.payment_type || 'inbound') === paymentType);
+        if (searchText && searchText.trim() !== '') {
+          const term = searchText.trim().toLowerCase();
+          list = list.filter((o) =>
+            (o.name || '').toLowerCase().includes(term) ||
+            (o.partner_name || '').toLowerCase().includes(term)
+          );
+        }
+        console.log('[fetchAccountPayments] OFFLINE → cached rows:', list.length);
+        return list;
+      }
+      return [];
+    }
+  } catch (_) { /* fall through */ }
+
   try {
     const { headers, baseUrl } = await authenticateOdoo();
     console.log('[fetchAccountPayments] auth OK, paymentType:', paymentType);
@@ -3896,8 +3962,19 @@ export const fetchAccountPaymentsOdoo = async ({ paymentType = 'inbound', offset
       domain = ['&', '&', ['payment_type', '=', paymentType], ['partner_type', '=', partnerType], '|', ['partner_id.name', 'ilike', searchText], ['name', 'ilike', searchText]];
     }
 
-    // Include all companies so payments from any company are visible
-    const allCompanyIds = [1, 2, 3, 4, 5, 6];
+    // Fetch actual allowed company IDs from Odoo so payments in any company
+    // (not just 1-6) are visible. The hardcoded range missed tenants with
+    // higher company ids like `tool_managament`.
+    let allCompanyIds = [];
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
+        { headers }
+      );
+      allCompanyIds = (compResp.data?.result || []).map((c) => c.id);
+    } catch (e) { console.warn('[fetchAccountPayments] company fetch failed:', e?.message); }
+    if (allCompanyIds.length === 0) allCompanyIds = [1, 2, 3, 4, 5, 6];
 
     const response = await axios.post(
       `${baseUrl}/web/dataset/call_kw`,
@@ -3928,7 +4005,7 @@ export const fetchAccountPaymentsOdoo = async ({ paymentType = 'inbound', offset
     const records = response.data.result || [];
     console.log('[fetchAccountPayments] Got', records.length, 'records for paymentType:', paymentType);
 
-    return records.map(p => ({
+    const mapped = records.map(p => ({
       id: p.id,
       name: p.name || p.display_name || '',
       partner_name: p.partner_id ? p.partner_id[1] : '',
@@ -3941,8 +4018,41 @@ export const fetchAccountPaymentsOdoo = async ({ paymentType = 'inbound', offset
       ref: p.memo || '',
       company_name: p.company_id ? p.company_id[1] : '',
     }));
+
+    // Merge any offline-queued payments still pending sync so they stay
+    // visible on top of the real list.
+    let finalList = mapped;
+    if (!searchText && offset === 0) {
+      try {
+        const raw = await AsyncStorage.getItem('@cache:accountPayments');
+        if (raw) {
+          const oldList = JSON.parse(raw);
+          const pendingOffline = oldList.filter((o) => String(o?.id || '').startsWith('offline_') && (o.payment_type || 'inbound') === paymentType);
+          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...mapped];
+        }
+      } catch (_) {}
+      try { await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(finalList)); } catch (_) {}
+    }
+    return finalList;
   } catch (error) {
     console.error('[fetchAccountPayments] FATAL error:', error?.message || error);
+    // Offline fallback — show cached payments filtered by paymentType.
+    try {
+      const raw = await AsyncStorage.getItem('@cache:accountPayments');
+      if (raw) {
+        let list = JSON.parse(raw);
+        list = list.filter((o) => (o.payment_type || 'inbound') === paymentType);
+        if (searchText && searchText.trim() !== '') {
+          const term = searchText.trim().toLowerCase();
+          list = list.filter((o) =>
+            (o.name || '').toLowerCase().includes(term) ||
+            (o.partner_name || '').toLowerCase().includes(term)
+          );
+        }
+        console.log('[fetchAccountPayments] Using cached payments, count:', list.length);
+        return list;
+      }
+    } catch (_) {}
     return [];
   }
 };
@@ -4328,28 +4438,73 @@ export const createPaymentWithSignatureOdoo = async ({
   longitude = null,
   locationName = '',
 }) => {
+  // Offline branch — queue the payment and return immediately. When the
+  // device reconnects, OfflineSyncService handles the create + post against
+  // Odoo (company/journal resolution, signatures, GPS, all preserved).
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const localId = await offlineQueue.enqueue({
+        model: 'account.payment',
+        operation: 'create',
+        values: {
+          partnerId,
+          amount: parseFloat(amount) || 0,
+          paymentType,
+          journalId: journalId || null,
+          ref: ref || '',
+          customerSignature: customerSignature || null,
+          employeeSignature: employeeSignature || null,
+          latitude, longitude,
+          locationName: locationName || '',
+          _postAfterCreate: true,
+        },
+      });
+
+      // Add a placeholder row to the cached payments list so it shows up
+      // offline immediately.
+      try {
+        let partnerName = '';
+        try {
+          const contactsRaw = await AsyncStorage.getItem('@cache:contacts');
+          if (contactsRaw && partnerId) {
+            const list = JSON.parse(contactsRaw);
+            const p = list.find((c) => c.id === partnerId || String(c.id) === String(partnerId));
+            partnerName = p?.name || p?.partner_name || '';
+          }
+        } catch (_) {}
+        const placeholder = {
+          id: `offline_${localId}`,
+          name: `DRAFT-${localId}`,
+          partner_id: partnerId,
+          partner_name: partnerName,
+          amount: parseFloat(amount) || 0,
+          date: new Date().toISOString().split('T')[0],
+          state: 'draft',
+          payment_type: paymentType,
+          journal_name: '',
+          ref: ref || '',
+          company_name: '',
+          offline: true,
+        };
+        const raw = await AsyncStorage.getItem('@cache:accountPayments');
+        const list = raw ? JSON.parse(raw) : [];
+        list.unshift(placeholder);
+        await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(list));
+      } catch (_) {}
+
+      console.log('[createPayment] Queued offline, localId:', localId);
+      return { offline: true, localId };
+    }
+  } catch (_) { /* fall through to online path */ }
+
   const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
   try {
-    // Step 1: Authenticate
-    const loginResponse = await axios.post(
-      `${baseUrl}/web/session/authenticate`,
-      {
-        jsonrpc: '2.0',
-        method: 'call',
-        params: {
-          db: (await AsyncStorage.getItem('odoo_db')) || DEFAULT_ODOO_DB,
-          login: DEFAULT_USERNAME,
-          password: DEFAULT_PASSWORD,
-        },
-      },
-      { headers: { 'Content-Type': 'application/json' }, withCredentials: true }
-    );
-    if (loginResponse.data.error) throw new Error('Odoo authentication failed');
-    const setCookie = loginResponse.headers['set-cookie'] || loginResponse.headers['Set-Cookie'];
-    const headers = { 'Content-Type': 'application/json' };
-    if (setCookie) {
-      headers.Cookie = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie);
-    }
+    // Step 1: Reuse the existing authenticated session cookie instead of
+    // re-logging in on every submit — saves 1-3s on slow networks. The cookie
+    // was persisted at login. Falls back to a fresh authenticate only if the
+    // cookie is missing / expired.
+    const headers = await getOdooAuthHeaders();
 
     // Helper to call Odoo JSON-RPC
     const rpc = async (model, method, args, kwargs = {}) => {
@@ -4363,22 +4518,21 @@ export const createPaymentWithSignatureOdoo = async ({
     };
 
     // Step 2: Resolve company — read partner's and journal's company_id
+    // IN PARALLEL. Previously these were sequential and burnt ~2x the time.
     let targetCompanyId = null;
     let resolvedJournalId = journalId;
 
     if (partnerId) {
-      const partners = await rpc('res.partner', 'search_read', [[['id', '=', partnerId]]], {
-        fields: ['id', 'company_id'],
-        limit: 1,
-      });
+      const [partners, journals] = await Promise.all([
+        rpc('res.partner', 'search_read', [[['id', '=', partnerId]]], { fields: ['id', 'company_id'], limit: 1 }),
+        journalId
+          ? rpc('account.journal', 'search_read', [[['id', '=', journalId]]], { fields: ['id', 'company_id', 'type'], limit: 1 })
+          : Promise.resolve(null),
+      ]);
       const partnerCompanyId = partners?.[0]?.company_id ? partners[0].company_id[0] : null;
       console.log('[createPayment] Partner company_id:', partnerCompanyId);
 
       if (journalId) {
-        const journals = await rpc('account.journal', 'search_read', [[['id', '=', journalId]]], {
-          fields: ['id', 'company_id', 'type'],
-          limit: 1,
-        });
         const journalCompanyId = journals?.[0]?.company_id ? journals[0].company_id[0] : null;
         const journalType = journals?.[0]?.type || 'bank';
         console.log('[createPayment] Journal company_id:', journalCompanyId);
@@ -4489,38 +4643,261 @@ export const createPaymentWithSignatureOdoo = async ({
     }
 
     const paymentId = response.data.result;
-    console.log('[createPayment] Created record ID:', paymentId);
-
-    // Step 5: Confirm/post the payment so it shows as "Posted" in Odoo
-    try {
-      const postKwargs = {};
-      if (targetCompanyId) {
-        postKwargs.context = { allowed_company_ids: [targetCompanyId] };
-      }
-      await axios.post(
-        `${baseUrl}/web/dataset/call_kw`,
-        {
-          jsonrpc: '2.0',
-          method: 'call',
-          params: {
-            model: 'account.payment',
-            method: 'action_post',
-            args: [[paymentId]],
-            kwargs: postKwargs,
-          },
-        },
-        { headers, withCredentials: true, timeout: 15000 }
-      );
-      console.log('[createPayment] Payment posted successfully');
-    } catch (postErr) {
-      console.warn('[createPayment] Could not auto-post payment:', postErr?.message);
-    }
-
+    console.log('[createPayment] Created record ID:', paymentId, '(draft — user must Validate from detail)');
+    // Intentionally no auto-post. The user validates from PaymentDetailScreen
+    // — same flow as Sales Order (create → confirm → invoice).
     return paymentId;
   } catch (error) {
     console.error('createPaymentWithSignatureOdoo error:', error?.message || error);
     throw error;
   }
+};
+
+// Fetch a single payment's full details for the detail screen.
+export const fetchPaymentDetailOdoo = async (paymentId) => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+    // Fetch allowed company ids so multi-company payments resolve.
+    let allCompanyIds = [];
+    try {
+      const compResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'res.company', method: 'search_read', args: [[]], kwargs: { fields: ['id'], limit: 100 } } },
+        { headers }
+      );
+      allCompanyIds = (compResp.data?.result || []).map((c) => c.id);
+    } catch (_) {}
+
+    const fields = ['id', 'name', 'display_name', 'partner_id', 'partner_type', 'amount', 'date', 'state',
+                    'payment_type', 'journal_id', 'memo', 'company_id', 'currency_id',
+                    'customer_signature', 'employee_signature', 'latitude', 'longitude', 'location_name'];
+    const resp = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'account.payment', method: 'read',
+          args: [[Number(paymentId)]],
+          kwargs: { fields, context: allCompanyIds.length ? { allowed_company_ids: allCompanyIds } : {} },
+        },
+      },
+      { headers, timeout: 15000 }
+    );
+    if (resp.data?.error) throw new Error(resp.data.error?.data?.message || 'Odoo error');
+    const row = resp.data?.result?.[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      name: row.name || row.display_name || '',
+      partner_id: Array.isArray(row.partner_id) ? row.partner_id[0] : null,
+      partner_name: Array.isArray(row.partner_id) ? row.partner_id[1] : '',
+      partner_type: row.partner_type || '',
+      amount: row.amount || 0,
+      date: row.date || '',
+      state: row.state || 'draft',
+      payment_type: row.payment_type || 'inbound',
+      journal_id: Array.isArray(row.journal_id) ? row.journal_id[0] : null,
+      journal_name: Array.isArray(row.journal_id) ? row.journal_id[1] : '',
+      company_id: Array.isArray(row.company_id) ? row.company_id[0] : null,
+      company_name: Array.isArray(row.company_id) ? row.company_id[1] : '',
+      currency_symbol: Array.isArray(row.currency_id) ? row.currency_id[1] : '',
+      memo: row.memo || '',
+      customer_signature: row.customer_signature || null,
+      employee_signature: row.employee_signature || null,
+      latitude: row.latitude || null,
+      longitude: row.longitude || null,
+      location_name: row.location_name || '',
+    };
+  } catch (error) {
+    console.error('fetchPaymentDetailOdoo error:', error?.message || error);
+    // Offline fallback — read from cache list.
+    try {
+      const raw = await AsyncStorage.getItem('@cache:accountPayments');
+      if (raw) {
+        const list = JSON.parse(raw);
+        const match = list.find((p) => p.id === Number(paymentId) || String(p.id) === String(paymentId));
+        if (match) return { ...match, customer_signature: null, employee_signature: null };
+      }
+    } catch (_) {}
+    throw error;
+  }
+};
+
+// Validate (action_post) a payment — moves state Draft → Posted/Paid.
+// Offline-aware: queues the action and patches the cache optimistically.
+export const postPaymentOdoo = async (paymentId) => {
+  try {
+    const online = await isOnline();
+    if (!online) {
+      await offlineQueue.enqueue({
+        model: 'account.payment',
+        operation: 'action_post',
+        values: { _recordId: paymentId },
+      });
+      // Patch cache state so UI updates immediately.
+      try {
+        const raw = await AsyncStorage.getItem('@cache:accountPayments');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex((p) => p.id === paymentId || String(p.id) === String(paymentId));
+          if (idx >= 0) { list[idx] = { ...list[idx], state: 'paid' }; await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(list)); }
+        }
+      } catch (_) {}
+      return { offline: true };
+    }
+  } catch (_) {}
+
+  const headers = await getOdooAuthHeaders();
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+
+  // Read current state so we can detect a real transition. Different Odoo
+  // versions expose different methods for "Validate" — some have been
+  // deprecated and silently no-op without error. We try each in order and
+  // only accept the result when state actually changed.
+  const readState = async () => {
+    const r = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method: 'read', args: [[Number(paymentId)]], kwargs: { fields: ['state'] } } },
+      { headers, timeout: 10000 }
+    );
+    return r.data?.result?.[0]?.state;
+  };
+
+  let prevState;
+  try { prevState = await readState(); } catch (_) { prevState = null; }
+  console.log('[postPayment] id:', paymentId, 'previous state:', prevState);
+
+  // Covers Odoo 16/17/18+. Each one is tried only if the prior method did
+  // not transition the state (not just "no error" — the state must move).
+  const methodsToTry = ['action_post', 'action_validate', 'mark_as_paid', '_action_post'];
+  let lastErr = null;
+  for (const method of methodsToTry) {
+    try {
+      const resp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0', method: 'call',
+          params: { model: 'account.payment', method, args: [[Number(paymentId)]], kwargs: {} },
+        },
+        { headers, timeout: 15000 }
+      );
+      if (resp.data?.error) {
+        lastErr = resp.data.error?.data?.message || resp.data.error?.message;
+        console.log('[postPayment] via', method, '→ error:', lastErr);
+        continue;
+      }
+      const newState = await readState();
+      console.log('[postPayment] via', method, '→ state:', newState);
+      if (newState && newState !== prevState) {
+        return { success: true, state: newState, method };
+      }
+      // State didn't change; move on to the next method.
+    } catch (e) {
+      lastErr = e?.message;
+      console.log('[postPayment] via', method, '→ threw:', lastErr);
+    }
+  }
+  throw new Error(
+    lastErr
+      ? `Validate failed: ${lastErr}`
+      : `Validate was accepted by Odoo but state stayed "${prevState}". The payment may be locked, already processed, or require reconciliation.`
+  );
+};
+
+// Reset a payment to Draft state — undoes Post / Validate. Standard Odoo
+// account.payment.action_draft method. Visible from in_process / paid /
+// cancelled states on the Odoo web form.
+export const draftPaymentOdoo = async (paymentId) => {
+  // Offline branch — queue the action and patch the cache optimistically so
+  // the UI flips to Draft immediately. OfflineSyncService handler applies
+  // the real action_draft on Odoo when connectivity returns.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      await offlineQueue.enqueue({
+        model: 'account.payment',
+        operation: 'action_draft',
+        values: { _recordId: paymentId },
+      });
+      try {
+        const raw = await AsyncStorage.getItem('@cache:accountPayments');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex((p) => p.id === paymentId || String(p.id) === String(paymentId));
+          if (idx >= 0) { list[idx] = { ...list[idx], state: 'draft' }; await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(list)); }
+        }
+      } catch (_) {}
+      return { offline: true, state: 'draft' };
+    }
+  } catch (_) {}
+
+  const headers = await getOdooAuthHeaders();
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+  const readState = async () => {
+    const r = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method: 'read', args: [[Number(paymentId)]], kwargs: { fields: ['state'] } } },
+      { headers, timeout: 10000 }
+    );
+    return r.data?.result?.[0]?.state;
+  };
+  const methodsToTry = ['action_draft', 'button_draft', '_action_draft'];
+  let lastErr = null;
+  for (const method of methodsToTry) {
+    try {
+      const resp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method, args: [[Number(paymentId)]], kwargs: {} } },
+        { headers, timeout: 15000 }
+      );
+      if (resp.data?.error) { lastErr = resp.data.error?.data?.message; continue; }
+      const newState = await readState();
+      console.log('[draftPayment] via', method, '→ state:', newState);
+      if (newState === 'draft') return { success: true, state: newState, method };
+    } catch (e) { lastErr = e?.message; }
+  }
+  throw new Error(
+    lastErr
+      ? `Reset failed: ${lastErr}`
+      : `Reset was accepted but state did not return to draft. The payment may be reconciled or locked.`
+  );
+};
+
+// Cancel a payment — offline-aware. Queues action_cancel and flips cache.
+export const cancelPaymentOdoo = async (paymentId) => {
+  try {
+    const online = await isOnline();
+    if (!online) {
+      await offlineQueue.enqueue({
+        model: 'account.payment',
+        operation: 'action_cancel',
+        values: { _recordId: paymentId },
+      });
+      try {
+        const raw = await AsyncStorage.getItem('@cache:accountPayments');
+        if (raw) {
+          const list = JSON.parse(raw);
+          const idx = list.findIndex((p) => p.id === paymentId || String(p.id) === String(paymentId));
+          if (idx >= 0) { list[idx] = { ...list[idx], state: 'cancelled' }; await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(list)); }
+        }
+      } catch (_) {}
+      return { offline: true, state: 'cancelled' };
+    }
+  } catch (_) {}
+
+  const headers = await getOdooAuthHeaders();
+  const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
+  const resp = await axios.post(
+    `${baseUrl}/web/dataset/call_kw`,
+    {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.payment', method: 'action_cancel', args: [[Number(paymentId)]], kwargs: {} },
+    },
+    { headers, timeout: 15000 }
+  );
+  if (resp.data?.error) throw new Error(resp.data.error?.data?.message || 'Cancel failed');
+  return { success: true };
 };
 
 // ============================================================

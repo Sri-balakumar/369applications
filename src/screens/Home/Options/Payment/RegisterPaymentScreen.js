@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, Platform, TouchableOpacity, useWindowDimensions } from 'react-native';
+import React, { useState, useCallback, useEffect } from 'react';
+import { View, StyleSheet, Platform, TouchableOpacity, useWindowDimensions, ScrollView } from 'react-native';
 import { TabView } from 'react-native-tab-view';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
@@ -15,20 +15,44 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchAccountPaymentsOdoo } from '@api/services/generalApi';
 import { useCurrencyStore } from '@stores/currency';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import OfflineBanner from '@components/common/OfflineBanner';
+import networkStatus from '@utils/networkStatus';
+import { waitForFlush } from '@services/OfflineSyncService';
 
+// Matches Odoo web UI palette for account.payment state badges.
 const STATE_COLORS = {
-  draft: '#FF9800',
-  posted: '#4CAF50',
-  sent: '#2196F3',
-  reconciled: '#9C27B0',
-  cancelled: '#F44336',
-  canceled: '#F44336',
+  draft: '#FF9800',       // orange
+  in_process: '#FBC02D',  // yellow
+  paid: '#4CAF50',        // green
+  posted: '#4CAF50',      // green (older Odoo)
+  reconciled: '#4CAF50',  // green
+  sent: '#2196F3',        // blue
+  cancelled: '#F44336',   // red
+  canceled: '#F44336',    // red
+  rejected: '#F44336',    // red
+};
+
+const FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'draft', label: 'Draft' },
+  { key: 'in_process', label: 'In Process' },
+  { key: 'paid', label: 'Paid' },
+  { key: 'cancelled', label: 'Cancelled' },
+];
+
+const filterPredicate = (filter) => (item) => {
+  const s = (item.state || 'draft').toLowerCase();
+  if (filter === 'all') return true;
+  if (filter === 'paid') return s === 'paid' || s === 'posted' || s === 'reconciled';
+  if (filter === 'cancelled') return s === 'cancelled' || s === 'canceled' || s === 'rejected';
+  return s === filter;
 };
 
 const PaymentList = ({ paymentType, navigation }) => {
   const currencySymbol = useCurrencyStore((state) => state.currencySymbol) || '$';
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [activeFilter, setActiveFilter] = useState('all');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -45,13 +69,35 @@ const PaymentList = ({ paymentType, navigation }) => {
 
   useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
 
+  // Auto-refresh when internet returns — picks up any offline-queued
+  // action_post / action_draft / action_cancel that synced in the background
+  // plus any new payments from other devices.
+  useEffect(() => {
+    let wasOff = null;
+    const unsub = networkStatus.subscribe(async (online) => {
+      const previouslyOff = wasOff === true;
+      wasOff = !online;
+      if (online && previouslyOff) {
+        console.log('[RegisterPayment] Online → waiting for flush, then refetching', paymentType);
+        try { await waitForFlush(8000); } catch (_) {}
+        try { await fetchData(); } catch (_) {}
+      }
+    });
+    (async () => { wasOff = !(await networkStatus.isOnline()); })();
+    return () => unsub && unsub();
+  }, [fetchData, paymentType]);
+
   const renderItem = ({ item }) => {
     if (item.empty) return <EmptyItem />;
     const state = (item.state || 'draft').toLowerCase();
     const stateColor = STATE_COLORS[state] || '#999';
 
     return (
-      <View style={styles.itemContainer}>
+      <TouchableOpacity
+        style={styles.itemContainer}
+        activeOpacity={0.7}
+        onPress={() => navigation.navigate('PaymentDetailScreen', { paymentId: item.id })}
+      >
         <View style={styles.row}>
           <Text style={styles.head} numberOfLines={1}>{item.name || '-'}</Text>
           <View style={[styles.badge, { backgroundColor: stateColor }]}>
@@ -86,20 +132,43 @@ const PaymentList = ({ paymentType, navigation }) => {
             <Text style={styles.locationText} numberOfLines={1}>{item.location_name}</Text>
           </View>
         ) : null}
-      </View>
+      </TouchableOpacity>
     );
   };
 
+  const filteredData = data.filter(filterPredicate(activeFilter));
+  const filterCounts = FILTERS.reduce((acc, f) => {
+    acc[f.key] = data.filter(filterPredicate(f.key)).length;
+    return acc;
+  }, {});
+
   return (
     <RoundedContainer>
-      {data.length === 0 && !loading ? (
+      {/* Filter bar — tap to narrow by state. Counts update live with data. */}
+      <View style={styles.filterBarWrap}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterBarContent}>
+          {FILTERS.map((f) => (
+            <TouchableOpacity
+              key={f.key}
+              style={[styles.filterTab, activeFilter === f.key && styles.filterTabActive]}
+              onPress={() => setActiveFilter(f.key)}
+            >
+              <Text style={[styles.filterTabText, activeFilter === f.key && styles.filterTabTextActive]}>
+                {f.label} ({filterCounts[f.key] ?? 0})
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      {filteredData.length === 0 && !loading ? (
         <EmptyState
           imageSource={require('@assets/images/EmptyData/empty.png')}
           message={`No ${paymentType === 'inbound' ? 'Customer' : 'Vendor'} Payments Found`}
         />
       ) : (
         <FlashList
-          data={formatData(data, 1)}
+          data={formatData(filteredData, 1)}
           numColumns={1}
           renderItem={renderItem}
           keyExtractor={(item, index) => item.id?.toString() || index.toString()}
@@ -136,6 +205,7 @@ const RegisterPaymentScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Register Payment" onBackPress={() => navigation.goBack()} />
+      <OfflineBanner message="OFFLINE MODE — payments will sync when you reconnect" />
       <TabView
         navigationState={{ index, routes }}
         renderScene={renderScene}
@@ -157,6 +227,38 @@ const RegisterPaymentScreen = ({ navigation }) => {
 };
 
 const styles = StyleSheet.create({
+  filterBarWrap: {
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  filterBarContent: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  filterTab: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#F8F8F8',
+    marginRight: 6,
+  },
+  filterTabActive: {
+    borderColor: COLORS.primaryThemeColor,
+    backgroundColor: COLORS.primaryThemeColor,
+  },
+  filterTabText: {
+    fontSize: 12,
+    color: '#555',
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+  },
+  filterTabTextActive: {
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
   itemContainer: {
     marginHorizontal: 5,
     marginVertical: 5,

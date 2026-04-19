@@ -34,6 +34,7 @@ import {
   fetchEasyPurchasePaymentMethodsOdoo,
   fetchEstimateSalesOdoo,
   fetchEstimatePurchasesOdoo,
+  fetchAccountPaymentsOdoo,
 } from '@api/services/generalApi';
 import { getWorkplaceLocation } from '@services/AttendanceService';
 
@@ -79,6 +80,8 @@ export const warmAll = async ({ userId, companyId, force = false } = {}) => {
     _runFetcher('priceEnquiries',     () => fetchProductEnquiriesOdoo()),
     _runFetcher('estimateSales',      () => fetchEstimateSalesOdoo()),
     _runFetcher('estimatePurchases',  () => fetchEstimatePurchasesOdoo()),
+    _runFetcher('customerPayments',   () => fetchAccountPaymentsOdoo({ paymentType: 'inbound' })),
+    _runFetcher('vendorPayments',     () => fetchAccountPaymentsOdoo({ paymentType: 'outbound' })),
     userId
       ? _runFetcher('workplace', () => getWorkplaceLocation(userId))
       : Promise.resolve(),

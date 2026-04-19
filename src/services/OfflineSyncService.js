@@ -824,6 +824,217 @@ const syncItemDirectly = async (item) => {
         return realRecordId;
     }
 
+    // Register Payment (account.payment) create — mirrors the online
+    // createPaymentWithSignatureOdoo: resolve partner's company, pick a
+    // matching journal in that company, create the payment with signatures
+    // and GPS, then post it. Finally swap the offline placeholder in the
+    // cached payments list with the real record.
+    if (item.model === 'account.payment' && item.operation === 'create') {
+        const offlineId = `offline_${item.id}`;
+        const existingMap = await readOfflineIdMap();
+        if (existingMap[offlineId] !== undefined) {
+            console.log('[OfflineSyncService] account.payment already synced, reusing id:', existingMap[offlineId]);
+            return existingMap[offlineId];
+        }
+        const { partnerId, amount, paymentType, journalId, ref, customerSignature,
+                employeeSignature, latitude, longitude, locationName, _postAfterCreate } = values;
+
+        const rpc = async (model, method, args, kwargs = {}) => {
+            const resp = await axios.post(
+                `${baseUrl}/web/dataset/call_kw`,
+                { jsonrpc: '2.0', method: 'call', params: { model, method, args, kwargs } },
+                { headers, withCredentials: true, timeout: 15000 }
+            );
+            if (resp.data?.error) throw new Error(resp.data.error?.data?.message || 'Odoo RPC error');
+            return resp.data.result;
+        };
+
+        // Resolve partner's company → find matching journal if needed.
+        let targetCompanyId = null;
+        let resolvedJournalId = journalId;
+        if (partnerId) {
+            try {
+                const partners = await rpc('res.partner', 'search_read', [[['id', '=', partnerId]]], { fields: ['id', 'company_id'], limit: 1 });
+                targetCompanyId = partners?.[0]?.company_id ? partners[0].company_id[0] : null;
+            } catch (_) {}
+        }
+        if (resolvedJournalId && targetCompanyId) {
+            try {
+                const journals = await rpc('account.journal', 'search_read', [[['id', '=', resolvedJournalId]]], { fields: ['id', 'company_id', 'type'], limit: 1 });
+                const jCompany = journals?.[0]?.company_id ? journals[0].company_id[0] : null;
+                const jType = journals?.[0]?.type || 'bank';
+                if (jCompany && jCompany !== targetCompanyId) {
+                    const matching = await rpc('account.journal', 'search_read', [[['type', '=', jType], ['company_id', '=', targetCompanyId]]], { fields: ['id'], limit: 1 });
+                    if (matching?.length) resolvedJournalId = matching[0].id;
+                }
+            } catch (_) {}
+        }
+        if (!resolvedJournalId && targetCompanyId) {
+            try {
+                const matching = await rpc('account.journal', 'search_read', [[['type', 'in', ['bank', 'cash']], ['company_id', '=', targetCompanyId]]], { fields: ['id'], limit: 1 });
+                if (matching?.length) resolvedJournalId = matching[0].id;
+            } catch (_) {}
+        }
+
+        const vals = {
+            partner_id: partnerId,
+            partner_type: paymentType === 'outbound' ? 'supplier' : 'customer',
+            payment_type: paymentType || 'inbound',
+            amount: parseFloat(amount) || 0,
+            ref: ref || '',
+        };
+        if (resolvedJournalId) vals.journal_id = resolvedJournalId;
+        if (targetCompanyId) vals.company_id = targetCompanyId;
+        if (customerSignature) {
+            const m = String(customerSignature).match(/^data:image\/[^;]+;base64,(.+)$/);
+            vals.customer_signature = m ? m[1] : customerSignature;
+        }
+        if (employeeSignature) {
+            const m = String(employeeSignature).match(/^data:image\/[^;]+;base64,(.+)$/);
+            vals.employee_signature = m ? m[1] : employeeSignature;
+        }
+        if (latitude !== null && latitude !== undefined) vals.latitude = latitude;
+        if (longitude !== null && longitude !== undefined) vals.longitude = longitude;
+        if (locationName) vals.location_name = locationName;
+
+        const createKwargs = targetCompanyId ? { context: { allowed_company_ids: [targetCompanyId] } } : {};
+        const createResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method: 'create', args: [vals], kwargs: createKwargs } },
+            { headers, withCredentials: true, timeout: 30000 }
+        );
+        if (createResp.data?.error) {
+            throw new Error(createResp.data.error?.data?.message || 'account.payment create failed');
+        }
+        const paymentId = createResp.data?.result;
+        console.log('[OfflineSyncService] Created account.payment id:', paymentId);
+        await saveOfflineIdMapping(offlineId, paymentId);
+
+        // Post the payment so it shows "Posted" in Odoo.
+        if (_postAfterCreate) {
+            try {
+                await axios.post(
+                    `${baseUrl}/web/dataset/call_kw`,
+                    { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method: 'action_post', args: [[paymentId]], kwargs: targetCompanyId ? { context: { allowed_company_ids: [targetCompanyId] } } : {} } },
+                    { headers, withCredentials: true, timeout: 15000 }
+                );
+                console.log('[OfflineSyncService] Posted account.payment id:', paymentId);
+            } catch (postErr) {
+                console.warn('[OfflineSyncService] action_post failed:', postErr?.message);
+            }
+        }
+
+        // Read back real name + state and patch the cached payments list.
+        try {
+            const readResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'account.payment', method: 'read', args: [[paymentId]], kwargs: { fields: ['name', 'state', 'journal_id', 'company_id'] } },
+            }, { headers, timeout: 10000 });
+            const row = readResp.data?.result?.[0];
+            const realName = row?.name || row?.display_name || `P${paymentId}`;
+            const rawList = await AsyncStorage.getItem('@cache:accountPayments');
+            if (rawList) {
+                const list = JSON.parse(rawList);
+                const next = list.map((p) => {
+                    if (String(p.id) === offlineId) {
+                        return {
+                            ...p,
+                            id: paymentId,
+                            name: realName,
+                            state: row?.state || 'posted',
+                            journal_name: row?.journal_id ? row.journal_id[1] : p.journal_name,
+                            company_name: row?.company_id ? row.company_id[1] : p.company_name,
+                            offline: false,
+                        };
+                    }
+                    return p;
+                });
+                await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(next));
+            }
+        } catch (e) { console.warn('[OfflineSyncService] payment read-back failed:', e?.message); }
+
+        logSyncHistory(baseUrl, headers, { model: 'account.payment', operation: 'create', values: { partnerId, amount, paymentType }, syncedRecordId: paymentId }).catch(() => {});
+        return paymentId;
+    }
+
+    // Payment action handlers — action_post / action_draft / action_cancel
+    // for account.payment records. All three share the same shape: resolve
+    // the real id (in case the payment was created offline too), run the
+    // action method, fall back to alternative method names if needed, then
+    // read back state and patch the cached payments list so the UI reflects
+    // Odoo truth after sync.
+    if (item.model === 'account.payment'
+        && (item.operation === 'action_post' || item.operation === 'action_draft' || item.operation === 'action_cancel')) {
+        const { _recordId } = item.values || {};
+        let realRecordId = _recordId;
+        if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
+            const map = await readOfflineIdMap();
+            if (map[realRecordId] === undefined) throw new Error(`Payment ${realRecordId} not yet synced`);
+            realRecordId = map[realRecordId];
+        }
+        const numId = Number(realRecordId);
+
+        const methodsByOp = {
+            action_post:   ['action_post', 'action_validate', 'mark_as_paid'],
+            action_draft:  ['action_draft', 'button_draft'],
+            action_cancel: ['action_cancel'],
+        };
+        const candidates = methodsByOp[item.operation];
+
+        // Helper to read current state — we accept the call only when state
+        // actually moves (or when cancel sets it to a cancelled-like value).
+        const readState = async () => {
+            const r = await axios.post(
+                `${baseUrl}/web/dataset/call_kw`,
+                { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method: 'read', args: [[numId]], kwargs: { fields: ['state', 'name'] } } },
+                { headers, timeout: 10000 }
+            );
+            return r.data?.result?.[0];
+        };
+
+        const before = await readState().catch(() => null);
+        let lastErr = null;
+        let finalRow = before;
+        for (const method of candidates) {
+            try {
+                const resp = await axios.post(
+                    `${baseUrl}/web/dataset/call_kw`,
+                    { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method, args: [[numId]], kwargs: {} } },
+                    { headers, timeout: 30000 }
+                );
+                if (resp.data?.error) { lastErr = resp.data.error?.data?.message; continue; }
+                const after = await readState();
+                const newState = after?.state;
+                const prevState = before?.state;
+                console.log('[OfflineSyncService] account.payment', item.operation, 'via', method, '→ state:', newState);
+                const transitioned =
+                    (item.operation === 'action_post' && newState && newState !== prevState) ||
+                    (item.operation === 'action_draft' && newState === 'draft') ||
+                    (item.operation === 'action_cancel' && (newState === 'cancelled' || newState === 'canceled' || newState === 'rejected'));
+                if (transitioned) { finalRow = after; break; }
+            } catch (e) { lastErr = e?.message; }
+        }
+        if (finalRow === before && lastErr) throw new Error(`${item.operation} failed: ${lastErr}`);
+
+        // Patch the cached list so any screen auto-refresh picks up the real state + name.
+        try {
+            const raw = await AsyncStorage.getItem('@cache:accountPayments');
+            if (raw) {
+                const list = JSON.parse(raw);
+                const next = list.map((p) => {
+                    if (p.id === numId || String(p.id) === String(numId)) {
+                        return { ...p, state: finalRow?.state || p.state, name: finalRow?.name || p.name };
+                    }
+                    return p;
+                });
+                await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(next));
+            }
+        } catch (_) {}
+
+        logSyncHistory(baseUrl, headers, { model: 'account.payment', operation: item.operation, values: { id: numId }, syncedRecordId: numId }).catch(() => {});
+        return numId;
+    }
+
     // Contact (res.partner) create
     if (item.model === 'res.partner' && item.operation === 'create') {
         const offlineId = `offline_${item.id}`;
