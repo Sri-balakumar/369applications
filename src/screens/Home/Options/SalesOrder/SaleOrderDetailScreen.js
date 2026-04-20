@@ -462,6 +462,31 @@ const SaleOrderDetailScreen = ({ navigation, route }) => {
       if (!online || isOfflineOrder) {
         const od = buildOrderData();
         const idStr = String(orderId);
+        const companyId = record?.company_id ? (Array.isArray(record.company_id) ? record.company_id[0] : record.company_id) : null;
+
+        // Queue the invoice-creation action so OfflineSyncService materializes
+        // a real Odoo invoice as soon as the device reconnects — no user tap
+        // needed. Two paths:
+        //   a) Order itself was created offline → piggy-back on the queued
+        //      `create` by setting `_invoiceAfterCreate: true`. The sync
+        //      handler creates the order, confirms, then creates the invoice.
+        //   b) Order already exists on Odoo → enqueue a standalone
+        //      `action_invoice_create` op that runs on flush.
+        try {
+          const offlineQueue = require('@utils/offlineQueue').default;
+          if (isOfflineOrder) {
+            const queueItemId = idStr.replace('offline_', '');
+            await offlineQueue.updateValues(queueItemId, { _invoiceAfterCreate: true });
+          } else {
+            await offlineQueue.enqueue({
+              model: 'sale.order',
+              operation: 'action_invoice_create',
+              values: { _recordId: orderId, companyId },
+            });
+          }
+        } catch (e) {
+          console.warn('[CreateInvoice] Failed to queue invoice op:', e?.message);
+        }
 
         // Mark as invoiced in cached list so the list shows "INVOICED" badge
         try {

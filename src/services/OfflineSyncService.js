@@ -45,7 +45,8 @@ export const waitForFlush = async (timeoutMs = 8000) => {
             const pending = await offlineQueue.getPendingCount();
             if (pending === 0 && !flushing) return;
         } catch (_) { return; }
-        await new Promise((r) => setTimeout(r, 250));
+        // Tight 80ms poll — snappier reconnect wake-up than the original 250ms.
+        await new Promise((r) => setTimeout(r, 80));
     }
 };
 let retryTimer = null;
@@ -535,10 +536,11 @@ const syncItemDirectly = async (item) => {
         return realRecordId;
     }
 
-    // Sale order create (quotation). Supports optional _confirmAfterCreate
-    // and _cancelAfterCreate flags which chain action_confirm / action_cancel
-    // after the order is created. _cancelAfterCreate wins if both are set
-    // (user confirmed then cancelled while still offline).
+    // Sale order create (quotation). Supports optional _confirmAfterCreate,
+    // _cancelAfterCreate, and _invoiceAfterCreate flags which chain
+    // action_confirm / action_cancel / _create_invoices after the order is
+    // created. _cancelAfterCreate wins over confirm if both are set.
+    // _invoiceAfterCreate runs after confirm (invoices need confirmed orders).
     if (item.model === 'sale.order' && item.operation === 'create') {
         const offlineId = `offline_${item.id}`;
         const existingMap = await readOfflineIdMap();
@@ -546,7 +548,7 @@ const syncItemDirectly = async (item) => {
             console.log('[OfflineSyncService] sale.order already synced, reusing id:', existingMap[offlineId]);
             return existingMap[offlineId];
         }
-        const { _confirmAfterCreate, _cancelAfterCreate, ...rest } = values;
+        const { _confirmAfterCreate, _cancelAfterCreate, _invoiceAfterCreate, ...rest } = values;
         const createResp = await axios.post(
             `${baseUrl}/web/dataset/call_kw`,
             {
@@ -663,6 +665,57 @@ const syncItemDirectly = async (item) => {
             } catch (e) { console.warn('[OfflineSyncService] confirm chain error:', e?.message); }
         }
 
+        // Chain invoice creation if requested (runs after confirm since
+        // Odoo only invoices confirmed orders). Calls _create_invoices on
+        // the sale.order, then swaps the placeholder "offline_inv" in cache
+        // with the real invoice id.
+        if (_invoiceAfterCreate) {
+            try {
+                const invResp = await axios.post(
+                    `${baseUrl}/web/dataset/call_kw`,
+                    {
+                        jsonrpc: '2.0', method: 'call',
+                        params: { model: 'sale.order', method: '_create_invoices', args: [[recordId]], kwargs: {} },
+                    },
+                    { headers, timeout: 30000 }
+                );
+                if (invResp.data?.error) {
+                    console.warn('[OfflineSyncService] sale.order invoice create failed:', invResp.data.error?.data?.message);
+                } else {
+                    const invResult = invResp.data?.result;
+                    // _create_invoices returns an account.move recordset repr.
+                    // Fetch the real invoice ids linked to this SO for the cache patch.
+                    try {
+                        const readResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                            jsonrpc: '2.0', method: 'call',
+                            params: { model: 'sale.order', method: 'read', args: [[recordId]], kwargs: { fields: ['invoice_ids', 'invoice_status'] } },
+                        }, { headers, timeout: 10000 });
+                        const row = readResp.data?.result?.[0];
+                        const realInvoiceIds = row?.invoice_ids || [];
+                        console.log('[OfflineSyncService] Invoiced sale.order id:', recordId, 'invoice_ids:', realInvoiceIds);
+                        // Patch cache: swap offline_inv with real ids in list + detail.
+                        const patch = { invoice_status: row?.invoice_status || 'invoiced', invoice_ids: realInvoiceIds.length ? realInvoiceIds : ['offline_inv'] };
+                        try {
+                            const rawList = await AsyncStorage.getItem('@cache:saleOrders');
+                            if (rawList) {
+                                const list = JSON.parse(rawList);
+                                const idx = list.findIndex((o) => o.id === recordId || String(o.id) === offlineId);
+                                if (idx >= 0) { list[idx] = { ...list[idx], ...patch }; await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list)); }
+                            }
+                        } catch (_) {}
+                        try {
+                            const detailKey = `@cache:saleOrderDetail:${recordId}`;
+                            const rawD = await AsyncStorage.getItem(detailKey);
+                            if (rawD) {
+                                const prev = JSON.parse(rawD);
+                                await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, ...patch }));
+                            }
+                        } catch (_) {}
+                    } catch (e) { console.warn('[OfflineSyncService] invoice read-back failed:', e?.message); }
+                }
+            } catch (e) { console.warn('[OfflineSyncService] invoice chain error:', e?.message); }
+        }
+
         logSyncHistory(baseUrl, headers, { model: 'sale.order', operation: 'create', values: rest, syncedRecordId: recordId }).catch(() => {});
         return recordId;
     }
@@ -714,6 +767,60 @@ const syncItemDirectly = async (item) => {
         }
         console.log('[OfflineSyncService] Cancelled sale.order id:', realRecordId);
         logSyncHistory(baseUrl, headers, { model: 'sale.order', operation: 'action_cancel', values: { id: realRecordId }, syncedRecordId: realRecordId }).catch(() => {});
+        return realRecordId;
+    }
+
+    // Sale order invoice create (runs _create_invoices on an already-synced
+    // order). Queued when the user tapped Create Invoice offline on a real
+    // Odoo order — we materialize the invoice on reconnect without another tap.
+    if (item.model === 'sale.order' && item.operation === 'action_invoice_create') {
+        const { _recordId } = values;
+        let realRecordId = _recordId;
+        if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
+            const map = await readOfflineIdMap();
+            if (map[realRecordId] === undefined) throw new Error(`Record ${realRecordId} not yet synced`);
+            realRecordId = map[realRecordId];
+        }
+        const response = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'sale.order', method: '_create_invoices', args: [[Number(realRecordId)]], kwargs: {} },
+            },
+            { headers, timeout: 30000 }
+        );
+        if (response.data?.error) {
+            throw new Error(response.data.error?.data?.message || 'Invoice create failed');
+        }
+        // Read back real invoice_ids and patch the cache so the UI switches
+        // from the "offline_inv" placeholder to the real invoice.
+        try {
+            const readResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: { model: 'sale.order', method: 'read', args: [[Number(realRecordId)]], kwargs: { fields: ['invoice_ids', 'invoice_status'] } },
+            }, { headers, timeout: 10000 });
+            const row = readResp.data?.result?.[0];
+            const realInvoiceIds = row?.invoice_ids || [];
+            console.log('[OfflineSyncService] Invoiced sale.order id:', realRecordId, 'invoice_ids:', realInvoiceIds);
+            const patch = { invoice_status: row?.invoice_status || 'invoiced', invoice_ids: realInvoiceIds.length ? realInvoiceIds : ['offline_inv'] };
+            try {
+                const rawList = await AsyncStorage.getItem('@cache:saleOrders');
+                if (rawList) {
+                    const list = JSON.parse(rawList);
+                    const idx = list.findIndex((o) => o.id === Number(realRecordId) || String(o.id) === String(realRecordId));
+                    if (idx >= 0) { list[idx] = { ...list[idx], ...patch }; await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list)); }
+                }
+            } catch (_) {}
+            try {
+                const detailKey = `@cache:saleOrderDetail:${realRecordId}`;
+                const rawD = await AsyncStorage.getItem(detailKey);
+                if (rawD) {
+                    const prev = JSON.parse(rawD);
+                    await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, ...patch }));
+                }
+            } catch (_) {}
+        } catch (e) { console.warn('[OfflineSyncService] invoice read-back failed:', e?.message); }
+        logSyncHistory(baseUrl, headers, { model: 'sale.order', operation: 'action_invoice_create', values: { id: realRecordId }, syncedRecordId: realRecordId }).catch(() => {});
         return realRecordId;
     }
 

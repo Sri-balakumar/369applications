@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { View, StyleSheet, Platform, TouchableOpacity, ScrollView } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
@@ -108,10 +108,16 @@ const SaleOrderListScreen = ({ navigation }) => {
     isOnline().then((o) => setIsDeviceOnline(o));
   }, []));
 
+  // Debounce ref — prevent auto-invoice loop from firing twice within 30s
+  // if the network flaps (offline → online → offline → online quickly).
+  const lastAutoInvoiceAtRef = useRef(0);
+
   // Direct subscribe: on every offline → online transition, wait for the
   // push-side flush to upload any queued sale.order.create (so Odoo returns
   // real ids + refs), then re-fetch the list in-place — no need for the
-  // user to navigate away and come back.
+  // user to navigate away and come back. After the refetch, if any orders
+  // are confirmed-but-not-yet-invoiced, auto-run the bulk invoice pass so
+  // the user doesn't have to tap the "Invoice (N)" button manually.
   useEffect(() => {
     let wasOff = null;
     const unsub = networkStatus.subscribe(async (online) => {
@@ -122,8 +128,18 @@ const SaleOrderListScreen = ({ navigation }) => {
         console.log('[SaleOrderList] Online transition — waiting for sync, then refetching');
         try { await waitForFlush(8000); } catch (_) {}
         try {
-          await fetchData();
+          const fresh = await fetchData();
           console.log('[SaleOrderList] Post-reconnect refetch complete');
+          const eligible = getToInvoiceOrders(fresh);
+          const sinceLast = Date.now() - lastAutoInvoiceAtRef.current;
+          if (eligible.length > 0 && sinceLast > 30_000) {
+            lastAutoInvoiceAtRef.current = Date.now();
+            console.log('[SaleOrderList] Auto-generating invoices for', eligible.length, 'orders');
+            const { success, failed } = await runBulkGenerate(eligible);
+            console.log('[SaleOrderList] Auto-invoice result:', success, 'created,', failed, 'failed');
+          } else if (eligible.length > 0) {
+            console.log('[SaleOrderList] Skipping auto-invoice (debounced, last run', sinceLast, 'ms ago)');
+          }
         } catch (e) {
           console.warn('[SaleOrderList] Post-reconnect refetch failed:', e?.message);
         }
@@ -131,21 +147,22 @@ const SaleOrderListScreen = ({ navigation }) => {
     });
     isOnline().then((o) => { wasOff = !o; setIsDeviceOnline(o); });
     return () => unsub && unsub();
-  }, [fetchData]);
+  }, [fetchData, getToInvoiceOrders, runBulkGenerate]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const records = await fetchSaleOrdersOdoo({ limit: 100 });
-      // Enrich: for SOs with no invoice_ids, search by origin
-      for (const r of (records || [])) {
+      // Enrich in PARALLEL: for SOs with no invoice_ids, search by origin.
+      // Serial was ~N round-trips; parallel is ~1 worst-case wall-clock.
+      await Promise.all((records || []).map(async (r) => {
         if ((!r.invoice_ids || r.invoice_ids.length === 0) && r.name) {
           try {
             const invs = await searchInvoicesByOriginOdoo(r.name);
             if (invs.length > 0) r.invoice_ids = invs.map(i => i.id);
           } catch (e) {}
         }
-      }
+      }));
       setData(records || []);
       // Assign S numbers (source of truth - orders get numbers here)
       const ids = (records || []).map(r => r.id);
@@ -153,9 +170,11 @@ const SaleOrderListScreen = ({ navigation }) => {
         const map = await assignSNumbers(ids);
         setInvMap(map);
       }
+      return records || [];
     } catch (err) {
       console.error('[SaleOrderList] error:', err);
       setData([]);
+      return [];
     } finally {
       setLoading(false);
     }
@@ -181,58 +200,73 @@ const SaleOrderListScreen = ({ navigation }) => {
     }
   };
 
-  const filteredData = activeFilter === 'all'
-    ? data
-    : activeFilter === 'invoiced'
-      ? data.filter(i => {
-          const hasInv = i.invoice_status === 'invoiced' || (i.invoice_ids && i.invoice_ids.length > 0);
-          return hasInv;
-        })
-      : activeFilter === 'sale'
-        ? data.filter(i => {
-            const s = (i.state || 'draft').toLowerCase();
-            const hasInv = i.invoice_status === 'invoiced' || (i.invoice_ids && i.invoice_ids.length > 0);
-            return s === 'sale' && !hasInv;
-          })
-        : activeFilter === 'draft'
-          ? data.filter(i => {
-              const s = (i.state || 'draft').toLowerCase();
-              const hasInv = i.invoice_status === 'invoiced' || (i.invoice_ids && i.invoice_ids.length > 0);
-              return s === activeFilter && !hasInv;
-            })
-          : data.filter(i => (i.state || 'draft').toLowerCase() === activeFilter);
+  // Per-filter predicate. Single source of truth used by both `filteredData`
+  // (the visible list) and `filterCounts` (the count badges next to each tab).
+  const filterPredicate = (filter) => (item) => {
+    const s = (item.state || 'draft').toLowerCase();
+    const hasInv = item.invoice_status === 'invoiced'
+      || (item.invoice_ids && item.invoice_ids.length > 0);
+    if (filter === 'all') return true;
+    if (filter === 'invoiced') return hasInv;
+    if (filter === 'sale') return s === 'sale' && !hasInv;
+    if (filter === 'draft') return s === 'draft' && !hasInv;
+    return s === filter; // 'cancel' etc. — match state directly
+  };
 
-  // Orders eligible for bulk invoice generation: confirmed, not invoiced, real Odoo ID
-  const toInvoiceOrders = data.filter((o) => {
+  const filteredData = data.filter(filterPredicate(activeFilter));
+
+  // Counts recompute only when the underlying data changes. Each filter
+  // tab's label shows its count — e.g. `All (20)`, `Invoiced (2)`.
+  const filterCounts = useMemo(() => {
+    const out = {};
+    for (const f of FILTERS) out[f.key] = data.filter(filterPredicate(f.key)).length;
+    return out;
+  }, [data]);
+
+  // Orders eligible for bulk invoice generation: confirmed, not invoiced, real Odoo ID.
+  // Extracted so we can run it against freshly-fetched records (inside the
+  // reconnect auto-fire effect) without waiting for the setData re-render.
+  const getToInvoiceOrders = useCallback((list) => (list || []).filter((o) => {
     const s = (o.state || '').toLowerCase();
     const isConfirmed = s === 'sale' || s === 'done';
     const notInvoiced = o.invoice_status !== 'invoiced' && (!o.invoice_ids || o.invoice_ids.length === 0 || (o.invoice_ids.length === 1 && o.invoice_ids[0] === 'offline_inv'));
     const hasRealId = !String(o.id || '').startsWith('offline_');
     return isConfirmed && notInvoiced && hasRealId;
-  });
+  }), []);
+
+  const toInvoiceOrders = getToInvoiceOrders(data);
+
+  // Shared bulk-invoice loop. Accepts an explicit list so auto-fire can pass
+  // freshly-fetched eligible orders without racing the state update.
+  // Fires all invoice calls in PARALLEL — on a single order this is a no-op,
+  // on many orders the wall-clock drops from sum(calls) to max(call).
+  const runBulkGenerate = useCallback(async (orders) => {
+    if (!orders || orders.length === 0) return { success: 0, failed: 0 };
+    setGeneratingInvoices(true);
+    const results = await Promise.allSettled(orders.map(async (order) => {
+      const companyId = order.company_id ? (Array.isArray(order.company_id) ? order.company_id[0] : order.company_id) : null;
+      console.log('[BulkInvoice] Generating for order:', order.id, order.name);
+      const r = await createInvoiceFromQuotationOdoo(order.id, companyId);
+      console.log('[BulkInvoice] SUCCESS:', order.id);
+      return r;
+    }));
+    let success = 0;
+    let failed = 0;
+    for (const r of results) {
+      if (r.status === 'fulfilled') success += 1;
+      else { failed += 1; console.error('[BulkInvoice] FAILED:', r.reason?.message || r.reason); }
+    }
+    setGeneratingInvoices(false);
+    await fetchData();
+    return { success, failed };
+  }, [fetchData]);
 
   const handleBulkGenerateInvoices = async () => {
     const online = await isOnline();
     if (!online) { showToastMessage('Internet required to generate invoices'); return; }
     if (toInvoiceOrders.length === 0) { showToastMessage('No orders pending invoice'); return; }
-    setGeneratingInvoices(true);
-    let success = 0;
-    let failed = 0;
-    for (const order of toInvoiceOrders) {
-      try {
-        const companyId = order.company_id ? (Array.isArray(order.company_id) ? order.company_id[0] : order.company_id) : null;
-        console.log('[BulkInvoice] Generating for order:', order.id, order.name);
-        await createInvoiceFromQuotationOdoo(order.id, companyId);
-        success += 1;
-        console.log('[BulkInvoice] SUCCESS:', order.id);
-      } catch (err) {
-        failed += 1;
-        console.error('[BulkInvoice] FAILED:', order.id, err?.message);
-      }
-    }
+    const { success, failed } = await runBulkGenerate(toInvoiceOrders);
     showToastMessage(`Invoices: ${success} created, ${failed} failed`);
-    setGeneratingInvoices(false);
-    fetchData();
   };
 
   const renderItem = ({ item }) => {
@@ -311,7 +345,9 @@ const SaleOrderListScreen = ({ navigation }) => {
               style={[styles.filterTab, activeFilter === f.key && styles.filterTabActive]}
               onPress={() => setActiveFilter(f.key)}
             >
-              <Text style={[styles.filterTabText, activeFilter === f.key && styles.filterTabTextActive]}>{f.label}</Text>
+              <Text style={[styles.filterTabText, activeFilter === f.key && styles.filterTabTextActive]}>
+                {f.label} ({filterCounts[f.key] ?? 0})
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
