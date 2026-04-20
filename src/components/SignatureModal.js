@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Modal, View, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
 import { AntDesign } from '@expo/vector-icons';
 import Text from './Text';
@@ -11,28 +11,41 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 // modal owns the whole screen.
 const SignatureModal = ({ visible, onClose, onSave, title = 'Signature' }) => {
   // Buffer the latest base64 from SignaturePad's onSignatureBase64 callback.
-  // We only forward it to the parent when the user taps Save.
+  // (Kept as a fallback — Save primarily uses imperative capture.)
   const [latestBase64, setLatestBase64] = useState(null);
   // Remount SignaturePad on each open (ensures fresh canvas + default black ink).
   const [padKey, setPadKey] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const padRef = useRef(null);
 
   const handleOpen = () => {
     setLatestBase64(null);
     setPadKey((k) => k + 1);
   };
 
-  const handleSave = () => {
-    if (!latestBase64) {
+  const handleSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    // Force a fresh capture so we never close the modal with a stale or
+    // half-baked base64 (async onSignatureBase64 can lag behind the tap).
+    let b64 = null;
+    try {
+      if (padRef.current?.capture) b64 = await padRef.current.capture();
+    } catch (_) {}
+    if (!b64) b64 = latestBase64; // fallback if capture returned null
+    setSaving(false);
+    if (!b64) {
       // Nothing drawn — just close.
       onClose && onClose();
       return;
     }
-    onSave && onSave(latestBase64);
+    onSave && onSave(b64);
     onClose && onClose();
   };
 
   const handleClear = () => {
     setLatestBase64(null);
+    try { padRef.current?.clear?.(); } catch (_) {}
     setPadKey((k) => k + 1);
   };
 
@@ -57,6 +70,7 @@ const SignatureModal = ({ visible, onClose, onSave, title = 'Signature' }) => {
         <View style={styles.body}>
           <SignaturePad
             key={padKey}
+            ref={padRef}
             title=""
             setUrl={() => {}}
             setScrollEnabled={() => {}}

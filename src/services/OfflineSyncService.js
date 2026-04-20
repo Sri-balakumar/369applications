@@ -924,15 +924,30 @@ const syncItemDirectly = async (item) => {
             }
         }
 
-        // Read back real name + state and patch the cached payments list.
+        // Read back name + state. Odoo assigns account.payment.name ONLY
+        // after the state leaves draft (sequence fires on post). Treat '/'
+        // and empty as "not yet assigned" and retry once to catch delayed
+        // commits. Fall through to display_name, then to a fallback.
         try {
-            const readResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            const doRead = () => axios.post(`${baseUrl}/web/dataset/call_kw`, {
                 jsonrpc: '2.0', method: 'call',
-                params: { model: 'account.payment', method: 'read', args: [[paymentId]], kwargs: { fields: ['name', 'state', 'journal_id', 'company_id'] } },
+                params: { model: 'account.payment', method: 'read', args: [[paymentId]], kwargs: { fields: ['name', 'display_name', 'state', 'journal_id', 'company_id'] } },
             }, { headers, timeout: 10000 });
-            const row = readResp.data?.result?.[0];
-            const realName = row?.name || row?.display_name || `P${paymentId}`;
-            const rawList = await AsyncStorage.getItem('@cache:accountPayments');
+            let row = (await doRead()).data?.result?.[0] || {};
+            const pickName = (r) => {
+                if (r?.name && r.name !== '/') return r.name;
+                if (r?.display_name && r.display_name !== '/') return r.display_name;
+                return null;
+            };
+            let realName = pickName(row);
+            if (!realName) {
+                await new Promise((r) => setTimeout(r, 800));
+                const retry = (await doRead()).data?.result?.[0] || {};
+                row = { ...row, ...retry };
+                realName = pickName(retry) || `P${paymentId}`;
+            }
+            for (const cacheKey of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
+            const rawList = await AsyncStorage.getItem(cacheKey);
             if (rawList) {
                 const list = JSON.parse(rawList);
                 const next = list.map((p) => {
@@ -941,7 +956,7 @@ const syncItemDirectly = async (item) => {
                             ...p,
                             id: paymentId,
                             name: realName,
-                            state: row?.state || 'posted',
+                            state: row?.state || p.state || 'draft',
                             journal_name: row?.journal_id ? row.journal_id[1] : p.journal_name,
                             company_name: row?.company_id ? row.company_id[1] : p.company_name,
                             offline: false,
@@ -949,7 +964,8 @@ const syncItemDirectly = async (item) => {
                     }
                     return p;
                 });
-                await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(next));
+                await AsyncStorage.setItem(cacheKey, JSON.stringify(next));
+            }
             }
         } catch (e) { console.warn('[OfflineSyncService] payment read-back failed:', e?.message); }
 
@@ -983,13 +999,21 @@ const syncItemDirectly = async (item) => {
 
         // Helper to read current state — we accept the call only when state
         // actually moves (or when cancel sets it to a cancelled-like value).
+        // Includes display_name so callers can pick the real Odoo sequence
+        // name once it's been assigned.
         const readState = async () => {
             const r = await axios.post(
                 `${baseUrl}/web/dataset/call_kw`,
-                { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method: 'read', args: [[numId]], kwargs: { fields: ['state', 'name'] } } },
+                { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method: 'read', args: [[numId]], kwargs: { fields: ['state', 'name', 'display_name'] } } },
                 { headers, timeout: 10000 }
             );
             return r.data?.result?.[0];
+        };
+        // Treat '/' and empty as "name not yet assigned by Odoo sequence".
+        const pickName = (r) => {
+            if (r?.name && r.name !== '/') return r.name;
+            if (r?.display_name && r.display_name !== '/') return r.display_name;
+            return null;
         };
 
         const before = await readState().catch(() => null);
@@ -1016,18 +1040,31 @@ const syncItemDirectly = async (item) => {
         }
         if (finalRow === before && lastErr) throw new Error(`${item.operation} failed: ${lastErr}`);
 
+        // If action_post fired but the sequence hasn't committed yet (name
+        // still '/'), wait briefly and re-read so the cache gets PAY0000N.
+        if (item.operation === 'action_post' && finalRow && !pickName(finalRow)) {
+            try {
+                await new Promise((r) => setTimeout(r, 800));
+                const retry = await readState();
+                if (retry) finalRow = { ...finalRow, ...retry };
+            } catch (_) {}
+        }
+        const realName = pickName(finalRow) || finalRow?.name || `P${numId}`;
+
         // Patch the cached list so any screen auto-refresh picks up the real state + name.
         try {
-            const raw = await AsyncStorage.getItem('@cache:accountPayments');
-            if (raw) {
+            for (const cacheKey of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
+              const raw = await AsyncStorage.getItem(cacheKey);
+              if (raw) {
                 const list = JSON.parse(raw);
                 const next = list.map((p) => {
                     if (p.id === numId || String(p.id) === String(numId)) {
-                        return { ...p, state: finalRow?.state || p.state, name: finalRow?.name || p.name };
+                        return { ...p, state: finalRow?.state || p.state, name: realName };
                     }
                     return p;
                 });
-                await AsyncStorage.setItem('@cache:accountPayments', JSON.stringify(next));
+                await AsyncStorage.setItem(cacheKey, JSON.stringify(next));
+              }
             }
         } catch (_) {}
 

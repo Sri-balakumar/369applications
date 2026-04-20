@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from "react";
+import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef } from "react";
 import { StyleSheet, View, TouchableOpacity, Image, PanResponder } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { captureRef } from "react-native-view-shot";
@@ -18,7 +18,7 @@ const PEN_SIZES = [
     { label: '3px', width: 3.5 },
 ];
 
-const SignaturePad = ({ setUrl, setScrollEnabled, title, previousSignature = '', onSignatureBase64 }) => {
+const SignaturePad = forwardRef(({ setUrl, setScrollEnabled, title, previousSignature = '', onSignatureBase64 }, ref) => {
     const [penColor, setPenColor] = useState('#000000');
     const [activeSizeIdx, setActiveSizeIdx] = useState(1);
     const [isEraser, setIsEraser] = useState(false);
@@ -35,6 +35,17 @@ const SignaturePad = ({ setUrl, setScrollEnabled, title, previousSignature = '',
     const hasInteracted = useRef(false);
 
     const strokeWidth = PEN_SIZES[activeSizeIdx].width;
+
+    // Keep live pen config in refs so the PanResponder closure (created once
+    // via useRef below) always reads the LATEST values — not the initial
+    // render's snapshot. Without this, taps on color / size / eraser update
+    // React state but strokes stay in the first-render color.
+    const penColorRef = useRef(penColor);
+    const isEraserRef = useRef(isEraser);
+    const strokeWidthRef = useRef(strokeWidth);
+    useEffect(() => { penColorRef.current = penColor; }, [penColor]);
+    useEffect(() => { isEraserRef.current = isEraser; }, [isEraser]);
+    useEffect(() => { strokeWidthRef.current = strokeWidth; }, [strokeWidth]);
 
     const measureLayout = useCallback(() => {
         if (containerRef.current?.measureInWindow) {
@@ -53,6 +64,31 @@ const SignaturePad = ({ setUrl, setScrollEnabled, title, previousSignature = '',
             setVersion((v) => v + 1);
         });
     }, []);
+
+    // Snapshot the signature on demand and return the base64 URI. Used by
+    // SignatureModal's Save button to guarantee we get the latest strokes
+    // even if the user taps Save before the background captureAndNotify
+    // completes. Returns null if nothing was drawn.
+    const captureNow = async () => {
+        if (pathsRef.current.length === 0 && !activeRef.current) return null;
+        try {
+            const uri = await captureRef(captureRefInner, { format: 'png', quality: 0.9, result: 'tmpfile' });
+            const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+            return `data:image/png;base64,${b64}`;
+        } catch (e) {
+            console.warn('Signature captureNow failed:', e?.message);
+            return null;
+        }
+    };
+
+    useImperativeHandle(ref, () => ({
+        capture: captureNow,
+        clear: () => {
+            pathsRef.current = [];
+            activeRef.current = null;
+            setVersion((v) => v + 1);
+        },
+    }), []);
 
     const captureAndNotify = async () => {
         if (pathsRef.current.length === 0) return;
@@ -93,8 +129,8 @@ const SignaturePad = ({ setUrl, setScrollEnabled, title, previousSignature = '',
                 if (setScrollEnabled) setScrollEnabled(false);
                 const { pageX, pageY } = evt.nativeEvent;
                 activeRef.current = {
-                    color: isEraser ? '#FFFFFF' : penColor,
-                    width: strokeWidth,
+                    color: isEraserRef.current ? '#FFFFFF' : penColorRef.current,
+                    width: strokeWidthRef.current,
                     points: [{ x: pageX - offset.current.x, y: pageY - offset.current.y }],
                 };
                 scheduleRender();
@@ -290,7 +326,7 @@ const SignaturePad = ({ setUrl, setScrollEnabled, title, previousSignature = '',
             </Text>
         </>
     );
-};
+});
 
 export const CustomClearButton = ({ title, onPress }) => (
     <TouchableOpacity style={[styles.button, { backgroundColor: COLORS.orange }]} onPress={onPress}>
