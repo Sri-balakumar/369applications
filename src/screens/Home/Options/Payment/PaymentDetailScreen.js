@@ -99,6 +99,9 @@ const PaymentDetailScreen = ({ navigation, route }) => {
   const state = (record.state || 'draft').toLowerCase();
   const stateColor = STATE_COLORS[state] || '#999';
   const stateLabel = STATE_LABELS[state] || state.toUpperCase();
+  // Draft → "Draft Payment". Everything else → Odoo's real sequence name.
+  const isRealName = record.name && record.name !== '/' && !String(record.name).startsWith('DRAFT-');
+  const displayName = state === 'draft' && !isRealName ? 'Draft Payment' : (record.name || 'Payment');
   // Button visibility matches Odoo's standard account.payment form:
   //   Validate → available for draft + in_process
   //   Reset to Draft → available for in_process / paid / posted / cancelled
@@ -199,14 +202,14 @@ const PaymentDetailScreen = ({ navigation, route }) => {
 
   return (
     <SafeAreaView>
-      <NavigationHeader title={record.name || 'Payment'} onBackPress={() => navigation.goBack()} />
+      <NavigationHeader title={displayName} onBackPress={() => navigation.goBack()} />
       <OfflineBanner message="OFFLINE MODE — changes will sync when you reconnect" onOnline={fetchDetail} />
 
       <RoundedScrollContainer contentContainerStyle={{ padding: 14, paddingBottom: 60 }}>
         {/* State + amount header */}
         <View style={s.headerCard}>
           <View style={s.headerTopRow}>
-            <Text style={s.paymentName}>{record.name || '-'}</Text>
+            <Text style={s.paymentName}>{displayName}</Text>
             <View style={[s.badge, { backgroundColor: stateColor }]}>
               <Text style={s.badgeText}>{stateLabel}</Text>
             </View>

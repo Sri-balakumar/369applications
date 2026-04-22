@@ -48,6 +48,7 @@ const filterPredicate = (filter) => (item) => {
   return s === filter;
 };
 
+
 const PaymentList = ({ paymentType, navigation }) => {
   const currencySymbol = useCurrencyStore((state) => state.currencySymbol) || '$';
   const [data, setData] = useState([]);
@@ -91,6 +92,12 @@ const PaymentList = ({ paymentType, navigation }) => {
     if (item.empty) return <EmptyItem />;
     const state = (item.state || 'draft').toLowerCase();
     const stateColor = STATE_COLORS[state] || '#999';
+    // Draft (any source) → "Draft Payment". Everything else shows Odoo's
+    // real sequence name as returned by account.payment.search_read.
+    const isRealName = item.name && item.name !== '/' && !String(item.name).startsWith('DRAFT-');
+    const displayName = state === 'draft' && !isRealName
+      ? 'Draft Payment'
+      : (item.name || 'Payment');
 
     return (
       <TouchableOpacity
@@ -99,7 +106,7 @@ const PaymentList = ({ paymentType, navigation }) => {
         onPress={() => navigation.navigate('PaymentDetailScreen', { paymentId: item.id })}
       >
         <View style={styles.row}>
-          <Text style={styles.head} numberOfLines={1}>{item.name || '-'}</Text>
+          <Text style={styles.head} numberOfLines={1}>{displayName}</Text>
           <View style={[styles.badge, { backgroundColor: stateColor }]}>
             <Text style={styles.badgeText}>{state.toUpperCase()}</Text>
           </View>

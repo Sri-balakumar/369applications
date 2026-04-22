@@ -4841,12 +4841,46 @@ export const postPaymentOdoo = async (paymentId) => {
         operation: 'action_post',
         values: { _recordId: paymentId },
       });
-      // Patch cache state so UI updates immediately.
+
+      // Predict the next Odoo sequence from the highest existing name across
+      // all cached payments so the badge flip ALSO shows a proper PAY0000N
+      // label — not just "Paid" on a placeholder row. Once the queue flushes,
+      // OfflineSyncService's post handler overwrites the cache with Odoo's
+      // actual assigned sequence (which is almost always the same number
+      // unless another device posted one in between).
+      let predictedName = null;
+      try {
+        const names = [];
+        for (const k of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
+          const raw = await AsyncStorage.getItem(k);
+          if (!raw) continue;
+          const list = JSON.parse(raw);
+          list.forEach((p) => { if (p?.name) names.push(String(p.name)); });
+        }
+        // Pull the trailing numeric segment from each name (handles both
+        // PAY00006 and journal patterns like PBNK1/2026/00006).
+        let best = null; // { prefix, num, width }
+        names.forEach((n) => {
+          const m = n.match(/^(.*?)(\d{2,})\s*$/);
+          if (m) {
+            const num = parseInt(m[2], 10);
+            if (!best || num > best.num) best = { prefix: m[1], num, width: m[2].length };
+          }
+        });
+        if (best) {
+          const nextNum = String(best.num + 1).padStart(best.width, '0');
+          predictedName = `${best.prefix}${nextNum}`;
+        }
+      } catch (_) {}
+
+      const patch = { state: 'paid' };
+      if (predictedName) patch.name = predictedName;
       await _patchPaymentInCache(
         (p) => p.id === paymentId || String(p.id) === String(paymentId),
-        { state: 'paid' }
+        patch
       );
-      return { offline: true };
+      console.log('[postPayment] OFFLINE queued, predicted name:', predictedName);
+      return { offline: true, predictedName };
     }
   } catch (_) {}
 
