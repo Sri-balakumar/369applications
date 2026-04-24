@@ -41,6 +41,16 @@ const FILTERS = [
   { key: 'cancelled', label: 'Cancelled' },
 ];
 
+// Each filter tab is tinted to match the state-badge color of the rows it
+// filters for, so the filter bar doubles as a color legend.
+const FILTER_COLORS = {
+  all:        COLORS.primaryThemeColor,
+  draft:      STATE_COLORS.draft,
+  in_process: STATE_COLORS.in_process,
+  paid:       STATE_COLORS.paid,
+  cancelled:  STATE_COLORS.cancelled,
+};
+
 const filterPredicate = (filter) => (item) => {
   const s = (item.state || 'draft').toLowerCase();
   if (filter === 'all') return true;
@@ -176,17 +186,29 @@ const PaymentList = ({ paymentType, navigation }) => {
       {/* Filter bar — tap to narrow by state. Counts update live with data. */}
       <View style={styles.filterBarWrap}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterBarContent}>
-          {FILTERS.map((f) => (
-            <TouchableOpacity
-              key={f.key}
-              style={[styles.filterTab, activeFilter === f.key && styles.filterTabActive]}
-              onPress={() => setActiveFilter(f.key)}
-            >
-              <Text style={[styles.filterTabText, activeFilter === f.key && styles.filterTabTextActive]}>
-                {f.label} ({filterCounts[f.key] ?? 0})
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {FILTERS.map((f) => {
+            const color = FILTER_COLORS[f.key] || COLORS.primaryThemeColor;
+            const isActive = activeFilter === f.key;
+            return (
+              <TouchableOpacity
+                key={f.key}
+                style={[
+                  styles.filterTab,
+                  isActive && { backgroundColor: color, borderColor: color },
+                ]}
+                onPress={() => setActiveFilter(f.key)}
+              >
+                <Text
+                  style={[
+                    styles.filterTabText,
+                    isActive ? styles.filterTabTextActive : { color },
+                  ]}
+                >
+                  {f.label} ({filterCounts[f.key] ?? 0})
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
 
@@ -274,10 +296,6 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     backgroundColor: '#F8F8F8',
     marginRight: 6,
-  },
-  filterTabActive: {
-    borderColor: COLORS.primaryThemeColor,
-    backgroundColor: COLORS.primaryThemeColor,
   },
   filterTabText: {
     fontSize: 12,

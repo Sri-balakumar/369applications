@@ -78,6 +78,17 @@ const STATE_COLORS = {
   cancel: '#F44336',
 };
 
+// Each filter tab is tinted to match the row badges it filters for so the
+// filter bar reads as a color legend. Invoiced uses the teal that the bulk
+// "Invoice (N)" button already uses, keeping visuals consistent.
+const FILTER_COLORS = {
+  all:      '#6C7A89',
+  draft:    STATE_COLORS.draft,
+  sale:     STATE_COLORS.sale,
+  invoiced: '#009688',
+  cancel:   STATE_COLORS.cancel,
+};
+
 const INVOICE_STATUS_LABELS = {
   upselling: 'Upselling',
   invoiced: 'INVOICED',
@@ -339,17 +350,27 @@ const SaleOrderListScreen = ({ navigation }) => {
       <OfflineBanner message="OFFLINE MODE — showing cached orders" onOnline={() => { setIsDeviceOnline(true); fetchData(); }} />
       <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff' }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterRow, { flex: 1, borderBottomWidth: 0 }]} contentContainerStyle={styles.filterRowContent}>
-          {FILTERS.map(f => (
-            <TouchableOpacity
-              key={f.key}
-              style={[styles.filterTab, activeFilter === f.key && styles.filterTabActive]}
-              onPress={() => setActiveFilter(f.key)}
-            >
-              <Text style={[styles.filterTabText, activeFilter === f.key && styles.filterTabTextActive]}>
-                {f.label} ({filterCounts[f.key] ?? 0})
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {FILTERS.map((f) => {
+            const color = FILTER_COLORS[f.key] || COLORS.primaryThemeColor;
+            const isActive = activeFilter === f.key;
+            return (
+              <TouchableOpacity
+                key={f.key}
+                style={[styles.filterTab, isActive && { borderBottomColor: color }]}
+                onPress={() => setActiveFilter(f.key)}
+              >
+                <Text
+                  style={[
+                    styles.filterTabText,
+                    { color: isActive ? color : `${color}B3` },
+                    isActive && { fontFamily: FONT_FAMILY.urbanistBold },
+                  ]}
+                >
+                  {f.label} ({filterCounts[f.key] ?? 0})
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
         {toInvoiceOrders.length > 0 && isDeviceOnline && (
           <TouchableOpacity
@@ -412,9 +433,7 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistBold,
   },
   filterTab: { paddingHorizontal: 16, paddingVertical: 12, marginRight: 4, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  filterTabActive: { borderBottomColor: COLORS.primaryThemeColor },
-  filterTabText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, color: '#999' },
-  filterTabTextActive: { color: COLORS.primaryThemeColor, fontFamily: FONT_FAMILY.urbanistBold },
+  filterTabText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold },
   itemContainer: {
     marginHorizontal: 5,
     marginVertical: 5,
