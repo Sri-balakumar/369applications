@@ -1160,6 +1160,35 @@ const syncItemDirectly = async (item) => {
                 row = { ...row, ...retry };
                 realName = pickName(retry);
             }
+            // Odoo hasn't assigned a sequence name yet (record is draft and
+            // account.payment.name fires only on post). Predict the next PAY
+            // name from the highest existing PAY… across both caches, so the
+            // user sees an Odoo-style number right after sync — matches the
+            // Easy Sales / Easy Purchase experience. When the user later
+            // validates, action_post's real read-back overrides this.
+            if (!realName) {
+                try {
+                    const names = [];
+                    for (const k of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
+                        const r = await AsyncStorage.getItem(k);
+                        if (!r) continue;
+                        const list = JSON.parse(r) || [];
+                        list.forEach((p) => { if (p?.name) names.push(String(p.name)); });
+                    }
+                    let best = null;
+                    names.forEach((n) => {
+                        const m = n.match(/^(.*?)(\d{2,})\s*$/);
+                        if (m) {
+                            const num = parseInt(m[2], 10);
+                            if (!best || num > best.num) best = { prefix: m[1], num, width: m[2].length };
+                        }
+                    });
+                    if (best) {
+                        realName = `${best.prefix}${String(best.num + 1).padStart(best.width, '0')}`;
+                        console.log('[PaySync] Odoo name still "/", predicted next:', realName);
+                    }
+                } catch (_) {}
+            }
             for (const cacheKey of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
             const rawList = await AsyncStorage.getItem(cacheKey);
             if (rawList) {

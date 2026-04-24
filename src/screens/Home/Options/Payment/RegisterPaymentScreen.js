@@ -124,12 +124,15 @@ const PaymentList = ({ paymentType, navigation }) => {
     if (item.empty) return <EmptyItem />;
     const state = (item.state || 'draft').toLowerCase();
     const stateColor = STATE_COLORS[state] || '#999';
-    // Draft (any source) → "Draft Payment". Everything else shows Odoo's
-    // real sequence name as returned by account.payment.search_read.
-    const isRealName = item.name && item.name !== '/' && !String(item.name).startsWith('DRAFT-');
-    const displayName = state === 'draft' && !isRealName
-      ? 'Draft Payment'
-      : (item.name || 'Payment');
+    // Display name priority: real Odoo sequence name (PAY0000X) > offline
+    // placeholder label ("NEW N(offline)") > predicted PAY name on validate >
+    // "Payment" fallback. Legacy DRAFT- placeholders still get the friendly
+    // "Draft Payment" treatment.
+    const rawName = item.name || '';
+    const isLegacyDraft = String(rawName).startsWith('DRAFT-');
+    const displayName = rawName && rawName !== '/' && !isLegacyDraft
+      ? rawName
+      : (state === 'draft' ? 'Draft Payment' : 'Payment');
 
     return (
       <TouchableOpacity

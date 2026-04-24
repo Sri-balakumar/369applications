@@ -4676,9 +4676,21 @@ export const createPaymentWithSignatureOdoo = async ({
             partnerName = p?.name || p?.partner_name || '';
           }
         } catch (_) {}
+        const perTypeKey = `@cache:accountPayments:${paymentType}`;
+        // Sequential per-type offline label: "NEW 1(offline)", "NEW 2(offline)"
+        // — scoped to Customer (inbound) and Vendor (outbound) independently so
+        // the two tabs have their own counters.
+        let offlineSeq = 1;
+        try {
+          const existingRaw = await AsyncStorage.getItem(perTypeKey);
+          if (existingRaw) {
+            const existing = JSON.parse(existingRaw);
+            offlineSeq = existing.filter((o) => String(o?.id || '').startsWith('offline_')).length + 1;
+          }
+        } catch (_) {}
         const placeholder = {
           id: `offline_${localId}`,
-          name: `DRAFT-${localId}`,
+          name: `NEW ${offlineSeq}(offline)`,
           partner_id: partnerId,
           partner_name: partnerName,
           amount: parseFloat(amount) || 0,
@@ -4690,7 +4702,6 @@ export const createPaymentWithSignatureOdoo = async ({
           company_name: companyName || '',
           offline: true,
         };
-        const perTypeKey = `@cache:accountPayments:${paymentType}`;
         const raw = await AsyncStorage.getItem(perTypeKey);
         const list = raw ? JSON.parse(raw) : [];
         list.unshift(placeholder);
@@ -5012,42 +5023,16 @@ export const postPaymentOdoo = async (paymentId) => {
         values: { _recordId: paymentId },
       });
 
-      // Predict the PAY0000N label ONLY when we're about to transition out
-      // of draft (Odoo's sequence fires at that moment). On the second
-      // Validate (in_process → paid) the name already exists; don't touch it.
-      let predictedName = null;
-      if (currentState === 'draft') {
-        try {
-          const names = [];
-          for (const k of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
-            const raw = await AsyncStorage.getItem(k);
-            if (!raw) continue;
-            const list = JSON.parse(raw);
-            list.forEach((p) => { if (p?.name) names.push(String(p.name)); });
-          }
-          let best = null; // { prefix, num, width }
-          names.forEach((n) => {
-            const m = n.match(/^(.*?)(\d{2,})\s*$/);
-            if (m) {
-              const num = parseInt(m[2], 10);
-              if (!best || num > best.num) best = { prefix: m[1], num, width: m[2].length };
-            }
-          });
-          if (best) {
-            const nextNum = String(best.num + 1).padStart(best.width, '0');
-            predictedName = `${best.prefix}${nextNum}`;
-          }
-        } catch (_) {}
-      }
-
+      // Only flip state — keep the "NEW N(offline)" placeholder name intact
+      // while offline. The real PAY number is assigned exclusively at sync
+      // time by the OfflineSyncService handlers (create or action_post).
       const patch = { state: nextState };
-      if (predictedName) patch.name = predictedName;
       await _patchPaymentInCache(
         (p) => p.id === paymentId || String(p.id) === String(paymentId),
         patch
       );
-      console.log('[postPayment] OFFLINE queued:', { paymentId, currentState, nextState, predictedName });
-      return { offline: true, state: nextState, predictedName };
+      console.log('[postPayment] OFFLINE queued:', { paymentId, currentState, nextState });
+      return { offline: true, state: nextState };
     }
   } catch (_) {}
 
