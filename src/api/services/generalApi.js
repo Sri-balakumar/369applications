@@ -4960,7 +4960,7 @@ export const postPaymentOdoo = async (paymentId) => {
   throw new Error(
     lastErr
       ? `Validate failed: ${lastErr}`
-      : `Validate was accepted by Odoo but state stayed "${prevState}". The payment may be locked, already processed, or require reconciliation.`
+      : `Validate was accepted but state stayed "${prevState}". The payment may be locked, already processed, or require reconciliation.`
   );
 };
 

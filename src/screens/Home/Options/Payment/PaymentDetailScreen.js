@@ -113,7 +113,7 @@ const PaymentDetailScreen = ({ navigation, route }) => {
 
   const handleValidate = () => {
     showAlert({
-      message: 'Confirm and validate this payment to Odoo?',
+      message: 'Confirm and validate this payment?',
       confirmText: 'VALIDATE',
       cancelText: 'CANCEL',
       onConfirm: async () => {
@@ -127,7 +127,7 @@ const PaymentDetailScreen = ({ navigation, route }) => {
           } else if (res && res.state && res.state !== prevState) {
             showToastMessage(`Payment is now ${(res.state || '').replace('_', ' ')}`);
           } else {
-            showAlert({ message: 'Odoo accepted the request but the state did not change. The payment may be locked or requires reconciliation.' });
+            showAlert({ message: 'Request accepted but the state did not change. The payment may be locked or requires reconciliation.' });
           }
           await fetchDetail();
         } catch (err) {
