@@ -1,13 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Image, TouchableOpacity, Platform } from 'react-native';
 import Text from '@components/Text';
 import { FONT_FAMILY, COLORS } from '@constants/theme';
 import { useCurrencyStore } from '@stores/currency';
 
 const ProductsList = ({ item, onPress, showQuickAdd, onQuickAdd }) => {
-    // Only consider the image "real" if it's a base64 data URI (product has image stored)
-    const hasRealImage = item?.image_url && typeof item.image_url === 'string' && item.image_url.startsWith('data:image');
+    // Accept both base64 data URIs (cached / offline) AND remote /web/image
+    // URLs (freshly re-fetched after edit, before image_128 has fully synced).
+    // The <Image onError> fallback catches genuinely-missing images.
+    const url = typeof item?.image_url === 'string' ? item.image_url : '';
+    const hasRealImage = url.startsWith('data:image') || url.startsWith('http') || url.startsWith('/');
     const [imageFailed, setImageFailed] = useState(!hasRealImage);
+
+    // If the item's image_url changes (e.g., after editing the product), drop
+    // any prior "failed" state so the new URL gets a fresh try.
+    useEffect(() => {
+        setImageFailed(!hasRealImage);
+    }, [url]);
 
     const currency = useCurrencyStore((state) => state.currency);
     const priceValue = (item?.price ?? item?.list_price ?? 0);

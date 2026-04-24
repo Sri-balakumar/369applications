@@ -12594,6 +12594,14 @@ export const updateProductOdoo = async (productId, { name, posCategoryId, categI
       if (standardPrice !== undefined && standardPrice !== '') patch.standard_price = parseFloat(standardPrice) || 0;
       if (barcode !== undefined) patch.barcode = barcode || '';
       if (defaultCode !== undefined) patch.code = defaultCode || '';
+      // Include the new image so the list thumbnail updates without waiting
+      // for a full product-list refetch. Store both image_128 (raw base64)
+      // and image_url (data URI — what the list renderer reads).
+      if (image !== undefined && image !== null && image !== '') {
+        const cleanBase64 = String(image).replace(/^data:image\/[^;]+;base64,/, '');
+        patch.image_128 = cleanBase64;
+        patch.image_url = `data:image/png;base64,${cleanBase64}`;
+      }
       if (Object.keys(patch).length > 0) {
         const keys = await AsyncStorage.getAllKeys();
         const productKeys = keys.filter(k => k.startsWith('@cache:products') && !k.startsWith('@cache:productDetail'));

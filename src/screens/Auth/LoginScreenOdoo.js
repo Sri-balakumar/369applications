@@ -137,56 +137,76 @@ const LoginScreenOdoo = () => {
 
   // Removed auto-fill of Server URL from AsyncStorage — user must enter URL each time.
 
-  // If the user previously enabled "Auto Fill Credentials" AND has a saved
-  // username/password from a prior successful login, restore them on mount.
-  // No hardcoded admin/admin fallback — first-time users must type their own.
-  useEffect(() => {
-    (async () => {
-      try {
-        const enabled = await AsyncStorage.getItem('autofill_enabled');
-        if (enabled !== 'true') return;
-        const raw = await AsyncStorage.getItem('saved_credentials');
-        if (!raw) return;
-        const { username, password } = JSON.parse(raw) || {};
-        if (username || password) {
-          setAutoCredentials(true);
-          setInputs((prev) => ({
-            ...prev,
-            username: username || '',
-            password: password || '',
-          }));
-        }
-      } catch (_) {}
-    })();
-  }, []);
+  // Build a stable storage key from the server URL + database the user is
+  // actually logging into, so credentials are remembered per-DB. Normalises
+  // trailing slashes and case so "HTTPS://x/" == "https://x".
+  const _credKey = (baseUrl, db) => {
+    const u = String(baseUrl || '').trim().toLowerCase().replace(/\/+$/, '');
+    const d = String(db || '').trim();
+    return u && d ? `${u}|${d}` : '';
+  };
+
+  // Read the per-DB saved-credentials map. Tolerates the old flat shape
+  // (plain { username, password }) that was written before per-DB keys —
+  // treats that as "no saved entry for this DB" and returns {}.
+  const _readSavedMap = async () => {
+    try {
+      const raw = await AsyncStorage.getItem('saved_credentials');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+      const values = Object.values(parsed);
+      const looksLikeMap = values.length === 0
+        || values.every((v) => v && typeof v === 'object' && 'username' in v);
+      return looksLikeMap ? parsed : {};
+    } catch (_) { return {}; }
+  };
 
   // Toggle handler for the "Auto Fill Credentials" switch.
-  // ON  + saved exists → fill username/password from AsyncStorage.
-  // ON  + no saved     → leave fields empty, prompt the user to log in once.
-  // OFF                → clear fields.
-  const toggleAutoCredentials = async () => {
-    const next = !autoCredentials;
-    setAutoCredentials(next);
-    try { await AsyncStorage.setItem('autofill_enabled', String(next)); } catch (_) {}
-    if (next) {
-      try {
-        const raw = await AsyncStorage.getItem('saved_credentials');
-        if (raw) {
-          const { username, password } = JSON.parse(raw) || {};
-          setInputs((prev) => ({
-            ...prev,
-            username: username || '',
-            password: password || '',
-          }));
-          return;
-        }
-      } catch (_) {}
+  // Turning ON with URL + DB empty → refuse (nothing to key off); show toast.
+  // Turning ON with URL + DB filled → the effect below does the lookup.
+  // Turning OFF                    → clear username/password.
+  const toggleAutoCredentials = () => {
+    if (autoCredentials) {
+      setAutoCredentials(false);
+      setInputs((prev) => ({ ...prev, username: '', password: '' }));
+      return;
+    }
+    const urlTrim = inputs.baseUrl?.trim();
+    const dbTrim = inputs.db?.trim();
+    if (!urlTrim || !dbTrim) {
+      showToastMessage('Please enter server URL and select database first');
+      return; // keep toggle OFF
+    }
+    setAutoCredentials(true);
+    // The useEffect watching [baseUrl, db, autoCredentials] fills the fields.
+  };
+
+  // When autofill is ON and the user changes URL or DB, re-lookup saved
+  // credentials for the NEW URL/DB combo. First-time DB shows the toast
+  // "No saved credentials yet — log in once to save"; previously-logged DB
+  // fills username/password with whatever the user typed last time.
+  useEffect(() => {
+    if (!autoCredentials) return;
+    const urlTrim = inputs.baseUrl?.trim();
+    const dbTrim = inputs.db?.trim();
+    if (!urlTrim || !dbTrim) return;
+    (async () => {
+      const key = _credKey(urlTrim, dbTrim);
+      const map = await _readSavedMap();
+      const entry = map[key];
+      if (entry && (entry.username || entry.password)) {
+        setInputs((prev) => ({
+          ...prev,
+          username: entry.username || '',
+          password: entry.password || '',
+        }));
+        return;
+      }
       showToastMessage('No saved credentials yet — log in once to save');
       setInputs((prev) => ({ ...prev, username: '', password: '' }));
-    } else {
-      setInputs((prev) => ({ ...prev, username: '', password: '' }));
-    }
-  };
+    })();
+  }, [inputs.baseUrl, inputs.db, autoCredentials]);
 
   // Debounce URL changes to fetch databases
   useEffect(() => {
@@ -364,9 +384,18 @@ const LoginScreenOdoo = () => {
             } catch (e) { console.warn('Failed to clear cart cache:', e?.message); }
             await AsyncStorage.setItem('odoo_db', dbNameUsed);
             await AsyncStorage.setItem("userData", JSON.stringify(userData));
-            // Persist the credentials the user actually typed so the
-            // "Auto Fill Credentials" toggle can recall them next time.
-            try { await AsyncStorage.setItem('saved_credentials', JSON.stringify({ username, password })); } catch (_) {}
+            // Persist the credentials under a per-(URL + DB) key so each
+            // database remembers its own username/password. Reloading the
+            // same URL+DB later and tapping Auto Fill Credentials restores
+            // these exact values; a different URL+DB still shows first-time.
+            try {
+              const key = _credKey(finalOdooUrl, dbNameUsed);
+              if (key) {
+                const map = await _readSavedMap();
+                map[key] = { username, password };
+                await AsyncStorage.setItem('saved_credentials', JSON.stringify(map));
+              }
+            } catch (_) {}
             try {
               const setCookie = odooLoginRes.headers['set-cookie'] || odooLoginRes.headers['Set-Cookie'];
               if (setCookie) {
@@ -419,7 +448,8 @@ const LoginScreenOdoo = () => {
         if (response && response.success === true && response.data?.length) {
           const userData = response.data[0];
           await AsyncStorage.setItem("userData", JSON.stringify(userData));
-          try { await AsyncStorage.setItem('saved_credentials', JSON.stringify({ username, password })); } catch (_) {}
+          // UAE admin login doesn't have a server URL + DB pair to key against,
+          // so it no longer participates in the per-DB saved-credentials store.
           setUser(userData);
           if (userData._id && userData.user_name !== 'admin') {
             startLocationTracking(userData._id);

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { View, StyleSheet, Keyboard, TouchableOpacity, Alert, Image } from 'react-native';
 import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
-import { CustomListModal } from '@components/Modal';
+import { CustomListModal, StyledAlertModal } from '@components/Modal';
 import { TextInput as FormInput } from '@components/common/TextInput';
 import { LoadingButton } from '@components/common/Button';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
@@ -59,20 +59,16 @@ const ProductEditForm = ({ navigation, route }) => {
     }).catch((e) => { console.error('[ProductEdit] Failed to load categories:', e?.message); });
   }, []);
 
+  const [showImagePicker, setShowImagePicker] = useState(false);
+  const [showOfflineAlert, setShowOfflineAlert] = useState(false);
+
   const handlePickImage = async () => {
     const online = await isOnline();
     if (!online) {
-      Alert.alert(
-        'You\'re Offline',
-        'Can\'t add image right now. Please add the image once you\'re connected to the internet.'
-      );
+      setShowOfflineAlert(true);
       return;
     }
-    Alert.alert('Select Image', 'Choose an option', [
-      { text: 'Camera', onPress: () => openCamera() },
-      { text: 'Gallery', onPress: () => openGallery() },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setShowImagePicker(true);
   };
 
   const openCamera = async () => {
@@ -184,6 +180,24 @@ const ProductEditForm = ({ navigation, route }) => {
           onClose={() => setIsDropdownVisible(false)} onValueChange={handleDropdownSelect} />
       </RoundedScrollContainer>
       <OverlayLoader visible={isSubmitting} />
+      <StyledAlertModal
+        isVisible={showImagePicker}
+        message="Choose an option to add image"
+        confirmText="CAMERA"
+        middleText="GALLERY"
+        cancelText="CANCEL"
+        onConfirm={() => { setShowImagePicker(false); openCamera(); }}
+        onMiddle={() => { setShowImagePicker(false); openGallery(); }}
+        onCancel={() => setShowImagePicker(false)}
+      />
+      <StyledAlertModal
+        isVisible={showOfflineAlert}
+        message="Can't add image right now. Please add the image once you're connected to the internet."
+        confirmText="OK"
+        cancelText=""
+        onConfirm={() => setShowOfflineAlert(false)}
+        onCancel={() => setShowOfflineAlert(false)}
+      />
     </SafeAreaView>
   );
 };
