@@ -13,6 +13,9 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchEasyPurchasesOdoo } from '@api/services/generalApi';
 import { useCurrencyStore } from '@stores/currency';
 import OfflineBanner from '@components/common/OfflineBanner';
+import networkStatus from '@utils/networkStatus';
+import { waitForFlush, flush } from '@services/OfflineSyncService';
+import { getPendingCount } from '@utils/offlineQueue';
 
 const STATE_COLORS = { draft: '#FF9800', done: '#4CAF50', cancelled: '#F44336' };
 
@@ -27,7 +30,26 @@ const EasyPurchaseListScreen = ({ navigation }) => {
     finally { setLoading(false); }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
+  // Focus: if there's a pending queue while online, drain it FIRST so the
+  // subsequent fetch sees the freshly-synced Odoo ids + names. Without this,
+  // offline-created placeholders can be wiped by a refetch that runs before
+  // the sync commits.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const online = await networkStatus.isOnline();
+        const pending = await getPendingCount();
+        if (online && pending > 0 && !cancelled) {
+          console.log('[EasyPurchaseList] Focus + online + queue=', pending, '→ force flush before fetch');
+          try { await flush(); } catch (e) { console.warn('[EasyPurchaseList] focus flush failed:', e?.message); }
+          try { await waitForFlush(8000); } catch (_) {}
+        }
+        if (!cancelled) await fetchData();
+      })();
+      return () => { cancelled = true; };
+    }, [fetchData])
+  );
 
   const renderItem = ({ item }) => {
     if (item.empty) return <EmptyItem />;
@@ -39,8 +61,11 @@ const EasyPurchaseListScreen = ({ navigation }) => {
     const isPaid = paymentStatus === 'paid' || paymentStatus === 'invoiced';
 
     return (
-      <TouchableOpacity style={s.card} activeOpacity={0.7}
-        onPress={() => navigation.navigate('EasyPurchaseDetailScreen', { purchaseId: item.id })}>
+      <TouchableOpacity
+        style={s.itemContainer}
+        activeOpacity={0.7}
+        onPress={() => navigation.navigate('EasyPurchaseDetailScreen', { purchaseId: item.id })}
+      >
         <View style={s.row}>
           <Text style={s.head} numberOfLines={1}>{item.name || `EP-${item.id}`}</Text>
           <View style={{ flexDirection: 'row', gap: 6 }}>
@@ -52,11 +77,15 @@ const EasyPurchaseListScreen = ({ navigation }) => {
             </View>
           </View>
         </View>
+
         <View style={s.row}>
           <Text style={s.content} numberOfLines={1}>{partnerName}</Text>
-          <Text style={s.amount}>{currencySymbol} {amount.toFixed ? amount.toFixed(3) : '0.000'}</Text>
+          <Text style={s.amountText}>{currencySymbol} {amount.toFixed ? amount.toFixed(3) : '0.000'}</Text>
         </View>
-        <Text style={s.sub}>{(item.date || '').split('-').reverse().join('-') || '-'}</Text>
+
+        <View style={s.row}>
+          <Text style={s.subContent}>{(item.date || '').split('-').reverse().join('-') || '-'}</Text>
+        </View>
       </TouchableOpacity>
     );
   };
@@ -64,7 +93,14 @@ const EasyPurchaseListScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Easy Purchase" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — showing cached purchases" onOnline={fetchData} />
+      <OfflineBanner
+        message="OFFLINE MODE — showing cached purchases"
+        onOnline={async () => {
+          try { await flush(); } catch (_) {}
+          try { await waitForFlush(8000); } catch (_) {}
+          fetchData();
+        }}
+      />
       <RoundedContainer>
         {data.length === 0 && !loading ? (
           <EmptyState imageSource={require('@assets/images/EmptyData/empty.png')} message="No Easy Purchases Found" />
@@ -82,18 +118,56 @@ const EasyPurchaseListScreen = ({ navigation }) => {
 };
 
 const s = StyleSheet.create({
-  card: {
-    backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 10,
-    borderLeftWidth: 4, borderLeftColor: COLORS.primaryThemeColor,
-    ...Platform.select({ android: { elevation: 3 }, ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4 } }),
+  itemContainer: {
+    marginHorizontal: 5,
+    marginVertical: 5,
+    backgroundColor: 'white',
+    borderRadius: 15,
+    ...Platform.select({
+      android: { elevation: 4 },
+      ios: { shadowColor: 'black', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2 },
+    }),
+    padding: 16,
   },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  head: { fontSize: 15, fontFamily: FONT_FAMILY.urbanistBold, color: '#2e2a4f', flex: 1 },
-  content: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistMedium, color: '#555', flex: 1 },
-  amount: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: COLORS.primaryThemeColor },
-  sub: { fontSize: 12, fontFamily: FONT_FAMILY.urbanistRegular, color: '#888' },
-  badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
-  badgeText: { fontSize: 10, fontFamily: FONT_FAMILY.urbanistBold, color: '#fff' },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  head: {
+    fontFamily: FONT_FAMILY.urbanistBold,
+    fontSize: 16,
+    flex: 1,
+    marginRight: 8,
+  },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  content: {
+    color: '#333',
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    flex: 1,
+    marginRight: 8,
+  },
+  amountText: {
+    color: COLORS.primaryThemeColor,
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.urbanistExtraBold,
+  },
+  subContent: {
+    color: '#999',
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
 });
 
 export default EasyPurchaseListScreen;

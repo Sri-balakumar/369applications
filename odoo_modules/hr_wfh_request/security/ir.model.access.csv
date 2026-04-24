@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_wfh_request_user,hr.wfh.request.user,model_hr_wfh_request,base.group_user,1,1,1,0
+access_wfh_request_manager,hr.wfh.request.manager,model_hr_wfh_request,hr_wfh_request.group_wfh_manager,1,1,1,1
+access_wfh_request_admin,hr.wfh.request.admin,model_hr_wfh_request,base.group_system,1,1,1,1

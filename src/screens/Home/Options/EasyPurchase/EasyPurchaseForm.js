@@ -174,53 +174,64 @@ const EasyPurchaseForm = ({ navigation }) => {
       <NavigationHeader title="Easy Purchase" onBackPress={() => navigation.goBack()} />
       <OfflineBanner message="OFFLINE MODE — purchase will sync when you reconnect" />
       <RoundedScrollContainer>
-        {/* Vendor */}
-        <FormInput label="Vendor" placeholder="Select vendor" editable={false} dropIcon="menu-down" required
-          value={vendor?.name || vendor?.label || ''}
-          onPress={() => navigation.navigate('CustomerScreen', {
-            selectMode: true,
-            companyId: warehouse?.company_id || null,
-            onSelect: (selected) => { setVendor(selected); },
-          })} />
+        {/* Vendor section */}
+        <View style={s.sectionCard}>
+          <FormInput label="Vendor" placeholder="Select vendor" editable={false} dropIcon="menu-down" required
+            value={vendor?.name || vendor?.label || ''}
+            onPress={() => navigation.navigate('CustomerScreen', {
+              selectMode: true,
+              companyId: warehouse?.company_id || null,
+              onSelect: (selected) => { setVendor(selected); },
+            })} />
 
-        {/* Payment Method */}
-        <FormInput label="Payment Method" placeholder="Select" editable={false} dropIcon="menu-down"
-          value={paymentMethod?.label || ''}
-          onPress={() => { setDropdownType('payment'); setIsDropdownVisible(true); }} />
+          <FormInput label="Payment Method" placeholder="Select" editable={false} dropIcon="menu-down"
+            value={paymentMethod?.label || ''}
+            onPress={() => { setDropdownType('payment'); setIsDropdownVisible(true); }} />
 
-        {/* Warehouse */}
-        <FormInput label="Warehouse" placeholder="Select" editable={false} dropIcon="menu-down"
-          value={warehouse?.label || ''}
-          onPress={() => { setDropdownType('warehouse'); setIsDropdownVisible(true); }} />
+          <FormInput label="Warehouse" placeholder="Select" editable={false} dropIcon="menu-down"
+            value={warehouse?.label || ''}
+            onPress={() => { setDropdownType('warehouse'); setIsDropdownVisible(true); }} />
 
-        {/* Vendor Ref */}
-        <FormInput label="Vendor Reference" placeholder="e.g. PO-42" value={vendorRef} onChangeText={setVendorRef} />
-
-        {/* Products */}
-        <View style={s.sectionHeader}>
-          <Text style={s.sectionTitle}>Products</Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <TouchableOpacity style={s.addBtn} onPress={() => navigation.navigate('Scanner', { onScan: handleScan })}>
-              <Icon name="barcode-scan" size={16} color="#fff" />
-              <Text style={s.addBtnText}>Scan</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.addBtn} onPress={() => navigation.navigate('POSProducts', { fromCustomerDetails: { id: EASY_PURCHASE_CUSTOMER_ID, name: 'Easy Purchase' } })}>
-              <AntDesign name="plus" size={16} color="#fff" />
-              <Text style={s.addBtnText}>Add Product</Text>
-            </TouchableOpacity>
-          </View>
+          <FormInput label="Vendor Reference" placeholder="e.g. PO-42" value={vendorRef} onChangeText={setVendorRef} />
         </View>
 
-        {products.length === 0 ? (
-          <Text style={{ textAlign: 'center', color: '#888', padding: 20 }}>No products added yet</Text>
-        ) : (
-          <FlatList data={products} renderItem={renderProductRow} keyExtractor={(item) => String(item.id)} scrollEnabled={false} />
-        )}
+        {/* Products section */}
+        <View style={s.sectionCard}>
+          <View style={s.sectionHeader}>
+            <Text style={s.sectionTitle}>Products</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity style={s.addBtn} onPress={() => navigation.navigate('Scanner', { onScan: handleScan })}>
+                <Icon name="barcode-scan" size={16} color="#fff" />
+                <Text style={s.addBtnText}>Scan</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.addBtn} onPress={() => navigation.navigate('POSProducts', { fromCustomerDetails: { id: EASY_PURCHASE_CUSTOMER_ID, name: 'Easy Purchase' } })}>
+                <AntDesign name="plus" size={16} color="#fff" />
+                <Text style={s.addBtnText}>Add Product</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
 
-        {/* Total */}
-        <View style={s.totalCard}>
-          <Text style={s.totalLabel}>Total</Text>
-          <Text style={s.totalValue}>{currencySymbol} {total.toFixed(3)}</Text>
+          {products.length === 0 ? (
+            <Text style={s.emptyText}>No products added yet</Text>
+          ) : (
+            <FlatList data={products} renderItem={renderProductRow} keyExtractor={(item) => String(item.id)} scrollEnabled={false} />
+          )}
+        </View>
+
+        {/* Totals section */}
+        <View style={s.sectionCard}>
+          <View style={s.totalRow}>
+            <Text style={s.totalLabel}>Untaxed Amount</Text>
+            <Text style={s.totalValue}>{currencySymbol} {total.toFixed(3)}</Text>
+          </View>
+          <View style={s.totalRow}>
+            <Text style={s.totalLabel}>Tax</Text>
+            <Text style={s.totalValue}>{currencySymbol} 0.000</Text>
+          </View>
+          <View style={[s.totalRow, s.grandTotalRow]}>
+            <Text style={s.grandTotalLabel}>Total</Text>
+            <Text style={s.grandTotalValue}>{currencySymbol} {total.toFixed(3)}</Text>
+          </View>
         </View>
 
         {/* Submit */}
@@ -247,22 +258,139 @@ const EasyPurchaseForm = ({ navigation }) => {
 };
 
 const s = StyleSheet.create({
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, marginBottom: 6 },
-  sectionTitle: { fontSize: 15, fontFamily: FONT_FAMILY.urbanistBold, color: '#2e2a4f' },
-  addBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.primaryThemeColor, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, gap: 4 },
-  addBtnText: { color: '#fff', fontSize: 12, fontFamily: FONT_FAMILY.urbanistBold },
-  lineCard: { backgroundColor: '#f9f9f9', borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#eee' },
-  lineRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  lineName: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#333' },
-  lineField: { flex: 1, alignItems: 'center' },
-  lineLabel: { fontSize: 11, fontFamily: FONT_FAMILY.urbanistMedium, color: '#999', marginBottom: 4 },
-  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  qtyInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, width: 50, textAlign: 'center', paddingVertical: 4, fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, backgroundColor: '#fff' },
-  priceInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 6, width: 80, textAlign: 'center', paddingVertical: 4, fontSize: 14, fontFamily: FONT_FAMILY.urbanistSemiBold, backgroundColor: '#fff' },
-  subtotalText: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistExtraBold, color: COLORS.primaryThemeColor },
-  totalCard: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 12, padding: 14, marginTop: 12 },
-  totalLabel: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: '#2e2a4f' },
-  totalValue: { fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold, color: COLORS.primaryThemeColor },
+  sectionCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    ...Platform.select({
+      android: { elevation: 2 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 3 },
+    }),
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#333',
+  },
+  addBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primaryThemeColor,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 4,
+  },
+  addBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+  },
+  emptyText: {
+    textAlign: 'center',
+    color: '#999',
+    paddingVertical: 20,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
+  lineCard: {
+    backgroundColor: '#f9f9f9',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  lineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  lineName: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#333',
+  },
+  lineField: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  lineLabel: {
+    fontSize: 11,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#999',
+    marginBottom: 4,
+  },
+  qtyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  qtyInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 6,
+    width: 50,
+    textAlign: 'center',
+    paddingVertical: 4,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    backgroundColor: '#fff',
+  },
+  priceInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 6,
+    width: 80,
+    textAlign: 'center',
+    paddingVertical: 4,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    backgroundColor: '#fff',
+  },
+  subtotalText: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistExtraBold,
+    color: COLORS.primaryThemeColor,
+  },
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+  },
+  totalLabel: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#666',
+  },
+  totalValue: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    color: '#333',
+  },
+  grandTotalRow: {
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    marginTop: 4,
+    paddingTop: 10,
+  },
+  grandTotalLabel: {
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#333',
+  },
+  grandTotalValue: {
+    fontSize: 18,
+    fontFamily: FONT_FAMILY.urbanistExtraBold,
+    color: COLORS.primaryThemeColor,
+  },
 });
 
 export default EasyPurchaseForm;

@@ -13,6 +13,11 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchEasySalesOdoo } from '@api/services/generalApi';
 import { useCurrencyStore } from '@stores/currency';
 import OfflineBanner from '@components/common/OfflineBanner';
+import networkStatus from '@utils/networkStatus';
+import { waitForFlush, flush } from '@services/OfflineSyncService';
+import { getPendingCount } from '@utils/offlineQueue';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { showToastMessage } from '@components/Toast';
 
 const STATE_COLORS = {
   draft: '#FF9800',
@@ -40,7 +45,35 @@ const EasySalesListScreen = ({ navigation }) => {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
+  // Focus: if there's a pending queue while online, drain it FIRST so the
+  // subsequent fetch sees the freshly-synced Odoo ids + names. Without this
+  // step, offline-created placeholders can be wiped by a refetch that runs
+  // before the sync commits.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const online = await networkStatus.isOnline();
+        const pending = await getPendingCount();
+        if (online && pending > 0 && !cancelled) {
+          console.log('[EasySalesList] Focus + online + queue=', pending, '→ force flush before fetch');
+          try { await flush(); } catch (e) { console.warn('[EasySalesList] focus flush failed:', e?.message); }
+          try { await waitForFlush(8000); } catch (_) {}
+        }
+        if (!cancelled) await fetchData();
+        // If the last sync attempt rejected (session expired, missing field,
+        // etc.) surface the reason to the user as a toast so they can act.
+        try {
+          const rawErr = await AsyncStorage.getItem('@lastSyncError:easySales');
+          if (rawErr) {
+            const parsed = JSON.parse(rawErr);
+            if (parsed?.message) showToastMessage(`Sync failed: ${parsed.message}`);
+          }
+        } catch (_) {}
+      })();
+      return () => { cancelled = true; };
+    }, [fetchData])
+  );
 
   const renderItem = ({ item }) => {
     if (item.empty) return <EmptyItem />;
@@ -84,7 +117,14 @@ const EasySalesListScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader title="Easy Sales" onBackPress={() => navigation.goBack()} />
-      <OfflineBanner message="OFFLINE MODE — showing cached sales" onOnline={fetchData} />
+      <OfflineBanner
+        message="OFFLINE MODE — showing cached sales"
+        onOnline={async () => {
+          try { await flush(); } catch (_) {}
+          try { await waitForFlush(8000); } catch (_) {}
+          fetchData();
+        }}
+      />
       <RoundedContainer>
         {data.length === 0 && !loading ? (
           <EmptyState

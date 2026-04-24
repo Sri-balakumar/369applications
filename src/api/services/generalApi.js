@@ -3395,10 +3395,22 @@ export const fetchEasySalesOdoo = async ({ offset = 0, limit = 50, searchText = 
     }
     const records = response.data.result || [];
     console.log('[EasySales] Fetched', records.length, 'records');
+    // Merge offline_ placeholders so a refetch mid-sync doesn't erase rows
+    // the user created offline but the sync service hasn't swapped to a real
+    // id yet. Mirrors the payments fix in fetchAccountPaymentsOdoo.
+    let finalList = records;
     if (!searchText && offset === 0) {
-      try { await AsyncStorage.setItem('@cache:easySales', JSON.stringify(records)); } catch (_) {}
+      try {
+        const raw = await AsyncStorage.getItem('@cache:easySales');
+        if (raw) {
+          const oldList = JSON.parse(raw);
+          const pendingOffline = oldList.filter((o) => String(o?.id || '').startsWith('offline_'));
+          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...records];
+        }
+      } catch (_) {}
+      try { await AsyncStorage.setItem('@cache:easySales', JSON.stringify(finalList)); } catch (_) {}
     }
-    return records;
+    return finalList;
   } catch (error) {
     console.error('[EasySales] fetchEasySales error:', error?.message || error);
     try {
@@ -3587,9 +3599,21 @@ export const createEasySaleOdoo = async ({ partnerId, warehouseId, warehouseComp
       (orderLines || []).forEach((l) => { amountUntaxed += (l.qty || l.quantity || 1) * (l.price_unit || l.price || 0); });
       const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
+      // Count the offline_ placeholders already in the cache so the new row
+      // gets a per-session sequence like "NEW 1(offline)", "NEW 2(offline)",
+      // "NEW 3(offline)" — easier for the user to tell them apart before sync.
+      let offlineSeq = 1;
+      try {
+        const rawList = await AsyncStorage.getItem('@cache:easySales');
+        if (rawList) {
+          const list = JSON.parse(rawList);
+          offlineSeq = list.filter((o) => String(o?.id || '').startsWith('offline_')).length + 1;
+        }
+      } catch (_) {}
+
       const placeholder = {
         id: `offline_${localId}`,
-        name: 'NEW (offline)',
+        name: `NEW ${offlineSeq}(offline)`,
         partner_id: partnerId ? [partnerId, partnerName] : false,
         state: 'draft',
         amount_total: amountUntaxed,
@@ -3719,10 +3743,22 @@ export const fetchEasyPurchasesOdoo = async ({ offset = 0, limit = 50, searchTex
     }, { headers });
     if (response.data.error) { console.error('[EasyPurchase] list error:', response.data.error?.data?.message); return []; }
     const records = response.data.result || [];
+    // Preserve pending `offline_` placeholders so a refetch mid-sync doesn't
+    // erase rows the user created offline but haven't been swapped to real
+    // Odoo ids yet. Mirrors the Easy Sales / Register Payment pattern.
+    let finalList = records;
     if (!searchText && offset === 0) {
-      try { await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(records)); } catch (_) {}
+      try {
+        const raw = await AsyncStorage.getItem('@cache:easyPurchases');
+        if (raw) {
+          const oldList = JSON.parse(raw);
+          const pendingOffline = oldList.filter((o) => String(o?.id || '').startsWith('offline_'));
+          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...records];
+        }
+      } catch (_) {}
+      try { await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(finalList)); } catch (_) {}
     }
-    return records;
+    return finalList;
   } catch (error) {
     console.error('[EasyPurchase] fetch error:', error?.message || error);
     try {
@@ -3822,8 +3858,19 @@ export const createEasyPurchaseOdoo = async ({ partnerId, warehouseId, warehouse
       let amountUntaxed = 0;
       (orderLines || []).forEach((l) => { amountUntaxed += (l.qty || l.quantity || 1) * (l.price_unit || l.price || 0); });
       const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      // Count existing offline_ placeholders so we can label this one
+      // "NEW 1(offline)" / "NEW 2(offline)" / ... making it easy for the
+      // user to tell multiple offline orders apart before sync.
+      let offlineSeq = 1;
+      try {
+        const rawList0 = await AsyncStorage.getItem('@cache:easyPurchases');
+        if (rawList0) {
+          const list0 = JSON.parse(rawList0);
+          offlineSeq = list0.filter((o) => String(o?.id || '').startsWith('offline_')).length + 1;
+        }
+      } catch (_) {}
       const placeholder = {
-        id: `offline_${localId}`, name: 'NEW (offline)',
+        id: `offline_${localId}`, name: `NEW ${offlineSeq}(offline)`,
         partner_id: partnerId ? [partnerId, partnerName] : false,
         state: 'draft', amount_total: amountUntaxed, amount_untaxed: amountUntaxed, amount_tax: 0,
         date: nowIso, warehouse_id: warehouseId ? [warehouseId, ''] : false,
@@ -4015,6 +4062,27 @@ export const confirmEasySaleOdoo = async (saleId, companyId = null) => {
       throw new Error(response.data.error.data?.message || 'Failed to confirm easy sale');
     }
     console.log('[EasySales] Confirmed ID:', saleId);
+    // Patch the cached row so the list + detail screens show done / paid
+    // immediately — without waiting for a refetch. Mirrors the offline branch
+    // behaviour. The next Odoo refetch will overwrite with the real values.
+    try {
+      const idStr = String(saleId);
+      const raw = await AsyncStorage.getItem('@cache:easySales');
+      if (raw) {
+        const list = JSON.parse(raw);
+        const idx = list.findIndex((o) => String(o.id) === idStr);
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], state: 'done', payment_state: 'paid', is_paid: true };
+          await AsyncStorage.setItem('@cache:easySales', JSON.stringify(list));
+        }
+      }
+      const detailKey = `@cache:easySaleDetail:${idStr}`;
+      const rawD = await AsyncStorage.getItem(detailKey);
+      if (rawD) {
+        const prev = JSON.parse(rawD);
+        await AsyncStorage.setItem(detailKey, JSON.stringify({ ...prev, state: 'done', payment_state: 'paid', is_paid: true }));
+      }
+    } catch (_) {}
     return response.data.result;
   } catch (error) {
     console.error('[EasySales] confirmEasySale error:', error?.message || error);

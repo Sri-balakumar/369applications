@@ -62,6 +62,58 @@ const getAuthHeaders = async () => {
     return headers;
 };
 
+// Detect whether an Odoo RPC response indicates an expired/invalid session
+// (happens after an idle period — stored cookie is accepted but the server
+// has garbage-collected the session). Caller should re-authenticate and retry.
+const _looksLikeSessionExpired = (errData) => {
+    if (!errData) return false;
+    const msg = String(errData?.data?.message || errData?.message || '').toLowerCase();
+    const name = String(errData?.data?.name || '').toLowerCase();
+    return (
+        msg.includes('session expired') ||
+        msg.includes('access denied') ||
+        msg.includes('not authenticated') ||
+        msg.includes('user does not have access') ||
+        name.includes('sessionexpired') ||
+        name.includes('accessdenied')
+    );
+};
+
+// Force-refresh the Odoo session cookie via /web/session/authenticate using
+// the credentials the user most recently logged in with. Returns updated
+// headers including the new Cookie, or null if the attempt fails.
+const _reauthenticateForSync = async () => {
+    try {
+        const { getOdooBaseUrl } = require('@api/config/odooConfig');
+        const baseUrl = (getOdooBaseUrl() || '').replace(/\/+$/, '');
+        if (!baseUrl) return null;
+        const db = await AsyncStorage.getItem('odoo_db');
+        const savedRaw = await AsyncStorage.getItem('saved_credentials');
+        if (!db || !savedRaw) return null;
+        let map = null;
+        try { map = JSON.parse(savedRaw); } catch (_) { return null; }
+        if (!map || typeof map !== 'object') return null;
+        // Pick the entry matching the current URL+DB combo.
+        const wantKey = `${baseUrl.toLowerCase().replace(/\/+$/, '')}|${db}`;
+        const entry = map[wantKey];
+        if (!entry || !entry.username || !entry.password) return null;
+        const resp = await axios.post(
+            `${baseUrl}/web/session/authenticate`,
+            { jsonrpc: '2.0', method: 'call', params: { db, login: entry.username, password: entry.password } },
+            { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
+        );
+        if (!resp.data?.result?.uid) return null;
+        const setCookie = resp.headers['set-cookie'] || resp.headers['Set-Cookie'];
+        const cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : String(setCookie || '');
+        if (cookieStr) await AsyncStorage.setItem('odoo_cookie', cookieStr);
+        console.log('[OfflineSyncService] re-authenticated session for sync');
+        return { 'Content-Type': 'application/json', Cookie: cookieStr };
+    } catch (e) {
+        console.warn('[OfflineSyncService] re-auth failed:', e?.message);
+        return null;
+    }
+};
+
 // Persistent map of offline placeholder ids ("offline_<queueItemId>") to real
 // Odoo ids. Used so that a product queued offline that references a newly
 // created offline category can resolve the category's real id once the
@@ -413,8 +465,48 @@ const syncItemDirectly = async (item) => {
         const recordId = response.data?.result;
         console.log('[OfflineSyncService] Created easy.purchase id:', recordId);
         await saveOfflineIdMapping(offlineId, recordId);
-        try { const raw = await AsyncStorage.getItem('@cache:easyPurchases'); if (raw) { const list = JSON.parse(raw); let ch = false; const next = list.map((o) => { if (String(o.id) === offlineId) { ch = true; return { ...o, id: recordId, offline: false }; } return o; }); if (ch) await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(next)); } } catch (_) {}
-        try { const rawD = await AsyncStorage.getItem(`@cache:easyPurchaseDetail:${offlineId}`); if (rawD) { const prev = JSON.parse(rawD); await AsyncStorage.setItem(`@cache:easyPurchaseDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, offline: false })); await AsyncStorage.removeItem(`@cache:easyPurchaseDetail:${offlineId}`); } } catch (_) {}
+        // Read back the Odoo-assigned sequence name so the swapped cache row
+        // shows e.g. "EP0010 / draft" instead of the stale "NEW (offline)".
+        let realName = null;
+        let realState = null;
+        let realAmount = null;
+        try {
+            const readResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                    model: 'easy.purchase', method: 'read', args: [[recordId]],
+                    kwargs: { fields: ['name', 'state', 'amount_total'] },
+                },
+            }, { headers, timeout: 10000 });
+            const row = readResp.data?.result?.[0] || {};
+            if (row.name && row.name !== '/') realName = row.name;
+            realState = row.state || null;
+            realAmount = row.amount_total ?? null;
+            console.log('[OfflineSyncService] easy.purchase readback ok, name=', realName, 'state=', realState);
+        } catch (e) { console.warn('[OfflineSyncService] easy.purchase readback failed:', e?.message); }
+        try {
+            const raw = await AsyncStorage.getItem('@cache:easyPurchases');
+            if (raw) {
+                const list = JSON.parse(raw);
+                let ch = false;
+                const next = list.map((o) => {
+                    if (String(o.id) === offlineId) {
+                        ch = true;
+                        return {
+                            ...o,
+                            id: recordId,
+                            name: realName || o.name,
+                            state: realState || o.state,
+                            amount_total: realAmount ?? o.amount_total,
+                            offline: false,
+                        };
+                    }
+                    return o;
+                });
+                if (ch) await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(next));
+            }
+        } catch (_) {}
+        try { const rawD = await AsyncStorage.getItem(`@cache:easyPurchaseDetail:${offlineId}`); if (rawD) { const prev = JSON.parse(rawD); await AsyncStorage.setItem(`@cache:easyPurchaseDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, name: realName || prev.name, state: realState || prev.state, amount_total: realAmount ?? prev.amount_total, offline: false })); await AsyncStorage.removeItem(`@cache:easyPurchaseDetail:${offlineId}`); } } catch (_) {}
         if (_confirmAfterCreate) {
             try { await axios.post(`${baseUrl}/web/dataset/call_kw`, { jsonrpc: '2.0', method: 'call', params: { model: 'easy.purchase', method: 'action_confirm', args: [[recordId]], kwargs: {} } }, { headers, timeout: 30000 }); console.log('[OfflineSyncService] Confirmed easy.purchase id:', recordId); } catch (e) { console.warn('[OfflineSyncService] easy.purchase confirm chain error:', e?.message); }
         }
@@ -472,24 +564,90 @@ const syncItemDirectly = async (item) => {
             } catch (_) { createKwargs.context = { allowed_company_ids: [warehouseCompanyId] }; }
         }
 
-        const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        console.log('[OfflineSyncService] easy.sales create → vals keys:', Object.keys(vals).join(','), 'partner:', partnerId, 'lines:', (orderLines || []).length);
+        let response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
             jsonrpc: '2.0', method: 'call',
             params: { model: 'easy.sales', method: 'create', args: [vals], kwargs: createKwargs },
         }, { headers, timeout: 30000 });
 
-        if (response.data?.error) throw new Error(response.data.error?.data?.message || 'Easy sales create failed');
+        // If Odoo rejects with a session-expired error, re-authenticate via
+        // saved credentials and retry once. Without this, a stale cookie
+        // (session idle-timed-out while the phone was offline) would cause
+        // every sync attempt to fail silently until poison-pilled.
+        if (response.data?.error && _looksLikeSessionExpired(response.data.error)) {
+            console.warn('[OfflineSyncService] easy.sales create got session error — re-authenticating and retrying');
+            const freshHeaders = await _reauthenticateForSync();
+            if (freshHeaders) {
+                response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                    jsonrpc: '2.0', method: 'call',
+                    params: { model: 'easy.sales', method: 'create', args: [vals], kwargs: createKwargs },
+                }, { headers: freshHeaders, timeout: 30000 });
+            }
+        }
+
+        if (response.data?.error) {
+            // Verbose logging + write the error to a UI-visible cache so the
+            // Easy Sales list can surface a toast. Previously the error only
+            // went to console.warn which is invisible on a real device.
+            const errObj = response.data.error || {};
+            const msg = errObj?.data?.message || errObj?.message || 'Easy sales create failed';
+            console.error('[OfflineSyncService] easy.sales create REJECTED:', msg, 'full error:', JSON.stringify(errObj).substring(0, 600));
+            try {
+                await AsyncStorage.setItem('@lastSyncError:easySales', JSON.stringify({
+                    message: msg,
+                    at: new Date().toISOString(),
+                    offlineId,
+                }));
+            } catch (_) {}
+            throw new Error(msg);
+        }
         const recordId = response.data?.result;
         console.log('[OfflineSyncService] Created easy.sales id:', recordId);
+        // Successful sync — clear any stale error banner.
+        try { await AsyncStorage.removeItem('@lastSyncError:easySales'); } catch (_) {}
         await saveOfflineIdMapping(offlineId, recordId);
 
-        // Swap placeholder in caches
+        // Read back the Odoo-assigned sequence name + initial state so the
+        // swapped cache row shows e.g. "ES0010 / draft" instead of the stale
+        // "NEW (offline)". Without this step, the placeholder keeps its
+        // fake name until a full refetch overwrites the cache — and that
+        // refetch can race with sync and lose the row entirely.
+        let realName = null;
+        let realState = null;
+        let realAmount = null;
+        try {
+            const readResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                    model: 'easy.sales', method: 'read', args: [[recordId]],
+                    kwargs: { fields: ['name', 'state', 'amount_total'] },
+                },
+            }, { headers, timeout: 10000 });
+            const row = readResp.data?.result?.[0] || {};
+            if (row.name && row.name !== '/') realName = row.name;
+            realState = row.state || null;
+            realAmount = row.amount_total ?? null;
+            console.log('[OfflineSyncService] easy.sales readback ok, name=', realName, 'state=', realState);
+        } catch (e) { console.warn('[OfflineSyncService] easy.sales readback failed:', e?.message); }
+
+        // Swap placeholder in caches — now with the real Odoo name/state.
         try {
             const raw = await AsyncStorage.getItem('@cache:easySales');
             if (raw) {
                 const list = JSON.parse(raw);
                 let changed = false;
                 const next = list.map((o) => {
-                    if (String(o.id) === offlineId) { changed = true; return { ...o, id: recordId, offline: false }; }
+                    if (String(o.id) === offlineId) {
+                        changed = true;
+                        return {
+                            ...o,
+                            id: recordId,
+                            name: realName || o.name,
+                            state: realState || o.state,
+                            amount_total: realAmount ?? o.amount_total,
+                            offline: false,
+                        };
+                    }
                     return o;
                 });
                 if (changed) await AsyncStorage.setItem('@cache:easySales', JSON.stringify(next));

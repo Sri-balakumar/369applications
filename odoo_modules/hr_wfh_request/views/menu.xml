@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- =============================================
+             TOP MENU — Under Attendance
+        ============================================= -->
+
+        <!-- WFH Root Menu (under HR Attendance) -->
+        <menuitem id="menu_wfh_root"
+                  name="Work From Home"
+                  parent="hr_attendance.menu_hr_attendance_root"
+                  sequence="50"/>
+
+        <!-- All WFH Requests (Manager) -->
+        <menuitem id="menu_wfh_all_requests"
+                  name="All WFH Requests"
+                  parent="menu_wfh_root"
+                  action="action_wfh_request"
+                  sequence="10"
+                  groups="hr_wfh_request.group_wfh_manager,base.group_system"/>
+
+        <!-- My WFH Requests (Employee) -->
+        <menuitem id="menu_my_wfh_requests"
+                  name="My WFH Requests"
+                  parent="menu_wfh_root"
+                  action="action_my_wfh_requests"
+                  sequence="20"/>
+
+    </data>
+</odoo>

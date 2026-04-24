@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Employees can see their own WFH requests -->
+        <record id="wfh_request_rule_employee" model="ir.rule">
+            <field name="name">WFH Request: Employee sees own requests</field>
+            <field name="model_id" ref="model_hr_wfh_request"/>
+            <field name="domain_force">[('employee_user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- WFH Managers can see ALL requests -->
+        <record id="wfh_request_rule_manager" model="ir.rule">
+            <field name="name">WFH Request: Manager sees all requests</field>
+            <field name="model_id" ref="model_hr_wfh_request"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('hr_wfh_request.group_wfh_manager'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- Admin can see ALL requests -->
+        <record id="wfh_request_rule_admin" model="ir.rule">
+            <field name="name">WFH Request: Admin full access</field>
+            <field name="model_id" ref="model_hr_wfh_request"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+    </data>
+</odoo>
