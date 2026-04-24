@@ -830,13 +830,14 @@ const syncItemDirectly = async (item) => {
     // and GPS, then post it. Finally swap the offline placeholder in the
     // cached payments list with the real record.
     if (item.model === 'account.payment' && item.operation === 'create') {
+        console.log('[PaySync] ⇢ Processing create, queue item id:', item.id);
         const offlineId = `offline_${item.id}`;
         const existingMap = await readOfflineIdMap();
         if (existingMap[offlineId] !== undefined) {
-            console.log('[OfflineSyncService] account.payment already synced, reusing id:', existingMap[offlineId]);
+            console.log('[PaySync]   already synced, reusing Odoo id:', existingMap[offlineId]);
             return existingMap[offlineId];
         }
-        const { partnerId, amount, paymentType, journalId, ref, customerSignature,
+        const { partnerId, amount, paymentType, journalId, companyId, ref, customerSignature,
                 employeeSignature, latitude, longitude, locationName, _postAfterCreate } = values;
 
         const rpc = async (model, method, args, kwargs = {}) => {
@@ -849,26 +850,76 @@ const syncItemDirectly = async (item) => {
             return resp.data.result;
         };
 
-        // Resolve partner's company → find matching journal if needed.
-        let targetCompanyId = null;
+        // Company / journal resolution — mirrors the online flow in
+        // createPaymentWithSignatureOdoo so offline syncs produce the same
+        // Odoo record the online path would have. User picks win; otherwise
+        // partner + journal company_ids are cross-checked with full fallback.
+        let targetCompanyId = companyId || null;
         let resolvedJournalId = journalId;
+
         if (partnerId) {
+            let partners = null;
+            let journals = null;
             try {
-                const partners = await rpc('res.partner', 'search_read', [[['id', '=', partnerId]]], { fields: ['id', 'company_id'], limit: 1 });
-                targetCompanyId = partners?.[0]?.company_id ? partners[0].company_id[0] : null;
-            } catch (_) {}
-        }
-        if (resolvedJournalId && targetCompanyId) {
-            try {
-                const journals = await rpc('account.journal', 'search_read', [[['id', '=', resolvedJournalId]]], { fields: ['id', 'company_id', 'type'], limit: 1 });
-                const jCompany = journals?.[0]?.company_id ? journals[0].company_id[0] : null;
-                const jType = journals?.[0]?.type || 'bank';
-                if (jCompany && jCompany !== targetCompanyId) {
-                    const matching = await rpc('account.journal', 'search_read', [[['type', '=', jType], ['company_id', '=', targetCompanyId]]], { fields: ['id'], limit: 1 });
-                    if (matching?.length) resolvedJournalId = matching[0].id;
+                [partners, journals] = await Promise.all([
+                    rpc('res.partner', 'search_read', [[['id', '=', partnerId]]], { fields: ['id', 'company_id'], limit: 1 }),
+                    journalId
+                        ? rpc('account.journal', 'search_read', [[['id', '=', journalId]]], { fields: ['id', 'company_id', 'type'], limit: 1 })
+                        : Promise.resolve(null),
+                ]);
+            } catch (e) { console.warn('[PaySync]   partner/journal lookup failed:', e?.message); }
+
+            const partnerCompanyId = partners?.[0]?.company_id ? partners[0].company_id[0] : null;
+            console.log('[PaySync]   partner company_id:', partnerCompanyId);
+
+            if (journalId && journals) {
+                const journalCompanyId = journals?.[0]?.company_id ? journals[0].company_id[0] : null;
+                const journalType = journals?.[0]?.type || 'bank';
+                console.log('[PaySync]   journal company_id:', journalCompanyId, 'type:', journalType);
+
+                if (partnerCompanyId && journalCompanyId && partnerCompanyId !== journalCompanyId) {
+                    // Mismatch — find a journal of same type in partner's company.
+                    console.log('[PaySync]   company mismatch, partner:', partnerCompanyId, 'journal:', journalCompanyId);
+                    try {
+                        const matching = await rpc('account.journal', 'search_read', [
+                            [['type', '=', journalType], ['company_id', '=', partnerCompanyId]]
+                        ], { fields: ['id', 'name', 'type', 'company_id'], limit: 5 });
+                        if (matching?.length) {
+                            resolvedJournalId = matching[0].id;
+                            targetCompanyId = partnerCompanyId;
+                            console.log('[PaySync]   resolved journal to', matching[0].name, 'id:', resolvedJournalId);
+                        } else {
+                            // No same-type journal — fall back to any cash/bank journal in partner's company.
+                            const fallback = await rpc('account.journal', 'search_read', [
+                                [['type', 'in', ['cash', 'bank']], ['company_id', '=', partnerCompanyId]]
+                            ], { fields: ['id', 'name', 'type', 'company_id'], limit: 5 });
+                            if (fallback?.length) {
+                                resolvedJournalId = fallback[0].id;
+                                targetCompanyId = partnerCompanyId;
+                                console.log('[PaySync]   fallback journal:', fallback[0].name, 'id:', resolvedJournalId);
+                            } else {
+                                // Last resort: clear partner's company restriction so the payment can go through.
+                                console.log('[PaySync]   no journal in partner company, clearing partner company restriction');
+                                targetCompanyId = journalCompanyId;
+                                try {
+                                    await rpc('res.partner', 'write', [[partnerId], { company_id: false }]);
+                                    console.log('[PaySync]   cleared partner company');
+                                } catch (writeErr) {
+                                    console.warn('[PaySync]   could not clear partner company:', writeErr?.message);
+                                }
+                            }
+                        }
+                    } catch (e) { console.warn('[PaySync]   journal resolution threw:', e?.message); }
+                } else {
+                    // No mismatch — use partner's company when present, else journal's.
+                    targetCompanyId = partnerCompanyId || journalCompanyId || targetCompanyId;
                 }
-            } catch (_) {}
+            } else if (!targetCompanyId) {
+                targetCompanyId = partnerCompanyId;
+            }
         }
+
+        // If we still don't have a journal, pick any cash/bank in the target company.
         if (!resolvedJournalId && targetCompanyId) {
             try {
                 const matching = await rpc('account.journal', 'search_read', [[['type', 'in', ['bank', 'cash']], ['company_id', '=', targetCompanyId]]], { fields: ['id'], limit: 1 });
@@ -876,15 +927,17 @@ const syncItemDirectly = async (item) => {
             } catch (_) {}
         }
 
+        // Vals — mirror the online path exactly. `memo` (not `ref`) is the
+        // Odoo account.payment field, and amount must be positive.
         const vals = {
-            partner_id: partnerId,
-            partner_type: paymentType === 'outbound' ? 'supplier' : 'customer',
+            amount: Math.abs(parseFloat(amount) || 0),
             payment_type: paymentType || 'inbound',
-            amount: parseFloat(amount) || 0,
-            ref: ref || '',
+            partner_type: paymentType === 'outbound' ? 'supplier' : 'customer',
         };
+        if (partnerId) vals.partner_id = partnerId;
         if (resolvedJournalId) vals.journal_id = resolvedJournalId;
         if (targetCompanyId) vals.company_id = targetCompanyId;
+        if (ref) vals.memo = ref;
         if (customerSignature) {
             const m = String(customerSignature).match(/^data:image\/[^;]+;base64,(.+)$/);
             vals.customer_signature = m ? m[1] : customerSignature;
@@ -898,16 +951,19 @@ const syncItemDirectly = async (item) => {
         if (locationName) vals.location_name = locationName;
 
         const createKwargs = targetCompanyId ? { context: { allowed_company_ids: [targetCompanyId] } } : {};
+        console.log('[PaySync]   → creating in Odoo with vals keys:', Object.keys(vals).join(','), 'companyId:', targetCompanyId);
         const createResp = await axios.post(
             `${baseUrl}/web/dataset/call_kw`,
             { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method: 'create', args: [vals], kwargs: createKwargs } },
             { headers, withCredentials: true, timeout: 30000 }
         );
         if (createResp.data?.error) {
-            throw new Error(createResp.data.error?.data?.message || 'account.payment create failed');
+            const msg = createResp.data.error?.data?.message || 'account.payment create failed';
+            console.error('[PaySync]   ✗ Odoo rejected create:', msg, 'full error:', JSON.stringify(createResp.data.error));
+            throw new Error(msg);
         }
         const paymentId = createResp.data?.result;
-        console.log('[OfflineSyncService] Created account.payment id:', paymentId);
+        console.log('[PaySync]   ✓ created, Odoo id:', paymentId);
         await saveOfflineIdMapping(offlineId, paymentId);
 
         // Post the payment so it shows "Posted" in Odoo.
@@ -944,7 +1000,7 @@ const syncItemDirectly = async (item) => {
                 await new Promise((r) => setTimeout(r, 800));
                 const retry = (await doRead()).data?.result?.[0] || {};
                 row = { ...row, ...retry };
-                realName = pickName(retry) || `P${paymentId}`;
+                realName = pickName(retry);
             }
             for (const cacheKey of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
             const rawList = await AsyncStorage.getItem(cacheKey);
@@ -955,7 +1011,9 @@ const syncItemDirectly = async (item) => {
                         return {
                             ...p,
                             id: paymentId,
-                            name: realName,
+                            // Prefer Odoo-assigned name; if still unassigned,
+                            // keep the offline predicted/placeholder name.
+                            name: realName || p.name,
                             state: row?.state || p.state || 'draft',
                             journal_name: row?.journal_id ? row.journal_id[1] : p.journal_name,
                             company_name: row?.company_id ? row.company_id[1] : p.company_name,
@@ -981,14 +1039,17 @@ const syncItemDirectly = async (item) => {
     // Odoo truth after sync.
     if (item.model === 'account.payment'
         && (item.operation === 'action_post' || item.operation === 'action_draft' || item.operation === 'action_cancel')) {
+        console.log('[PaySync] ⇢ Processing', item.operation, 'queue item id:', item.id, 'values:', JSON.stringify(item.values));
         const { _recordId } = item.values || {};
         let realRecordId = _recordId;
         if (typeof realRecordId === 'string' && realRecordId.startsWith('offline_')) {
             const map = await readOfflineIdMap();
+            console.log('[PaySync]   resolving offline id', realRecordId, '→', map[realRecordId]);
             if (map[realRecordId] === undefined) throw new Error(`Payment ${realRecordId} not yet synced`);
             realRecordId = map[realRecordId];
         }
         const numId = Number(realRecordId);
+        console.log('[PaySync]   target Odoo payment id:', numId);
 
         const methodsByOp = {
             action_post:   ['action_post', 'action_validate', 'mark_as_paid'],
@@ -1017,28 +1078,42 @@ const syncItemDirectly = async (item) => {
         };
 
         const before = await readState().catch(() => null);
+        console.log('[PaySync]   state BEFORE:', before?.state, 'name:', before?.name);
         let lastErr = null;
         let finalRow = before;
         for (const method of candidates) {
             try {
+                console.log('[PaySync]   → calling', method, 'on', numId);
                 const resp = await axios.post(
                     `${baseUrl}/web/dataset/call_kw`,
                     { jsonrpc: '2.0', method: 'call', params: { model: 'account.payment', method, args: [[numId]], kwargs: {} } },
                     { headers, timeout: 30000 }
                 );
-                if (resp.data?.error) { lastErr = resp.data.error?.data?.message; continue; }
+                if (resp.data?.error) {
+                    lastErr = resp.data.error?.data?.message || resp.data.error?.message;
+                    console.warn('[PaySync]   ✗', method, 'returned error:', lastErr);
+                    continue;
+                }
+                console.log('[PaySync]   ✓', method, 'returned:', JSON.stringify(resp.data?.result));
                 const after = await readState();
                 const newState = after?.state;
                 const prevState = before?.state;
-                console.log('[OfflineSyncService] account.payment', item.operation, 'via', method, '→ state:', newState);
+                console.log('[PaySync]   state AFTER:', newState, 'name:', after?.name);
                 const transitioned =
                     (item.operation === 'action_post' && newState && newState !== prevState) ||
                     (item.operation === 'action_draft' && newState === 'draft') ||
                     (item.operation === 'action_cancel' && (newState === 'cancelled' || newState === 'canceled' || newState === 'rejected'));
-                if (transitioned) { finalRow = after; break; }
-            } catch (e) { lastErr = e?.message; }
+                if (transitioned) { console.log('[PaySync]   ★ accepted transition'); finalRow = after; break; }
+                console.log('[PaySync]   ⤫ no transition, trying next method');
+            } catch (e) {
+                lastErr = e?.message;
+                console.warn('[PaySync]   ✗', method, 'threw:', lastErr);
+            }
         }
-        if (finalRow === before && lastErr) throw new Error(`${item.operation} failed: ${lastErr}`);
+        if (finalRow === before && lastErr) {
+            console.error('[PaySync]   ✗✗ all methods failed, last error:', lastErr);
+            throw new Error(`${item.operation} failed: ${lastErr}`);
+        }
 
         // If action_post fired but the sequence hasn't committed yet (name
         // still '/'), wait briefly and re-read so the cache gets PAY0000N.
@@ -1049,7 +1124,11 @@ const syncItemDirectly = async (item) => {
                 if (retry) finalRow = { ...finalRow, ...retry };
             } catch (_) {}
         }
-        const realName = pickName(finalRow) || finalRow?.name || `P${numId}`;
+        // Only use a real Odoo-assigned sequence name. If Odoo still hasn't
+        // handed one out (happens briefly on first post), keep whatever the
+        // cache already has — e.g. the offline-predicted PAY0000N — so we
+        // don't clobber a good label with a synthetic 'P<id>' fallback.
+        const realName = pickName(finalRow);
 
         // Patch the cached list so any screen auto-refresh picks up the real state + name.
         try {
@@ -1059,7 +1138,11 @@ const syncItemDirectly = async (item) => {
                 const list = JSON.parse(raw);
                 const next = list.map((p) => {
                     if (p.id === numId || String(p.id) === String(numId)) {
-                        return { ...p, state: finalRow?.state || p.state, name: realName };
+                        return {
+                            ...p,
+                            state: finalRow?.state || p.state,
+                            name: realName || p.name,  // keep predicted name if Odoo hasn't assigned one yet
+                        };
                     }
                     return p;
                 });
@@ -1229,6 +1312,10 @@ const flushOnce = async () => {
     try {
         const items = await offlineQueue.getAll();
         console.log('[OfflineSyncService] flush started, queue has', items.length, 'items');
+        if (items.length > 0) {
+            console.log('[OfflineSyncService] queue contents:',
+                items.map((it) => `${it.model}/${it.operation}(id=${it.id})`).join(', '));
+        }
         if (items.length === 0) return { synced: 0, failed: 0, total: 0 };
 
         const online = await networkStatus.isOnline();
@@ -1276,6 +1363,57 @@ const flushOnce = async () => {
  * Manually trigger a flush.
  */
 export const flush = async () => flushOnce();
+
+/**
+ * Force-flush used by the manual "Sync" button. Waits for any in-flight
+ * flush to finish, resets retry counters so poison-pilled items (retryCount
+ * >= 5) get another chance, then runs flushOnce to completion and loops once
+ * more if items remain (covers chained creates → posts where round 1 drains
+ * creates and round 2 drains the follow-up actions).
+ */
+export const forceFlush = async ({ maxRounds = 3 } = {}) => {
+    console.log('[OfflineSyncService] forceFlush requested');
+    // 1) Wait for any running flush to settle so we don't get "skipped".
+    if (flushing) {
+        console.log('[OfflineSyncService] forceFlush waiting for in-flight flush to finish');
+        await new Promise((resolve) => {
+            _flushIdleWaiters.push(resolve);
+            // Safety timeout — don't hang forever.
+            setTimeout(resolve, 10000);
+        });
+    }
+    // 2) Reset retry counters so previously-failed items don't get dropped
+    //    as poison pills on this pass.
+    try {
+        const reset = await offlineQueue.resetRetryCounts();
+        console.log('[OfflineSyncService] forceFlush reset retry on', reset, 'items');
+    } catch (e) { console.warn('[OfflineSyncService] retry reset failed:', e?.message); }
+    // 3) Drain the queue. Loop a few rounds so chained operations (create
+    //    then action_post that was queued with an offline_ id) can resolve
+    //    via the offline-id map in successive passes.
+    let total = { synced: 0, failed: 0 };
+    for (let round = 0; round < maxRounds; round += 1) {
+        const res = await flushOnce();
+        console.log('[OfflineSyncService] forceFlush round', round + 1, '→', JSON.stringify(res));
+        if (res?.skipped) {
+            // Another flush beat us to it — wait for it to finish, then check.
+            await new Promise((resolve) => {
+                _flushIdleWaiters.push(resolve);
+                setTimeout(resolve, 10000);
+            });
+        } else {
+            total.synced += res?.synced || 0;
+            total.failed += res?.failed || 0;
+        }
+        const remaining = await offlineQueue.getPendingCount();
+        console.log('[OfflineSyncService] forceFlush after round', round + 1, 'remaining=', remaining);
+        if (remaining === 0) break;
+        // Small pause so ID map writes from the previous round settle.
+        await new Promise((r) => setTimeout(r, 400));
+    }
+    const remaining = await offlineQueue.getPendingCount();
+    return { ...total, remaining };
+};
 
 /**
  * Start the auto-flush service. Called once from App.js on boot.

@@ -4483,6 +4483,9 @@ export const createPaymentWithSignatureOdoo = async ({
   amount,
   paymentType = 'inbound',
   journalId,
+  journalName = '',
+  companyId = null,
+  companyName = '',
   ref = '',
   customerSignature = null,
   employeeSignature = null,
@@ -4504,6 +4507,9 @@ export const createPaymentWithSignatureOdoo = async ({
           amount: parseFloat(amount) || 0,
           paymentType,
           journalId: journalId || null,
+          journalName: journalName || '',
+          companyId: companyId || null,
+          companyName: companyName || '',
           ref: ref || '',
           customerSignature: customerSignature || null,
           employeeSignature: employeeSignature || null,
@@ -4535,9 +4541,9 @@ export const createPaymentWithSignatureOdoo = async ({
           date: new Date().toISOString().split('T')[0],
           state: 'draft',
           payment_type: paymentType,
-          journal_name: '',
+          journal_name: journalName || '',
           ref: ref || '',
-          company_name: '',
+          company_name: companyName || '',
           offline: true,
         };
         const perTypeKey = `@cache:accountPayments:${paymentType}`;
@@ -4573,7 +4579,8 @@ export const createPaymentWithSignatureOdoo = async ({
 
     // Step 2: Resolve company — read partner's and journal's company_id
     // IN PARALLEL. Previously these were sequential and burnt ~2x the time.
-    let targetCompanyId = null;
+    // If the user explicitly picked a company in the form, honor that.
+    let targetCompanyId = companyId || null;
     let resolvedJournalId = journalId;
 
     if (partnerId) {
@@ -4833,54 +4840,70 @@ export const fetchPaymentDetailOdoo = async (paymentId) => {
 // Validate (action_post) a payment — moves state Draft → Posted/Paid.
 // Offline-aware: queues the action and patches the cache optimistically.
 export const postPaymentOdoo = async (paymentId) => {
+  // When the id is still `offline_X`, the record doesn't exist in Odoo yet —
+  // Number('offline_X') is NaN, so the online RPC would silently no-op.
+  // Always queue the action and let OfflineSyncService resolve offline→real id.
+  const isOfflineId = String(paymentId).startsWith('offline_');
   try {
     const online = await isOnline();
-    if (!online) {
+    if (!online || isOfflineId) {
+      // Read current state from cache so offline Validate steps through
+      // draft → in_process on first tap and in_process → paid on second tap
+      // (matches Odoo's online two-step flow).
+      let currentState = 'draft';
+      try {
+        for (const k of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
+          const raw = await AsyncStorage.getItem(k);
+          if (!raw) continue;
+          const list = JSON.parse(raw);
+          const match = list.find((p) => p.id === paymentId || String(p.id) === String(paymentId));
+          if (match && match.state) { currentState = String(match.state).toLowerCase(); break; }
+        }
+      } catch (_) {}
+      const nextState = currentState === 'in_process' ? 'paid' : 'in_process';
+
       await offlineQueue.enqueue({
         model: 'account.payment',
         operation: 'action_post',
         values: { _recordId: paymentId },
       });
 
-      // Predict the next Odoo sequence from the highest existing name across
-      // all cached payments so the badge flip ALSO shows a proper PAY0000N
-      // label — not just "Paid" on a placeholder row. Once the queue flushes,
-      // OfflineSyncService's post handler overwrites the cache with Odoo's
-      // actual assigned sequence (which is almost always the same number
-      // unless another device posted one in between).
+      // Predict the PAY0000N label ONLY when we're about to transition out
+      // of draft (Odoo's sequence fires at that moment). On the second
+      // Validate (in_process → paid) the name already exists; don't touch it.
       let predictedName = null;
-      try {
-        const names = [];
-        for (const k of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
-          const raw = await AsyncStorage.getItem(k);
-          if (!raw) continue;
-          const list = JSON.parse(raw);
-          list.forEach((p) => { if (p?.name) names.push(String(p.name)); });
-        }
-        // Pull the trailing numeric segment from each name (handles both
-        // PAY00006 and journal patterns like PBNK1/2026/00006).
-        let best = null; // { prefix, num, width }
-        names.forEach((n) => {
-          const m = n.match(/^(.*?)(\d{2,})\s*$/);
-          if (m) {
-            const num = parseInt(m[2], 10);
-            if (!best || num > best.num) best = { prefix: m[1], num, width: m[2].length };
+      if (currentState === 'draft') {
+        try {
+          const names = [];
+          for (const k of ['@cache:accountPayments:inbound', '@cache:accountPayments:outbound', '@cache:accountPayments']) {
+            const raw = await AsyncStorage.getItem(k);
+            if (!raw) continue;
+            const list = JSON.parse(raw);
+            list.forEach((p) => { if (p?.name) names.push(String(p.name)); });
           }
-        });
-        if (best) {
-          const nextNum = String(best.num + 1).padStart(best.width, '0');
-          predictedName = `${best.prefix}${nextNum}`;
-        }
-      } catch (_) {}
+          let best = null; // { prefix, num, width }
+          names.forEach((n) => {
+            const m = n.match(/^(.*?)(\d{2,})\s*$/);
+            if (m) {
+              const num = parseInt(m[2], 10);
+              if (!best || num > best.num) best = { prefix: m[1], num, width: m[2].length };
+            }
+          });
+          if (best) {
+            const nextNum = String(best.num + 1).padStart(best.width, '0');
+            predictedName = `${best.prefix}${nextNum}`;
+          }
+        } catch (_) {}
+      }
 
-      const patch = { state: 'paid' };
+      const patch = { state: nextState };
       if (predictedName) patch.name = predictedName;
       await _patchPaymentInCache(
         (p) => p.id === paymentId || String(p.id) === String(paymentId),
         patch
       );
-      console.log('[postPayment] OFFLINE queued, predicted name:', predictedName);
-      return { offline: true, predictedName };
+      console.log('[postPayment] OFFLINE queued:', { paymentId, currentState, nextState, predictedName });
+      return { offline: true, state: nextState, predictedName };
     }
   } catch (_) {}
 
@@ -4945,12 +4968,13 @@ export const postPaymentOdoo = async (paymentId) => {
 // account.payment.action_draft method. Visible from in_process / paid /
 // cancelled states on the Odoo web form.
 export const draftPaymentOdoo = async (paymentId) => {
-  // Offline branch — queue the action and patch the cache optimistically so
-  // the UI flips to Draft immediately. OfflineSyncService handler applies
-  // the real action_draft on Odoo when connectivity returns.
+  // Offline or `offline_X` id → queue the action and patch the cache so the
+  // UI flips to Draft immediately. OfflineSyncService resolves the real id
+  // and applies action_draft on Odoo after the create drains.
+  const isOfflineId = String(paymentId).startsWith('offline_');
   try {
     const online = await isOnline();
-    if (!online) {
+    if (!online || isOfflineId) {
       await offlineQueue.enqueue({
         model: 'account.payment',
         operation: 'action_draft',
@@ -4997,10 +5021,13 @@ export const draftPaymentOdoo = async (paymentId) => {
 };
 
 // Cancel a payment — offline-aware. Queues action_cancel and flips cache.
+// Also takes the queue path when the id is still `offline_X` so Cancel works
+// on pending-sync payments (Number('offline_X') would be NaN otherwise).
 export const cancelPaymentOdoo = async (paymentId) => {
+  const isOfflineId = String(paymentId).startsWith('offline_');
   try {
     const online = await isOnline();
-    if (!online) {
+    if (!online || isOfflineId) {
       await offlineQueue.enqueue({
         model: 'account.payment',
         operation: 'action_cancel',

@@ -17,7 +17,8 @@ import { useCurrencyStore } from '@stores/currency';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import OfflineBanner from '@components/common/OfflineBanner';
 import networkStatus from '@utils/networkStatus';
-import { waitForFlush } from '@services/OfflineSyncService';
+import { waitForFlush, flush } from '@services/OfflineSyncService';
+import { getPendingCount } from '@utils/offlineQueue';
 
 // Matches Odoo web UI palette for account.payment state badges.
 const STATE_COLORS = {
@@ -68,18 +69,39 @@ const PaymentList = ({ paymentType, navigation }) => {
     }
   }, [paymentType]);
 
-  useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
+  // Focus: if there's a pending queue online, flush FIRST so the single
+  // fetch below sees real Odoo ids + names. Only one network fetch per
+  // focus — avoids the double-fetch we saw in the logs (fetch → flush →
+  // fetch again).
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const online = await networkStatus.isOnline();
+        const pending = await getPendingCount();
+        if (online && pending > 0 && !cancelled) {
+          console.log('[RegisterPayment] Focus + online + queue=', pending, '→ force flush before fetch');
+          try { await flush(); } catch (e) { console.warn('[RegisterPayment] focus flush failed:', e?.message); }
+          try { await waitForFlush(8000); } catch (_) {}
+        }
+        if (!cancelled) await fetchData();
+      })();
+      return () => { cancelled = true; };
+    }, [fetchData])
+  );
 
-  // Auto-refresh when internet returns — picks up any offline-queued
-  // action_post / action_draft / action_cancel that synced in the background
-  // plus any new payments from other devices.
+  // Auto-refresh when internet returns — actively call flush() so queued
+  // create/action_post/action_cancel items push to Odoo right away instead
+  // of waiting on the background scheduler's debounce window.
   useEffect(() => {
     let wasOff = null;
     const unsub = networkStatus.subscribe(async (online) => {
       const previouslyOff = wasOff === true;
       wasOff = !online;
       if (online && previouslyOff) {
-        console.log('[RegisterPayment] Online → waiting for flush, then refetching', paymentType);
+        const pending = await getPendingCount();
+        console.log('[RegisterPayment] Online transition → force flush, queue=', pending, paymentType);
+        try { await flush(); } catch (e) { console.warn('[RegisterPayment] reconnect flush failed:', e?.message); }
         try { await waitForFlush(8000); } catch (_) {}
         try { await fetchData(); } catch (_) {}
       }

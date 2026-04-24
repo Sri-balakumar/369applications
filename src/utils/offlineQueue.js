@@ -100,6 +100,18 @@ export const updateValues = async (id, newValues) => {
     await writeAll(next);
 };
 
+/**
+ * Reset retryCount + lastError on every queued item. Used by the manual
+ * "Sync now" button so items that previously hit the poison-pill threshold
+ * (retryCount >= 5) get another chance instead of being silently dropped.
+ */
+export const resetRetryCounts = async () => {
+    const items = await readAll();
+    const next = items.map((it) => ({ ...it, retryCount: 0, lastError: null }));
+    await writeAll(next);
+    return next.length;
+};
+
 export const clear = async () => {
     try {
         await AsyncStorage.removeItem(STORAGE_KEY);
@@ -115,5 +127,6 @@ export default {
     removeById,
     markFailed,
     updateValues,
+    resetRetryCounts,
     clear,
 };

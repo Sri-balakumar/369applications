@@ -91,7 +91,13 @@ const PaymentForm = ({ navigation, route }) => {
         ]);
         const journalItems = (journalData || []).map((j) => ({
           id: j.id,
+          // Dropdown-friendly label for the picker.
           label: j.company_name ? `${j.name} (${j.type}) - ${j.company_name}` : `${j.name} (${j.type})`,
+          // Keep the raw journal name — without type/company suffixes — so
+          // the offline placeholder writes "Bank" into journal_name instead
+          // of the verbose label. Matches the clean format Odoo sends back
+          // on online creates.
+          name: j.name,
           type: j.type,
           company_id: j.company_id,
           company_name: j.company_name,
@@ -189,6 +195,9 @@ const PaymentForm = ({ navigation, route }) => {
         amount: parsedAmount,
         paymentType: paymentType.id,
         journalId: journal?.id || null,
+        journalName: journal?.name || journal?.label || '',
+        companyId: company?.id || null,
+        companyName: company?.label || '',
         ref: memo || '',
         customerSignature: customerSignatureBase64 || null,
         employeeSignature: employeeSignatureBase64 || null,
