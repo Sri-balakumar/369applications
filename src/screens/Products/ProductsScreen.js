@@ -6,7 +6,7 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { NavigationHeader } from '@components/Header';
 import OfflineBanner from '@components/common/OfflineBanner';
 import { ProductsList } from '@components/Product';
-import { fetchProductsOdoo, fetchProductByBarcodeOdoo, fetchPosCategoriesOdoo, updatePosCategoryOdoo } from '@api/services/generalApi';
+import { fetchProductsOdoo, fetchProductByBarcodeOdoo, fetchPosCategoriesOdoo, fetchPosCategoryCountsOdoo, updatePosCategoryOdoo } from '@api/services/generalApi';
 import { isOnline } from '@utils/networkStatus';
 import { useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
@@ -37,6 +37,7 @@ const ProductsScreen = ({ navigation, route }) => {
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchProductsOdoo);
 
   const [categories, setCategories] = useState([]);
+  const [categoryCounts, setCategoryCounts] = useState({ all: 0 });
   const [selectedCategory, setSelectedCategory] = useState(initialPosCategoryId);
   const [selectedCategorySource, setSelectedCategorySource] = useState(initialCategorySource);
 
@@ -48,12 +49,21 @@ const ProductsScreen = ({ navigation, route }) => {
   const [editCatImageUri, setEditCatImageUri] = useState(null);
   const [savingCat, setSavingCat] = useState(false);
 
-  // Load POS categories on mount
+  // Load POS categories + per-category product counts on mount. Counts render
+  // inline in each chip like Sales Order's filter tabs: "All (N)", "Drinks (M)".
   useEffect(() => {
     const loadCategories = async () => {
       try {
         const cats = await fetchPosCategoriesOdoo();
         setCategories(cats || []);
+        if (cats && cats.length > 0) {
+          const source = cats[0]?._source || 'pos.category';
+          const ids = cats.map((c) => c._id).filter(Boolean);
+          try {
+            const counts = await fetchPosCategoryCountsOdoo(ids, source);
+            setCategoryCounts(counts || { all: 0 });
+          } catch (_) {}
+        }
       } catch (e) { /* ignore */ }
     };
     loadCategories();
@@ -238,12 +248,15 @@ const pickEditCatImage = async () => {
               style={[s.categoryChip, !selectedCategory && s.categoryChipActive]}
               onPress={() => handleCategoryPress('')}
             >
-              <Text style={[s.categoryText, !selectedCategory && s.categoryTextActive]}>All</Text>
+              <Text style={[s.categoryText, !selectedCategory && s.categoryTextActive]}>
+                All ({categoryCounts.all ?? 0})
+              </Text>
             </TouchableOpacity>
             {categories.map((cat) => {
               const isActive = selectedCategory === cat._id;
               const catColor = ODOO_COLORS[cat.color] || null;
               const hasColor = cat.color > 0 && catColor;
+              const count = categoryCounts[cat._id] ?? 0;
               return (
                 <TouchableOpacity
                   key={cat._id}
@@ -259,7 +272,7 @@ const pickEditCatImage = async () => {
                     s.categoryText,
                     hasColor && { color: '#fff' },
                     isActive && s.categoryTextActive,
-                  ]}>{cat.name}</Text>
+                  ]}>{cat.name} ({count})</Text>
                 </TouchableOpacity>
               );
             })}

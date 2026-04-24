@@ -33,7 +33,7 @@ import CacheWarmer from "@services/CacheWarmer";
 import * as Location from 'expo-location';
 
 import API_BASE_URL from "@api/config";
-import { DEFAULT_ODOO_BASE_URL, DEFAULT_ODOO_DB, DEFAULT_USERNAME, DEFAULT_PASSWORD, setOdooBaseUrl } from "@api/config/odooConfig";
+import { DEFAULT_ODOO_BASE_URL, DEFAULT_ODOO_DB, setOdooBaseUrl } from "@api/config/odooConfig";
 import { fetchCompanyCurrencyOdoo } from "@api/services/generalApi";
 import { useCurrencyStore } from "@stores/currency";
 
@@ -136,6 +136,57 @@ const LoginScreenOdoo = () => {
   }, []);
 
   // Removed auto-fill of Server URL from AsyncStorage — user must enter URL each time.
+
+  // If the user previously enabled "Auto Fill Credentials" AND has a saved
+  // username/password from a prior successful login, restore them on mount.
+  // No hardcoded admin/admin fallback — first-time users must type their own.
+  useEffect(() => {
+    (async () => {
+      try {
+        const enabled = await AsyncStorage.getItem('autofill_enabled');
+        if (enabled !== 'true') return;
+        const raw = await AsyncStorage.getItem('saved_credentials');
+        if (!raw) return;
+        const { username, password } = JSON.parse(raw) || {};
+        if (username || password) {
+          setAutoCredentials(true);
+          setInputs((prev) => ({
+            ...prev,
+            username: username || '',
+            password: password || '',
+          }));
+        }
+      } catch (_) {}
+    })();
+  }, []);
+
+  // Toggle handler for the "Auto Fill Credentials" switch.
+  // ON  + saved exists → fill username/password from AsyncStorage.
+  // ON  + no saved     → leave fields empty, prompt the user to log in once.
+  // OFF                → clear fields.
+  const toggleAutoCredentials = async () => {
+    const next = !autoCredentials;
+    setAutoCredentials(next);
+    try { await AsyncStorage.setItem('autofill_enabled', String(next)); } catch (_) {}
+    if (next) {
+      try {
+        const raw = await AsyncStorage.getItem('saved_credentials');
+        if (raw) {
+          const { username, password } = JSON.parse(raw) || {};
+          setInputs((prev) => ({
+            ...prev,
+            username: username || '',
+            password: password || '',
+          }));
+          return;
+        }
+      } catch (_) {}
+      showToastMessage('No saved credentials yet — log in once to save');
+      setInputs((prev) => ({ ...prev, username: '', password: '' }));
+    } else {
+      setInputs((prev) => ({ ...prev, username: '', password: '' }));
+    }
+  };
 
   // Debounce URL changes to fetch databases
   useEffect(() => {
@@ -313,6 +364,9 @@ const LoginScreenOdoo = () => {
             } catch (e) { console.warn('Failed to clear cart cache:', e?.message); }
             await AsyncStorage.setItem('odoo_db', dbNameUsed);
             await AsyncStorage.setItem("userData", JSON.stringify(userData));
+            // Persist the credentials the user actually typed so the
+            // "Auto Fill Credentials" toggle can recall them next time.
+            try { await AsyncStorage.setItem('saved_credentials', JSON.stringify({ username, password })); } catch (_) {}
             try {
               const setCookie = odooLoginRes.headers['set-cookie'] || odooLoginRes.headers['Set-Cookie'];
               if (setCookie) {
@@ -365,6 +419,7 @@ const LoginScreenOdoo = () => {
         if (response && response.success === true && response.data?.length) {
           const userData = response.data[0];
           await AsyncStorage.setItem("userData", JSON.stringify(userData));
+          try { await AsyncStorage.setItem('saved_credentials', JSON.stringify({ username, password })); } catch (_) {}
           setUser(userData);
           if (userData._id && userData.user_name !== 'admin') {
             startLocationTracking(userData._id);
@@ -550,15 +605,7 @@ const LoginScreenOdoo = () => {
                 </Text>
               </View>
               <TouchableOpacity
-                onPress={() => {
-                  const next = !autoCredentials;
-                  setAutoCredentials(next);
-                  if (next) {
-                    setInputs(prev => ({ ...prev, username: DEFAULT_USERNAME || '', password: DEFAULT_PASSWORD || '' }));
-                  } else {
-                    setInputs(prev => ({ ...prev, username: '', password: '' }));
-                  }
-                }}
+                onPress={toggleAutoCredentials}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
               >
                 <Text style={{ fontSize: 11, fontFamily: FONT_FAMILY.urbanistSemiBold, color: '#555' }} numberOfLines={1}>Auto Fill Credentials</Text>

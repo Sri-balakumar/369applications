@@ -1377,13 +1377,80 @@ export const fetchPosCategoriesOdoo = async () => {
   }
 };
 
+// Compute per-category counts from the cached product list. Used offline
+// and as a fallback when Odoo search_count fails. Iterates @cache:products
+// (and per-category slices) and tallies pos_categ_ids / categ_id matches.
+const _countCategoriesFromCache = async (categoryIds, source) => {
+  const out = { all: 0 };
+  try {
+    // Merge every @cache:products* key (main list + any per-category slices)
+    // into a de-duped product array keyed by id.
+    const allKeys = await AsyncStorage.getAllKeys();
+    const productKeys = allKeys.filter((k) => k.startsWith('@cache:products') && !k.includes('Detail'));
+    const byId = new Map();
+    for (const key of productKeys) {
+      try {
+        const raw = await AsyncStorage.getItem(key);
+        if (!raw) continue;
+        const list = JSON.parse(raw);
+        if (!Array.isArray(list)) continue;
+        for (const p of list) {
+          if (p && p.id != null && !byId.has(p.id)) byId.set(p.id, p);
+        }
+      } catch (_) {}
+    }
+    const products = Array.from(byId.values());
+    out.all = products.length;
+    for (const cid of categoryIds) {
+      let count = 0;
+      for (const p of products) {
+        if (source === 'pos.category') {
+          const ids = Array.isArray(p.pos_categ_ids) ? p.pos_categ_ids : [];
+          if (ids.some((x) => Number(x) === Number(cid))) count += 1;
+        } else {
+          const ci = Array.isArray(p.categ_id) ? p.categ_id[0] : p.categ_id;
+          if (Number(ci) === Number(cid)) count += 1;
+        }
+      }
+      out[cid] = count;
+    }
+  } catch (e) {
+    console.warn('[_countCategoriesFromCache] error:', e?.message);
+  }
+  return out;
+};
+
 // Fetch a count of products per POS (or product) category. Returns an
 // object keyed by category id with the number of products in that category
-// plus a special "all" key with the total product count. Uses search_count
-// RPCs in parallel so it's cheap.
+// plus a special "all" key with the total product count.
+//
+// Online: uses parallel Odoo search_count RPCs, caches result for offline.
+// Offline: computes counts from @cache:products instead of returning zeros.
 export const fetchPosCategoryCountsOdoo = async (categoryIds, source = 'pos.category') => {
   const out = { all: 0 };
   if (!categoryIds || categoryIds.length === 0) return out;
+
+  // Offline short-circuit — count from cached products so chips aren't all zero.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      console.log('[fetchPosCategoryCountsOdoo] OFFLINE → computing from cache');
+      const local = await _countCategoriesFromCache(categoryIds, source);
+      // Prefer last known online counts if we saved them — more accurate
+      // than the subset of products currently in the cache.
+      try {
+        const raw = await AsyncStorage.getItem('@cache:categoryCounts');
+        if (raw) {
+          const saved = JSON.parse(raw) || {};
+          // Merge: saved online counts win, but fill gaps from local tally.
+          const merged = { ...local, ...saved };
+          return merged;
+        }
+      } catch (_) {}
+      return local;
+    }
+  } catch (_) { /* fall through to online attempt */ }
+
   try {
     const headers = await getOdooAuthHeaders();
     const baseUrl = (ODOO_BASE_URL() || '').replace(/\/$/, '');
@@ -1412,10 +1479,19 @@ export const fetchPosCategoryCountsOdoo = async (categoryIds, source = 'pos.cate
     const [allCountResp, ...perCat] = await Promise.all([allResp, ...perCatResps]);
     out.all = allCountResp?.data?.result || 0;
     for (const row of perCat) out[row.cid] = row.count;
+    // Persist for offline reuse — next time the app is opened without
+    // internet the chips show the last known accurate counts.
+    try { await AsyncStorage.setItem('@cache:categoryCounts', JSON.stringify(out)); } catch (_) {}
     return out;
   } catch (e) {
-    console.warn('[fetchPosCategoryCountsOdoo] error:', e?.message);
-    return out;
+    console.warn('[fetchPosCategoryCountsOdoo] error, falling back to cache:', e?.message);
+    // Network call failed (timeout, DNS, etc.) — try cache so the UI isn't zero.
+    try {
+      const raw = await AsyncStorage.getItem('@cache:categoryCounts');
+      if (raw) return JSON.parse(raw);
+    } catch (_) {}
+    const local = await _countCategoriesFromCache(categoryIds, source);
+    return local;
   }
 };
 
