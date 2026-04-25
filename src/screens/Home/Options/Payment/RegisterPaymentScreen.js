@@ -141,8 +141,15 @@ const PaymentList = ({ paymentType, navigation }) => {
         onPress={() => navigation.navigate('PaymentDetailScreen', { paymentId: item.id })}
       >
         <View style={styles.row}>
-          <Text style={styles.head} numberOfLines={1}>{displayName}</Text>
-          <View style={[styles.badge, { backgroundColor: stateColor }]}>
+          <View style={{ flex: 1, marginRight: 8 }}>
+            <Text style={styles.head} numberOfLines={1}>{displayName}</Text>
+            {item.offline_label && item.offline_label !== item.name ? (
+              <Text style={{ fontSize: 11, color: '#999', fontFamily: FONT_FAMILY.urbanistMedium }}>
+                Ref: {item.offline_label}
+              </Text>
+            ) : null}
+          </View>
+          <View style={[styles.badge, { backgroundColor: stateColor, alignSelf: 'flex-start' }]}>
             <Text style={styles.badgeText}>{state.toUpperCase()}</Text>
           </View>
         </View>
@@ -158,7 +165,7 @@ const PaymentList = ({ paymentType, navigation }) => {
         </View>
 
         {item.ref ? (
-          <Text style={styles.subContent} numberOfLines={1}>Ref: {item.ref}</Text>
+          <Text style={styles.subContent} numberOfLines={1}>Memo: {item.ref}</Text>
         ) : null}
 
         {item.company_name ? (

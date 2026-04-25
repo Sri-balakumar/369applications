@@ -3423,15 +3423,27 @@ export const fetchEasySalesOdoo = async ({ offset = 0, limit = 50, searchText = 
     console.log('[EasySales] Fetched', records.length, 'records');
     // Merge offline_ placeholders so a refetch mid-sync doesn't erase rows
     // the user created offline but the sync service hasn't swapped to a real
-    // id yet. Mirrors the payments fix in fetchAccountPaymentsOdoo.
+    // id yet. Also transfer the persisted `offline_label` from the previous
+    // cached row onto the fresh Odoo record, so a row synced from offline
+    // keeps its OFF label visible as a Ref sub-line on the list.
     let finalList = records;
     if (!searchText && offset === 0) {
       try {
         const raw = await AsyncStorage.getItem('@cache:easySales');
         if (raw) {
           const oldList = JSON.parse(raw);
+          const labelByRealId = {};
+          for (const o of oldList) {
+            if (o?.id != null && o.offline_label && !String(o.id).startsWith('offline_')) {
+              labelByRealId[String(o.id)] = o.offline_label;
+            }
+          }
+          finalList = records.map((r) => {
+            const lab = labelByRealId[String(r.id)];
+            return lab ? { ...r, offline_label: lab } : r;
+          });
           const pendingOffline = oldList.filter((o) => String(o?.id || '').startsWith('offline_'));
-          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...records];
+          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...finalList];
         }
       } catch (_) {}
       try { await AsyncStorage.setItem('@cache:easySales', JSON.stringify(finalList)); } catch (_) {}
@@ -3603,6 +3615,42 @@ export const discoverEasySalesFieldsOdoo = async () => {
   }
 };
 
+// Persistent OFF counter — survives sync (offline_X → real id) and syncs
+// across pending and synced rows. Scans the cache for the highest existing
+// `OFF{NNNNN}` (in `name` for pending rows OR `offline_label` for synced
+// rows) and uses max(persistedCounter, highestSeen) + 1. Persists per
+// module + DB so Easy Sales / Easy Purchase / Customer / Vendor each have
+// their own monotonically-increasing stream.
+const _nextOffLabel = async ({ counterKey, cacheKey, scope }) => {
+  let counter = 0;
+  try {
+    const r = await AsyncStorage.getItem(counterKey);
+    if (r) counter = parseInt(r, 10) || 0;
+  } catch (_) {}
+  try {
+    const raw = await AsyncStorage.getItem(cacheKey);
+    if (raw) {
+      const list = JSON.parse(raw) || [];
+      let max = 0;
+      for (const o of list) {
+        if (scope && o.payment_type && o.payment_type !== scope) continue;
+        const candidates = [o?.name, o?.offline_label].filter((s) => typeof s === 'string');
+        for (const c of candidates) {
+          const m = c.match(/^OFF(\d+)$/);
+          if (m) {
+            const n = parseInt(m[1], 10);
+            if (n > max) max = n;
+          }
+        }
+      }
+      if (max > counter) counter = max;
+    }
+  } catch (_) {}
+  const next = counter + 1;
+  try { await AsyncStorage.setItem(counterKey, String(next)); } catch (_) {}
+  return `OFF${String(next).padStart(5, '0')}`;
+};
+
 // Create an easy.sales record
 export const createEasySaleOdoo = async ({ partnerId, warehouseId, warehouseCompanyId, paymentMethodId, customerRef, orderLines, customerSignature }) => {
   // Offline branch — queue create, cache placeholder
@@ -3625,21 +3673,18 @@ export const createEasySaleOdoo = async ({ partnerId, warehouseId, warehouseComp
       (orderLines || []).forEach((l) => { amountUntaxed += (l.qty || l.quantity || 1) * (l.price_unit || l.price || 0); });
       const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-      // Count the offline_ placeholders already in the cache so the new row
-      // gets a per-session sequence like "NEW 1(offline)", "NEW 2(offline)",
-      // "NEW 3(offline)" — easier for the user to tell them apart before sync.
-      let offlineSeq = 1;
-      try {
-        const rawList = await AsyncStorage.getItem('@cache:easySales');
-        if (rawList) {
-          const list = JSON.parse(rawList);
-          offlineSeq = list.filter((o) => String(o?.id || '').startsWith('offline_')).length + 1;
-        }
-      } catch (_) {}
-
+      // Persistent monotonic OFF counter per (module, db). Scans both
+      // pending offline rows and already-synced rows' offline_label so a
+      // collision can never happen even after sync moves an id forward.
+      const dbForCounter = (await AsyncStorage.getItem('odoo_db')) || '';
+      const offLabel = await _nextOffLabel({
+        counterKey: `@off_counter:easySales:${dbForCounter}`,
+        cacheKey: '@cache:easySales',
+      });
       const placeholder = {
         id: `offline_${localId}`,
-        name: `NEW ${offlineSeq}(offline)`,
+        name: offLabel,
+        offline_label: offLabel,  // preserved through sync for the Ref sub-line
         partner_id: partnerId ? [partnerId, partnerName] : false,
         state: 'draft',
         amount_total: amountUntaxed,
@@ -3769,17 +3814,26 @@ export const fetchEasyPurchasesOdoo = async ({ offset = 0, limit = 50, searchTex
     }, { headers });
     if (response.data.error) { console.error('[EasyPurchase] list error:', response.data.error?.data?.message); return []; }
     const records = response.data.result || [];
-    // Preserve pending `offline_` placeholders so a refetch mid-sync doesn't
-    // erase rows the user created offline but haven't been swapped to real
-    // Odoo ids yet. Mirrors the Easy Sales / Register Payment pattern.
+    // Preserve pending `offline_` placeholders + transfer offline_label from
+    // the previous cache so synced rows keep their OFF Ref sub-line.
     let finalList = records;
     if (!searchText && offset === 0) {
       try {
         const raw = await AsyncStorage.getItem('@cache:easyPurchases');
         if (raw) {
           const oldList = JSON.parse(raw);
+          const labelByRealId = {};
+          for (const o of oldList) {
+            if (o?.id != null && o.offline_label && !String(o.id).startsWith('offline_')) {
+              labelByRealId[String(o.id)] = o.offline_label;
+            }
+          }
+          finalList = records.map((r) => {
+            const lab = labelByRealId[String(r.id)];
+            return lab ? { ...r, offline_label: lab } : r;
+          });
           const pendingOffline = oldList.filter((o) => String(o?.id || '').startsWith('offline_'));
-          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...records];
+          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...finalList];
         }
       } catch (_) {}
       try { await AsyncStorage.setItem('@cache:easyPurchases', JSON.stringify(finalList)); } catch (_) {}
@@ -3884,19 +3938,14 @@ export const createEasyPurchaseOdoo = async ({ partnerId, warehouseId, warehouse
       let amountUntaxed = 0;
       (orderLines || []).forEach((l) => { amountUntaxed += (l.qty || l.quantity || 1) * (l.price_unit || l.price || 0); });
       const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
-      // Count existing offline_ placeholders so we can label this one
-      // "NEW 1(offline)" / "NEW 2(offline)" / ... making it easy for the
-      // user to tell multiple offline orders apart before sync.
-      let offlineSeq = 1;
-      try {
-        const rawList0 = await AsyncStorage.getItem('@cache:easyPurchases');
-        if (rawList0) {
-          const list0 = JSON.parse(rawList0);
-          offlineSeq = list0.filter((o) => String(o?.id || '').startsWith('offline_')).length + 1;
-        }
-      } catch (_) {}
+      // Persistent monotonic OFF counter per (module, db).
+      const dbForCounterEP = (await AsyncStorage.getItem('odoo_db')) || '';
+      const offLabelEP = await _nextOffLabel({
+        counterKey: `@off_counter:easyPurchases:${dbForCounterEP}`,
+        cacheKey: '@cache:easyPurchases',
+      });
       const placeholder = {
-        id: `offline_${localId}`, name: `NEW ${offlineSeq}(offline)`,
+        id: `offline_${localId}`, name: offLabelEP, offline_label: offLabelEP,
         partner_id: partnerId ? [partnerId, partnerName] : false,
         state: 'draft', amount_total: amountUntaxed, amount_untaxed: amountUntaxed, amount_tax: 0,
         date: nowIso, warehouse_id: warehouseId ? [warehouseId, ''] : false,
@@ -4239,16 +4288,27 @@ export const fetchAccountPaymentsOdoo = async ({ paymentType = 'inbound', offset
       company_name: p.company_id ? p.company_id[1] : '',
     }));
 
-    // Merge any offline-queued payments still pending sync so they stay
-    // visible on top of the real list.
+    // Merge any offline-queued payments still pending sync + transfer the
+    // persisted offline_label from the previous cache so synced rows keep
+    // their OFF Ref sub-line visible.
     let finalList = mapped;
     if (!searchText && offset === 0) {
       try {
         const raw = await AsyncStorage.getItem(cacheKey);
         if (raw) {
           const oldList = JSON.parse(raw);
+          const labelByRealId = {};
+          for (const o of oldList) {
+            if (o?.id != null && o.offline_label && !String(o.id).startsWith('offline_')) {
+              labelByRealId[String(o.id)] = o.offline_label;
+            }
+          }
+          finalList = mapped.map((r) => {
+            const lab = labelByRealId[String(r.id)];
+            return lab ? { ...r, offline_label: lab } : r;
+          });
           const pendingOffline = oldList.filter((o) => String(o?.id || '').startsWith('offline_'));
-          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...mapped];
+          if (pendingOffline.length > 0) finalList = [...pendingOffline, ...finalList];
         }
       } catch (_) {}
       // Write to the per-type key so Customer + Vendor caches don't clobber
@@ -4703,20 +4763,18 @@ export const createPaymentWithSignatureOdoo = async ({
           }
         } catch (_) {}
         const perTypeKey = `@cache:accountPayments:${paymentType}`;
-        // Sequential per-type offline label: "NEW 1(offline)", "NEW 2(offline)"
-        // — scoped to Customer (inbound) and Vendor (outbound) independently so
-        // the two tabs have their own counters.
-        let offlineSeq = 1;
-        try {
-          const existingRaw = await AsyncStorage.getItem(perTypeKey);
-          if (existingRaw) {
-            const existing = JSON.parse(existingRaw);
-            offlineSeq = existing.filter((o) => String(o?.id || '').startsWith('offline_')).length + 1;
-          }
-        } catch (_) {}
+        // Persistent monotonic OFF counter per (paymentType, db) — Customer
+        // and Vendor each have their own stream, never collides post-sync.
+        const dbForCounterPay = (await AsyncStorage.getItem('odoo_db')) || '';
+        const offLabelPay = await _nextOffLabel({
+          counterKey: `@off_counter:payments:${paymentType}:${dbForCounterPay}`,
+          cacheKey: perTypeKey,
+          scope: paymentType,
+        });
         const placeholder = {
           id: `offline_${localId}`,
-          name: `NEW ${offlineSeq}(offline)`,
+          name: offLabelPay,
+          offline_label: offLabelPay,
           partner_id: partnerId,
           partner_name: partnerName,
           amount: parseFloat(amount) || 0,

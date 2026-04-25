@@ -67,8 +67,15 @@ const EasyPurchaseListScreen = ({ navigation }) => {
         onPress={() => navigation.navigate('EasyPurchaseDetailScreen', { purchaseId: item.id })}
       >
         <View style={s.row}>
-          <Text style={s.head} numberOfLines={1}>{item.name || `EP-${item.id}`}</Text>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
+          <View style={{ flex: 1, marginRight: 8 }}>
+            <Text style={s.head} numberOfLines={1}>{item.name || `EP-${item.id}`}</Text>
+            {item.offline_label && item.offline_label !== item.name ? (
+              <Text style={{ fontSize: 11, color: '#999', fontFamily: FONT_FAMILY.urbanistMedium }}>
+                Ref: {item.offline_label}
+              </Text>
+            ) : null}
+          </View>
+          <View style={{ flexDirection: 'row', gap: 6, alignSelf: 'flex-start' }}>
             <View style={[s.badge, { backgroundColor: isPaid ? '#4CAF50' : '#F44336' }]}>
               <Text style={s.badgeText}>{isPaid ? 'Paid' : 'Not Paid'}</Text>
             </View>
