@@ -372,17 +372,28 @@ const LoginScreenOdoo = () => {
           if (result && result.uid) {
             userData = result;
             userData.odoo_db = dbNameUsed;
-            // Clear cart cache if database changed
+            // Clear DB-specific caches if the user logged into a different
+            // database. Old products / contacts / easy-sales / payments /
+            // categories / etc. would otherwise leak from the previous DB
+            // because cache keys are not namespaced per DB.
             try {
               const previousDb = await AsyncStorage.getItem('odoo_db');
               if (previousDb && previousDb !== dbNameUsed) {
                 const allKeys = await AsyncStorage.getAllKeys();
-                const cartKeys = allKeys.filter(k => k.startsWith('cart_'));
-                if (cartKeys.length > 0) await AsyncStorage.multiRemove(cartKeys);
-                console.log('[Login] DB changed, cleared', cartKeys.length, 'cached carts');
+                const stale = allKeys.filter((k) =>
+                  k.startsWith('cart_') ||
+                  k.startsWith('@cache:') ||
+                  k.startsWith('@offline_queue') ||
+                  k.startsWith('@offline_id_map') ||
+                  k.startsWith('@lastSyncError:')
+                );
+                if (stale.length > 0) await AsyncStorage.multiRemove(stale);
+                console.log('[Login] DB changed (', previousDb, '→', dbNameUsed, '), cleared', stale.length, 'stale cache entries');
               }
-            } catch (e) { console.warn('Failed to clear cart cache:', e?.message); }
+            } catch (e) { console.warn('Failed to clear DB-specific cache:', e?.message); }
             await AsyncStorage.setItem('odoo_db', dbNameUsed);
+            // Boot guard reads this stamp to detect cross-DB cache leaks.
+            await AsyncStorage.setItem('@cache:_dbStamp', dbNameUsed);
             await AsyncStorage.setItem("userData", JSON.stringify(userData));
             // Persist the credentials under a per-(URL + DB) key so each
             // database remembers its own username/password. Reloading the

@@ -18,48 +18,24 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import OfflineBanner from '@components/common/OfflineBanner';
 
-const INV_COUNTER_KEY = 'inv_counter_s';
-const INV_MAP_KEY = 'inv_map_s';
-const INV_START = 10003;
-
-const INV_RESET_KEY = 'inv_reset_s10003';
-
-// Assign S numbers to orders, sorted by ID ascending so older orders get lower numbers
-const assignSNumbers = async (ids) => {
-  // One-time reset to start fresh from S10003
-  const resetDone = await AsyncStorage.getItem(INV_RESET_KEY);
-  if (!resetDone) {
-    await AsyncStorage.removeItem(INV_MAP_KEY);
-    await AsyncStorage.setItem(INV_COUNTER_KEY, String(INV_START));
-    await AsyncStorage.setItem(INV_RESET_KEY, 'done');
-  }
-  const mapRaw = await AsyncStorage.getItem(INV_MAP_KEY);
-  const map = mapRaw ? JSON.parse(mapRaw) : {};
-  // Find highest existing S number to prevent duplicates
-  let maxUsed = INV_START - 1;
-  for (const val of Object.values(map)) {
-    const num = parseInt(String(val).replace('S', ''), 10);
-    if (!isNaN(num) && num > maxUsed) maxUsed = num;
-  }
-  const counterRaw = await AsyncStorage.getItem(INV_COUNTER_KEY);
-  const storedCounter = counterRaw ? parseInt(counterRaw, 10) : INV_START;
-  let counter = Math.max(maxUsed + 1, storedCounter);
-  let changed = false;
-  // Sort ascending so older orders get lower S numbers
-  const sortedIds = [...ids].sort((a, b) => a - b);
-  for (const id of sortedIds) {
-    const key = String(id);
-    if (!map[key]) {
-      map[key] = `S${counter}`;
-      counter++;
-      changed = true;
+// A-numbers ("A00001", "A00002", …) are the user-facing display names for
+// sale orders, kept in app-local storage per Odoo DB and assigned in
+// createSaleOrderOdoo. We READ the persisted map here so the list can
+// resolve any rows that don't carry the A-name on `item.name` directly.
+// Strict A-only filter — any leftover S-prefixed entry is ignored so the
+// head text never falls back to Odoo's "S/SO" sequence.
+const _readAMap = async () => {
+  try {
+    const db = (await AsyncStorage.getItem('odoo_db')) || '';
+    const key = db ? `a_map:${db}` : 'a_map';
+    const raw = await AsyncStorage.getItem(key);
+    const map = raw ? JSON.parse(raw) : {};
+    const out = {};
+    for (const [id, label] of Object.entries(map || {})) {
+      if (typeof label === 'string' && label.startsWith('A')) out[id] = label;
     }
-  }
-  if (changed) {
-    await AsyncStorage.setItem(INV_MAP_KEY, JSON.stringify(map));
-    await AsyncStorage.setItem(INV_COUNTER_KEY, String(counter));
-  }
-  return map;
+    return out;
+  } catch (_) { return {}; }
 };
 
 const STATE_LABELS = {
@@ -139,18 +115,11 @@ const SaleOrderListScreen = ({ navigation }) => {
         console.log('[SaleOrderList] Online transition — waiting for sync, then refetching');
         try { await waitForFlush(8000); } catch (_) {}
         try {
-          const fresh = await fetchData();
+          // fetchData will trigger _autoInvoiceIfEligible internally (source=fetch),
+          // so we just refetch here. The 30s debounce in the helper prevents
+          // a second fire on a chained focus refetch.
+          await fetchData();
           console.log('[SaleOrderList] Post-reconnect refetch complete');
-          const eligible = getToInvoiceOrders(fresh);
-          const sinceLast = Date.now() - lastAutoInvoiceAtRef.current;
-          if (eligible.length > 0 && sinceLast > 30_000) {
-            lastAutoInvoiceAtRef.current = Date.now();
-            console.log('[SaleOrderList] Auto-generating invoices for', eligible.length, 'orders');
-            const { success, failed } = await runBulkGenerate(eligible);
-            console.log('[SaleOrderList] Auto-invoice result:', success, 'created,', failed, 'failed');
-          } else if (eligible.length > 0) {
-            console.log('[SaleOrderList] Skipping auto-invoice (debounced, last run', sinceLast, 'ms ago)');
-          }
         } catch (e) {
           console.warn('[SaleOrderList] Post-reconnect refetch failed:', e?.message);
         }
@@ -158,29 +127,33 @@ const SaleOrderListScreen = ({ navigation }) => {
     });
     isOnline().then((o) => { wasOff = !o; setIsDeviceOnline(o); });
     return () => unsub && unsub();
-  }, [fetchData, getToInvoiceOrders, runBulkGenerate]);
+  }, [fetchData]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const records = await fetchSaleOrdersOdoo({ limit: 100 });
       // Enrich in PARALLEL: for SOs with no invoice_ids, search by origin.
-      // Serial was ~N round-trips; parallel is ~1 worst-case wall-clock.
+      // Use r.ref (Odoo's real sale-order name like "SO0012"). r.name is now
+      // the app-local A-label and would never match Odoo's invoice_origin.
       await Promise.all((records || []).map(async (r) => {
-        if ((!r.invoice_ids || r.invoice_ids.length === 0) && r.name) {
+        if ((!r.invoice_ids || r.invoice_ids.length === 0)) {
+          const odooName = r.ref || (String(r.name || '').startsWith('A') ? '' : r.name);
+          if (!odooName) return;
           try {
-            const invs = await searchInvoicesByOriginOdoo(r.name);
-            if (invs.length > 0) r.invoice_ids = invs.map(i => i.id);
-          } catch (e) {}
+            const invs = await searchInvoicesByOriginOdoo(odooName);
+            if (invs.length > 0) r.invoice_ids = invs.map((i) => i.id);
+          } catch (_) {}
         }
       }));
       setData(records || []);
-      // Assign S numbers (source of truth - orders get numbers here)
-      const ids = (records || []).map(r => r.id);
-      if (ids.length > 0) {
-        const map = await assignSNumbers(ids);
-        setInvMap(map);
-      }
+      // Load the persisted A-name map so list rows that don't carry the
+      // A-name on item.name (legacy synced rows) can still resolve.
+      try { setInvMap(await _readAMap()); } catch (_) {}
+      // Fire-and-forget auto-invoice on every fetch — covers focus refetch,
+      // header refresh, and any other path that reaches fetchData. Internal
+      // 30s debounce + isOnline guard handle the no-op cases.
+      _autoInvoiceIfEligible(records || [], 'fetch');
       return records || [];
     } catch (err) {
       console.error('[SaleOrderList] error:', err);
@@ -191,7 +164,23 @@ const SaleOrderListScreen = ({ navigation }) => {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    (async () => {
+      await fetchData();
+      // Surface the last sale.order sync error (if any) as a toast so silent
+      // poison-pilled creates aren't invisible. Cleared automatically on the
+      // next successful sync.
+      try {
+        const rawErr = await AsyncStorage.getItem('@lastSyncError:saleOrders');
+        if (rawErr && !cancelled) {
+          const parsed = JSON.parse(rawErr);
+          if (parsed?.message) showToastMessage(`Sync failed: ${parsed.message}`);
+        }
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
+  }, [fetchData]));
 
   // Manual refresh handler wired to the NavigationHeader's refresh icon.
   // Waits for any pending offline-queued writes to flush before re-fetching,
@@ -247,6 +236,36 @@ const SaleOrderListScreen = ({ navigation }) => {
 
   const toInvoiceOrders = getToInvoiceOrders(data);
 
+  // Auto-invoice trigger — runs the bulk generation if the records contain
+  // anything eligible AND the device is online AND the 30-second debounce
+  // hasn't fired recently. Called from the focus-fetch path, the manual
+  // header refresh, and the offline→online transition.
+  const _autoInvoiceIfEligible = useCallback(async (records, source) => {
+    if (!records?.length) return;
+    if (!(await isOnline())) return;
+    const eligible = (records || []).filter((o) => {
+      const s = (o.state || '').toLowerCase();
+      const isConfirmed = s === 'sale' || s === 'done';
+      const notInvoiced = o.invoice_status !== 'invoiced' && (!o.invoice_ids || o.invoice_ids.length === 0 || (o.invoice_ids.length === 1 && o.invoice_ids[0] === 'offline_inv'));
+      const hasRealId = !String(o.id || '').startsWith('offline_');
+      return isConfirmed && notInvoiced && hasRealId;
+    });
+    if (eligible.length === 0) return;
+    const sinceLast = Date.now() - lastAutoInvoiceAtRef.current;
+    if (sinceLast < 30_000) {
+      console.log('[SaleOrderList] Skipping auto-invoice (debounced, last run', sinceLast, 'ms ago) source=', source);
+      return;
+    }
+    lastAutoInvoiceAtRef.current = Date.now();
+    console.log('[SaleOrderList] Auto-invoicing', eligible.length, 'orders, source=', source);
+    try { await runBulkGenerateRef.current?.(eligible); }
+    catch (e) { console.warn('[SaleOrderList] auto-invoice failed:', e?.message); }
+  }, []);
+
+  // Forward ref for runBulkGenerate so _autoInvoiceIfEligible (declared
+  // earlier) can still call it after the helper is defined.
+  const runBulkGenerateRef = useRef(null);
+
   // Shared bulk-invoice loop. Accepts an explicit list so auto-fire can pass
   // freshly-fetched eligible orders without racing the state update.
   // Fires all invoice calls in PARALLEL — on a single order this is a no-op,
@@ -271,6 +290,10 @@ const SaleOrderListScreen = ({ navigation }) => {
     await fetchData();
     return { success, failed };
   }, [fetchData]);
+
+  // Wire the ref now that runBulkGenerate is defined, so _autoInvoiceIfEligible
+  // (declared above) can call it.
+  useEffect(() => { runBulkGenerateRef.current = runBulkGenerate; }, [runBulkGenerate]);
 
   const handleBulkGenerateInvoices = async () => {
     const online = await isOnline();
@@ -300,8 +323,24 @@ const SaleOrderListScreen = ({ navigation }) => {
       >
         <View style={styles.row}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.head} numberOfLines={1}>{invMap[item.id] || item.name || `SO-${item.id}`}</Text>
-            <Text style={{ fontSize: 11, color: '#999', fontFamily: FONT_FAMILY.urbanistMedium }}>{String(item.id || '').startsWith('offline_') ? 'Ref: -' : `Ref: ${item.name || '-'}`}</Text>
+            <Text style={styles.head} numberOfLines={1}>
+              {/* Always render an A-prefixed label. Priority: persisted A-map
+                  (true sequence) > item.name if it already starts with A >
+                  synthesised A from id padding. The Odoo "S/SO" name never
+                  reaches the head text. */}
+              {(typeof invMap[item.id] === 'string' && invMap[item.id].startsWith('A') ? invMap[item.id] : '')
+                || (String(item.name || '').startsWith('A') ? item.name : '')
+                || (String(item.id || '').startsWith('offline_')
+                    ? 'A?????'
+                    : `A${String(item.id).padStart(5, '0')}`)}
+            </Text>
+            <Text style={{ fontSize: 11, color: '#999', fontFamily: FONT_FAMILY.urbanistMedium }}>
+              {item.ref
+                ? `Ref: ${item.ref}`
+                : (String(item.id || '').startsWith('offline_')
+                    ? 'Ref: -'
+                    : (String(item.name || '').startsWith('A') ? 'Ref: -' : `Ref: ${item.name || '-'}`))}
+            </Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 6, alignSelf: 'flex-start' }}>
             {!hasInvoice && invoiceStatus === 'to_invoice' && (

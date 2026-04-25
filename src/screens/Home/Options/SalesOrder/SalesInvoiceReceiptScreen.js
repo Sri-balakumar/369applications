@@ -26,31 +26,31 @@ import networkStatus from '@utils/networkStatus';
 import { waitForFlush } from '@services/OfflineSyncService';
 import { MaterialIcons } from '@expo/vector-icons';
 
-const INV_COUNTER_KEY = 'inv_counter_s';
-const INV_MAP_KEY = 'inv_map_s';
-const INV_START = 10003;
+// Per-DB A-number lookup. Switching between Odoo databases keeps each
+// tenant's A-sequence isolated.
+const _aKeysForCurrentDb = async () => {
+  const db = (await AsyncStorage.getItem('odoo_db')) || '';
+  return {
+    counterKey: db ? `@a_counter:${db}` : '@a_counter',
+    mapKey: db ? `a_map:${db}` : 'a_map',
+  };
+};
 
-// Look up S number, or assign one if not found (for direct invoice flow)
 const getOrAssignSNumber = async (id) => {
   if (!id) return null;
   const key = String(id);
-  const mapRaw = await AsyncStorage.getItem(INV_MAP_KEY);
+  const { counterKey, mapKey } = await _aKeysForCurrentDb();
+  const mapRaw = await AsyncStorage.getItem(mapKey);
   const map = mapRaw ? JSON.parse(mapRaw) : {};
   if (map[key]) return map[key];
-  // Not found - assign next number (direct invoice flow)
-  let maxUsed = INV_START - 1;
-  for (const val of Object.values(map)) {
-    const num = parseInt(String(val).replace('S', ''), 10);
-    if (!isNaN(num) && num > maxUsed) maxUsed = num;
-  }
-  const counterRaw = await AsyncStorage.getItem(INV_COUNTER_KEY);
-  const storedCounter = counterRaw ? parseInt(counterRaw, 10) : INV_START;
-  const nextNumber = Math.max(maxUsed + 1, storedCounter);
-  const sNumber = `S${nextNumber}`;
-  map[key] = sNumber;
-  await AsyncStorage.setItem(INV_MAP_KEY, JSON.stringify(map));
-  await AsyncStorage.setItem(INV_COUNTER_KEY, String(nextNumber + 1));
-  return sNumber;
+  const counterRaw = await AsyncStorage.getItem(counterKey);
+  const current = counterRaw ? parseInt(counterRaw, 10) : 0;
+  const next = (Number.isFinite(current) ? current : 0) + 1;
+  const aNumber = `A${String(next).padStart(5, '0')}`;
+  map[key] = aNumber;
+  await AsyncStorage.setItem(mapKey, JSON.stringify(map));
+  await AsyncStorage.setItem(counterKey, String(next));
+  return aNumber;
 };
 
 const SalesInvoiceReceiptScreen = ({ navigation, route }) => {

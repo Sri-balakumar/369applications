@@ -707,7 +707,8 @@ const syncItemDirectly = async (item) => {
             return existingMap[offlineId];
         }
         const { _confirmAfterCreate, _cancelAfterCreate, _invoiceAfterCreate, ...rest } = values;
-        const createResp = await axios.post(
+        console.log('[OfflineSyncService] sale.order create → vals keys:', Object.keys(rest).join(','));
+        let createResp = await axios.post(
             `${baseUrl}/web/dataset/call_kw`,
             {
                 jsonrpc: '2.0', method: 'call',
@@ -715,48 +716,104 @@ const syncItemDirectly = async (item) => {
             },
             { headers, timeout: 30000 }
         );
+        // Session-expired retry: if the stored cookie was idle-timed-out
+        // while the device was offline, re-auth via saved credentials and
+        // retry once. Without this, the second offline order silently fails.
+        if (createResp.data?.error && _looksLikeSessionExpired(createResp.data.error)) {
+            console.warn('[OfflineSyncService] sale.order create got session error — re-authenticating and retrying');
+            const freshHeaders = await _reauthenticateForSync();
+            if (freshHeaders) {
+                createResp = await axios.post(
+                    `${baseUrl}/web/dataset/call_kw`,
+                    {
+                        jsonrpc: '2.0', method: 'call',
+                        params: { model: 'sale.order', method: 'create', args: [rest], kwargs: {} },
+                    },
+                    { headers: freshHeaders, timeout: 30000 }
+                );
+            }
+        }
         if (createResp.data?.error) {
-            throw new Error(createResp.data.error?.data?.message || 'Sale order create failed');
+            const errObj = createResp.data.error || {};
+            const msg = errObj?.data?.message || errObj?.message || 'Sale order create failed';
+            console.error('[OfflineSyncService] sale.order create REJECTED:', msg, 'full error:', JSON.stringify(errObj).substring(0, 600));
+            try {
+                await AsyncStorage.setItem('@lastSyncError:saleOrders', JSON.stringify({
+                    message: msg,
+                    at: new Date().toISOString(),
+                    offlineId,
+                }));
+            } catch (_) {}
+            throw new Error(msg);
         }
         const recordId = createResp.data?.result;
         console.log('[OfflineSyncService] Created sale.order id:', recordId);
+        try { await AsyncStorage.removeItem('@lastSyncError:saleOrders'); } catch (_) {}
         await saveOfflineIdMapping(offlineId, recordId);
 
-        // Fetch real order name from Odoo so the cache shows the Odoo ref
-        let realName = `S${String(recordId).padStart(5, '0')}`;
+        // Fetch real order name from Odoo — this becomes the row's `ref`.
+        // The user-facing display name (`item.name`) stays as the A00001
+        // label assigned at create time so the printed invoice is stable.
+        let realName = '';
         try {
             const nameResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
                 jsonrpc: '2.0', method: 'call',
                 params: { model: 'sale.order', method: 'read', args: [[recordId]], kwargs: { fields: ['name'] } },
             }, { headers, timeout: 10000 });
             const fetched = nameResp.data?.result?.[0]?.name;
-            if (fetched) realName = fetched;
+            if (fetched && fetched !== '/') realName = fetched;
         } catch (_) {}
-        console.log('[OfflineSyncService] sale.order real name:', realName);
+        console.log('[OfflineSyncService] sale.order real Odoo ref:', realName || '(unassigned)');
 
-        // Copy the local S-number mapping from offline ID to real ID so the
-        // invoice receipt keeps the same S-number after sync.
+        // Carry the A-number across the offline→real id swap. A-map is
+        // scoped per Odoo DB. The offline-assigned A-number is sacred —
+        // user already printed/saw it. Always overwrite any earlier
+        // auto-assigned label on the real id, so a race with the list
+        // fetch (which may auto-assign first) cannot strand the offline
+        // label as orphaned. Also prune any other entry pointing to the
+        // same offline label to avoid duplicates.
         try {
-            const sMapRaw = await AsyncStorage.getItem('inv_map_s');
-            if (sMapRaw) {
-                const sMap = JSON.parse(sMapRaw);
-                const offlineKey = offlineId;
-                if (sMap[offlineKey] && !sMap[String(recordId)]) {
-                    sMap[String(recordId)] = sMap[offlineKey];
-                    await AsyncStorage.setItem('inv_map_s', JSON.stringify(sMap));
-                    console.log('[OfflineSyncService] Copied S-number', sMap[offlineKey], 'from', offlineKey, 'to', recordId);
+            const dbName = (await AsyncStorage.getItem('odoo_db')) || '';
+            const aKey = dbName ? `a_map:${dbName}` : 'a_map';
+            const aMapRaw = await AsyncStorage.getItem(aKey);
+            if (aMapRaw) {
+                const aMap = JSON.parse(aMapRaw);
+                const offlineLabel = aMap[offlineId];
+                if (offlineLabel) {
+                    const prior = aMap[String(recordId)];
+                    // Drop any other id that was auto-assigned the same
+                    // label (the offline A-number wins; the auto-assigned
+                    // one will be replaced on the next refetch).
+                    for (const [k, v] of Object.entries(aMap)) {
+                        if (k !== offlineId && k !== String(recordId) && v === offlineLabel) {
+                            delete aMap[k];
+                        }
+                    }
+                    aMap[String(recordId)] = offlineLabel;
+                    await AsyncStorage.setItem(aKey, JSON.stringify(aMap));
+                    console.log(
+                        '[OfflineSyncService] Sealed A-number', offlineLabel,
+                        '→ recordId', recordId,
+                        prior && prior !== offlineLabel ? `(replaced auto-assigned ${prior})` : '',
+                        '(db=', dbName + ')'
+                    );
                 }
             }
         } catch (_) {}
 
-        // Swap offline placeholder in cached list/detail with real id + name.
+        // Swap offline placeholder in cached list/detail with the real Odoo
+        // id, populating `ref` with Odoo's name. `name` stays as the A label
+        // we assigned at create time.
         try {
             const raw = await AsyncStorage.getItem('@cache:saleOrders');
             if (raw) {
                 const list = JSON.parse(raw);
                 let changed = false;
                 const next = list.map((o) => {
-                    if (String(o.id) === offlineId) { changed = true; return { ...o, id: recordId, name: realName, offline: false }; }
+                    if (String(o.id) === offlineId) {
+                        changed = true;
+                        return { ...o, id: recordId, ref: realName || o.ref || '', offline: false };
+                    }
                     return o;
                 });
                 if (changed) await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(next));
@@ -766,7 +823,7 @@ const syncItemDirectly = async (item) => {
             const rawD = await AsyncStorage.getItem(`@cache:saleOrderDetail:${offlineId}`);
             if (rawD) {
                 const prev = JSON.parse(rawD);
-                await AsyncStorage.setItem(`@cache:saleOrderDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, name: realName, offline: false }));
+                await AsyncStorage.setItem(`@cache:saleOrderDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, ref: realName || prev.ref || '', offline: false }));
                 await AsyncStorage.removeItem(`@cache:saleOrderDetail:${offlineId}`);
             }
         } catch (_) {}
