@@ -3615,39 +3615,59 @@ export const discoverEasySalesFieldsOdoo = async () => {
   }
 };
 
-// Persistent OFF counter — survives sync (offline_X → real id) and syncs
-// across pending and synced rows. Scans the cache for the highest existing
-// `OFF{NNNNN}` (in `name` for pending rows OR `offline_label` for synced
-// rows) and uses max(persistedCounter, highestSeen) + 1. Persists per
-// module + DB so Easy Sales / Easy Purchase / Customer / Vendor each have
-// their own monotonically-increasing stream.
+// Persistent OFF counter — survives sync (offline_X → real id) and stays
+// per-(module, db). Each Odoo database keeps its OWN monotonic stream so
+// switching DBs starts a fresh OFF series (or resumes that DB's last value
+// if the user already used it).
+//
+// The cache scan is a defensive safety net that aligns the counter to the
+// highest existing OFF in case the persisted counter is behind. It's only
+// run when @cache:_dbStamp matches odoo_db — that prevents stale rows from
+// a previous DB (cache not yet wiped) from contaminating the new DB's
+// counter.
 const _nextOffLabel = async ({ counterKey, cacheKey, scope }) => {
   let counter = 0;
   try {
     const r = await AsyncStorage.getItem(counterKey);
     if (r) counter = parseInt(r, 10) || 0;
   } catch (_) {}
+
+  // Verify the cache belongs to the current DB before scanning it. If the
+  // user just switched DBs and the wipe hasn't run, skip the scan so the
+  // previous DB's OFF labels don't bump the new DB's counter forward.
+  let cacheBelongsToCurrentDb = false;
   try {
-    const raw = await AsyncStorage.getItem(cacheKey);
-    if (raw) {
-      const list = JSON.parse(raw) || [];
-      let max = 0;
-      for (const o of list) {
-        if (scope && o.payment_type && o.payment_type !== scope) continue;
-        const candidates = [o?.name, o?.offline_label].filter((s) => typeof s === 'string');
-        for (const c of candidates) {
-          const m = c.match(/^OFF(\d+)$/);
-          if (m) {
-            const n = parseInt(m[1], 10);
-            if (n > max) max = n;
+    const currentDb = await AsyncStorage.getItem('odoo_db');
+    const stampedDb = await AsyncStorage.getItem('@cache:_dbStamp');
+    cacheBelongsToCurrentDb = !!currentDb && currentDb === stampedDb;
+  } catch (_) {}
+
+  if (cacheBelongsToCurrentDb) {
+    try {
+      const raw = await AsyncStorage.getItem(cacheKey);
+      if (raw) {
+        const list = JSON.parse(raw) || [];
+        let max = 0;
+        for (const o of list) {
+          if (scope && o.payment_type && o.payment_type !== scope) continue;
+          const candidates = [o?.name, o?.offline_label].filter((s) => typeof s === 'string');
+          for (const c of candidates) {
+            const m = c.match(/^OFF(\d+)$/);
+            if (m) {
+              const n = parseInt(m[1], 10);
+              if (n > max) max = n;
+            }
           }
         }
+        if (max > counter) counter = max;
       }
-      if (max > counter) counter = max;
-    }
-  } catch (_) {}
+    } catch (_) {}
+  } else {
+    console.log('[_nextOffLabel] cache stamp mismatch (or not set) — skipping cross-DB cache scan');
+  }
   const next = counter + 1;
   try { await AsyncStorage.setItem(counterKey, String(next)); } catch (_) {}
+  console.log('[_nextOffLabel] counter=', counterKey, '→', next);
   return `OFF${String(next).padStart(5, '0')}`;
 };
 
@@ -5691,6 +5711,31 @@ export const fetchTaxesOdoo = async () => {
 
 // Fetch all sale.order records from Odoo
 export const fetchSaleOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+  // Offline short-circuit — return cached rows (including any pending
+  // offline_ placeholders) without trying the network. Without this, a
+  // half-failing online attempt could swallow the cache and hide rows the
+  // user just created via Place Order while offline.
+  try {
+    const online = await isOnline();
+    if (!online) {
+      const cached = await AsyncStorage.getItem('@cache:saleOrders');
+      if (cached) {
+        let list = JSON.parse(cached) || [];
+        if (searchText && searchText.trim()) {
+          const term = searchText.trim().toLowerCase();
+          list = list.filter((o) => {
+            const name = (o?.name || '').toLowerCase();
+            const partner = Array.isArray(o?.partner_id) ? (o.partner_id[1] || '').toLowerCase() : '';
+            return name.includes(term) || partner.includes(term);
+          });
+        }
+        console.log('[SaleOrders] OFFLINE → returning', list.length, 'cached rows');
+        return list;
+      }
+      return [];
+    }
+  } catch (_) { /* fall through to online path */ }
+
   try {
     const { headers, baseUrl } = await authenticateOdoo();
     const domain = searchText
@@ -5728,141 +5773,42 @@ export const fetchSaleOrdersOdoo = async ({ offset = 0, limit = 50, searchText =
     );
     if (response.data.error) {
       console.error('[SaleOrders] list error:', response.data.error?.data?.message || response.data.error);
-      return [];
+      // Don't return empty — fall through to the offline-merge step so
+      // pending offline_ placeholders still appear on the list.
     }
-    let records = response.data.result || [];
-    console.log('[SaleOrders] Fetched', records.length, 'records');
-
-    // Re-shape Odoo's response so the user-facing `name` always shows the
-    // app-local A-number; Odoo's real sequence name goes into `ref`.
-    //
-    // Single shared per-DB counter (`@a_counter:<db>`) — used by BOTH
-    // offline-create and fetch-time auto-assign. All A-labels stay in
-    // the small `A0000N` 5-digit format. Once a record has an aMap
-    // entry, the label NEVER changes (offline-printed invoices stay
-    // valid forever). New Odoo-fetched records claim the next free
-    // counter slot, walking past any value that's already taken.
-    try {
-      const dbName = await _currentDbName();
-      const aMapK = _aMapKey(dbName);
-      const aCntK = _aCounterKey(dbName);
-      const aMapRaw = await AsyncStorage.getItem(aMapK);
-      let aMap = aMapRaw ? JSON.parse(aMapRaw) : {};
-      const counterRaw = await AsyncStorage.getItem(aCntK);
-      let counter = counterRaw ? parseInt(counterRaw, 10) : 0;
-      if (!Number.isFinite(counter)) counter = 0;
-
-      // Normalisation: drop any aMap entry whose label is NOT in the
-      // small "A0000N" range (n < 50000). Older builds wrote labels
-      // like A50001, A100028, A1000050 — those will be reassigned a
-      // fresh small-range A-number on the next pass below. The counter
-      // is also aligned to the highest small-range value so the next
-      // assignment continues from the right place.
-      const _smallNumOrNull = (label) => {
-        const m = String(label || '').match(/^A(\d+)$/);
-        if (!m) return null;
-        const n = parseInt(m[1], 10);
-        return Number.isFinite(n) && n < 50000 ? n : null;
-      };
-      const cleaned = {};
-      let maxKept = 0;
-      let normaliseDirty = false;
-      for (const [idKey, label] of Object.entries(aMap || {})) {
-        const n = _smallNumOrNull(label);
-        if (n !== null) {
-          cleaned[idKey] = label;
-          if (n > maxKept) maxKept = n;
-        } else {
-          normaliseDirty = true; // dropping a non-small label
-        }
-      }
-      aMap = cleaned;
-      if (counter < maxKept) counter = maxKept;
-
-      // Repair pass: if aMap has any orphaned `offline_X` entries that
-      // already mapped to a real Odoo id (via @offline_id_map), transfer
-      // the offline label to the real id. Drops any auto-assigned label
-      // that may have raced ahead and claimed the real id during sync.
-      // This restores user-printed offline A-numbers on the synced row.
-      try {
-        const offRaw = await AsyncStorage.getItem('@offline_id_map');
-        const offMap = offRaw ? JSON.parse(offRaw) : {};
-        for (const [offlineKey, label] of Object.entries(aMap)) {
-          if (!String(offlineKey).startsWith('offline_')) continue;
-          const realId = offMap[offlineKey];
-          if (realId == null) continue;
-          // Drop any auto-assigned duplicate of the same label elsewhere.
-          for (const [k, v] of Object.entries(aMap)) {
-            if (k !== offlineKey && k !== String(realId) && v === label) {
-              delete aMap[k];
-              normaliseDirty = true;
-            }
-          }
-          aMap[String(realId)] = label;
-          delete aMap[offlineKey];
-          normaliseDirty = true;
-          console.log('[SaleOrders] repaired aMap: offline', offlineKey, '→ real', realId, '=', label);
-        }
-      } catch (_) {}
-
-      // Step 1: lock in immutable labels for records that already have
-      // a (small-range) aMap entry. These are app-assigned and never change.
-      const labelById = {};
-      const used = new Set();
-      for (const r of records) {
-        const idKey = String(r.id);
-        if (aMap[idKey]) {
-          labelById[idKey] = aMap[idKey];
-          used.add(aMap[idKey]);
-        }
-      }
-
-      // Step 2: assign the next free A-number from the shared counter
-      // for any record without a mapping. Walk ascending Odoo-id order
-      // so older orders take earlier numbers when possible. Counter
-      // and aMap are persisted so a fresh boot continues from here.
-      let mapDirty = normaliseDirty;
-      const ascRecords = [...records].sort((a, b) => (a.id || 0) - (b.id || 0));
-      for (const r of ascRecords) {
-        const idKey = String(r.id);
-        if (labelById[idKey]) continue;
-        let aName;
-        do {
-          counter += 1;
-          aName = `A${String(counter).padStart(5, '0')}`;
-        } while (used.has(aName));
-        used.add(aName);
-        aMap[idKey] = aName;
-        labelById[idKey] = aName;
-        mapDirty = true;
-      }
-      if (mapDirty) {
-        await AsyncStorage.setItem(aMapK, JSON.stringify(aMap));
-        await AsyncStorage.setItem(aCntK, String(counter));
-      }
-      records = records.map((r) => ({
-        ...r,
-        ref: r.name || '',
-        name: labelById[String(r.id)] || `A${String(r.id).padStart(5, '0')}`,
-      }));
-    } catch (_) {}
+    let records = response.data.error ? [] : (response.data.result || []);
+    console.log('[SaleOrders] Fetched', records.length, 'records from Odoo');
 
     // Merge offline-created placeholders still in cache (not synced yet) on
-    // top of the fresh list so they don't disappear when the user comes back
-    // online before the queue has flushed.
+    // top of the fresh list. Also transfer the persisted `offline_label`
+    // (the OFF) from previously-synced cache rows onto the fresh Odoo
+    // record so the Ref sub-line keeps showing across refetches. Same
+    // pattern as Easy Sales / Easy Purchase / Register Payment.
     if (!searchText && offset === 0) {
       try {
         const oldRaw = await AsyncStorage.getItem('@cache:saleOrders');
         if (oldRaw) {
           const oldList = JSON.parse(oldRaw);
+          const labelByRealId = {};
+          for (const o of oldList) {
+            if (o?.id != null && o.offline_label && !String(o.id).startsWith('offline_')) {
+              labelByRealId[String(o.id)] = o.offline_label;
+            }
+          }
+          records = records.map((r) => {
+            const lab = labelByRealId[String(r.id)];
+            return lab ? { ...r, offline_label: lab } : r;
+          });
           const pendingOffline = oldList.filter((o) => String(o?.id || '').startsWith('offline_'));
           if (pendingOffline.length > 0) {
             records = [...pendingOffline, ...records];
+            console.log('[SaleOrders] merged', pendingOffline.length, 'pending offline_ rows on top');
           }
         }
       } catch (_) {}
       try { await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(records)); } catch (_) {}
     }
+    console.log('[SaleOrders] returning', records.length, 'rows');
     return records;
   } catch (error) {
     console.error('[SaleOrders] fetchSaleOrders error:', error?.message || error);
@@ -5871,22 +5817,6 @@ export const fetchSaleOrdersOdoo = async ({ offset = 0, limit = 50, searchText =
       const cached = await AsyncStorage.getItem('@cache:saleOrders');
       if (cached) {
         let list = JSON.parse(cached);
-        // Re-shape any rows that still carry an Odoo "S…/SO…" sequence as
-        // their `name` (legacy cache from before the A-numbering switch).
-        // The offline fallback runs without a network round trip, so this
-        // is the last chance to enforce the A-format.
-        try {
-          const dbName = await _currentDbName();
-          const aMapRaw = await AsyncStorage.getItem(_aMapKey(dbName));
-          const aMap = aMapRaw ? JSON.parse(aMapRaw) : {};
-          list = list.map((o) => {
-            const aName = aMap[String(o.id)];
-            if (!aName) return o;
-            const looksLikeOdooName = /^S\d/i.test(o.name || '') || /^SO/i.test(o.name || '');
-            if (o.name === aName) return o;
-            return { ...o, ref: o.ref || (looksLikeOdooName ? o.name : ''), name: aName };
-          });
-        } catch (_) {}
         if (searchText && searchText.trim() !== '') {
           const term = searchText.trim().toLowerCase();
           list = list.filter((o) => {
@@ -6323,6 +6253,7 @@ export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }
   // appears in All Orders / list immediately.
   try {
     const online = await isOnline();
+    console.log('[createSaleOrderOdoo] entered, isOnline =', online, 'partnerId=', partnerId, 'lines=', (orderLines || []).length);
     if (!online) {
       const lines = (orderLines || []).map(line => [0, 0, {
         product_id: line.product_id || line.id,
@@ -6358,14 +6289,18 @@ export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }
       });
 
       const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
-      // Assign a polished A00001-style display name so the user-facing label
-      // (list, invoice, receipt) doesn't read "NEW (offline)". The Odoo ref
-      // is filled in later by the sync handler.
-      const aName = await _nextSaleOrderANumber();
-      await _saveSaleOrderAName(`offline_${localId}`, aName);
+      // Assign a persistent OFF00001-style label, same flow as Easy Sales /
+      // Easy Purchase / Register Payment. Bold while offline; after sync,
+      // bold flips to Odoo's name and OFF moves to a Ref sub-line.
+      const dbForCounterSO = (await AsyncStorage.getItem('odoo_db')) || '';
+      const offLabelSO = await _nextOffLabel({
+        counterKey: `@off_counter:saleOrders:${dbForCounterSO}`,
+        cacheKey: '@cache:saleOrders',
+      });
       const placeholder = {
         id: `offline_${localId}`,
-        name: aName,
+        name: offLabelSO,
+        offline_label: offLabelSO,
         partner_id: partnerId ? [partnerId, partnerName] : false,
         state: 'draft',
         amount_total: amountUntaxed,
@@ -6376,7 +6311,6 @@ export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }
         invoice_ids: [],
         company_id: false,
         offline: true,
-        ref: '',
       };
 
       // Append to the cached sale-order list.
@@ -6385,7 +6319,8 @@ export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }
         const list = rawList ? JSON.parse(rawList) : [];
         list.unshift(placeholder);
         await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list));
-      } catch (_) {}
+        console.log('[createSaleOrderOdoo] OFFLINE placeholder pushed:', placeholder.name, 'cache size now:', list.length);
+      } catch (e) { console.warn('[createSaleOrderOdoo] cache write failed:', e?.message); }
 
       // Build a detail-cache entry so tapping into it works offline.
       let allCompanyIds = [];
@@ -6471,22 +6406,21 @@ export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }
 
     const newOrderId = response.data.result;
     console.log('[createSaleOrderOdoo] Created sale order ID:', newOrderId);
-    // Assign A-number for the freshly-created online order so the list /
-    // receipt show the same friendly label as offline-created ones.
-    try {
-      const aName = await _nextSaleOrderANumber();
-      await _saveSaleOrderAName(newOrderId, aName);
-    } catch (_) {}
+    // Online creates do NOT consume the OFF counter — only offline-created
+    // orders carry an OFF label. Online orders show their Odoo name as bold
+    // with no Ref sub-line.
     return newOrderId;
   } catch (error) {
     console.error('[createSaleOrderOdoo] Online path failed:', error?.message || error);
-    // If network/timeout error (not Odoo business error), fall back to offline queue
-    const isNetworkError = !error?.message?.includes('Failed to create') && (
-      error?.message?.includes('Network') || error?.message?.includes('timeout') ||
-      error?.message?.includes('ECONNREFUSED') || error?.code === 'ERR_NETWORK'
-    );
-    if (isNetworkError) {
-      console.log('[createSaleOrderOdoo] Network error detected — falling back to offline queue');
+    // Fall back to offline queue for ANY non-business error so the user's
+    // order is never lost. Only an explicit Odoo validation rejection
+    // ("Failed to create sale order: ...") is allowed to propagate.
+    const msg = String(error?.message || '');
+    const isOdooBusinessError = msg.includes('Failed to create sale order')
+      || msg.includes('does not exist or has been deleted')
+      || (error?.response && error?.response?.data?.error);
+    if (!isOdooBusinessError) {
+      console.log('[createSaleOrderOdoo] Connectivity error detected — falling back to offline queue');
       const localId = await offlineQueue.enqueue({
         model: 'sale.order', operation: 'create', values: vals,
       });
@@ -6495,9 +6429,12 @@ export const createSaleOrderOdoo = async ({ partnerId, orderLines, warehouseId }
       let amountUntaxed = 0;
       (orderLines || []).forEach((l) => { const qty = l.qty || l.quantity || l.product_uom_qty || 1; const price = l.price_unit || l.price || l.unit_price || 0; amountUntaxed += qty * price; });
       const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
-      const aNameNetFb = await _nextSaleOrderANumber();
-      await _saveSaleOrderAName(`offline_${localId}`, aNameNetFb);
-      const placeholder = { id: `offline_${localId}`, name: aNameNetFb, partner_id: partnerId ? [partnerId, partnerName] : false, state: 'draft', amount_total: amountUntaxed, amount_untaxed: amountUntaxed, amount_tax: 0, date_order: nowIso, invoice_status: 'no', invoice_ids: [], offline: true, ref: '' };
+      const dbForCounterSOFb = (await AsyncStorage.getItem('odoo_db')) || '';
+      const offLabelSOFb = await _nextOffLabel({
+        counterKey: `@off_counter:saleOrders:${dbForCounterSOFb}`,
+        cacheKey: '@cache:saleOrders',
+      });
+      const placeholder = { id: `offline_${localId}`, name: offLabelSOFb, offline_label: offLabelSOFb, partner_id: partnerId ? [partnerId, partnerName] : false, state: 'draft', amount_total: amountUntaxed, amount_untaxed: amountUntaxed, amount_tax: 0, date_order: nowIso, invoice_status: 'no', invoice_ids: [], offline: true };
       try { const rawList = await AsyncStorage.getItem('@cache:saleOrders'); const list = rawList ? JSON.parse(rawList) : []; list.unshift(placeholder); await AsyncStorage.setItem('@cache:saleOrders', JSON.stringify(list)); } catch (_) {}
       console.log('[createSaleOrderOdoo] Queued offline (network fallback), localId:', localId);
       return { offline: true, localId, id: `offline_${localId}` };

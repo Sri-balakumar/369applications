@@ -19,25 +19,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import OfflineBanner from '@components/common/OfflineBanner';
 
 // A-numbers ("A00001", "A00002", …) are the user-facing display names for
-// sale orders, kept in app-local storage per Odoo DB and assigned in
-// createSaleOrderOdoo. We READ the persisted map here so the list can
-// resolve any rows that don't carry the A-name on `item.name` directly.
-// Strict A-only filter — any leftover S-prefixed entry is ignored so the
-// head text never falls back to Odoo's "S/SO" sequence.
-const _readAMap = async () => {
-  try {
-    const db = (await AsyncStorage.getItem('odoo_db')) || '';
-    const key = db ? `a_map:${db}` : 'a_map';
-    const raw = await AsyncStorage.getItem(key);
-    const map = raw ? JSON.parse(raw) : {};
-    const out = {};
-    for (const [id, label] of Object.entries(map || {})) {
-      if (typeof label === 'string' && label.startsWith('A')) out[id] = label;
-    }
-    return out;
-  } catch (_) { return {}; }
-};
-
 const STATE_LABELS = {
   draft: 'QUOTATION',
   sent: 'SENT',
@@ -80,21 +61,14 @@ const FILTERS = [
   { key: 'cancel', label: 'Cancelled' },
 ];
 
-const SORT_MODES = [
-  { key: 'a_desc', label: 'A↓' },
-  { key: 'ref_desc', label: 'Ref↓' },
-];
-
 const SaleOrderListScreen = ({ navigation }) => {
   const currencySymbol = useCurrencyStore((state) => state.currency) || 'OMR';
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState('all');
-  const [invMap, setInvMap] = useState({});
   const [generatingInvoices, setGeneratingInvoices] = useState(false);
   const [isDeviceOnline, setIsDeviceOnline] = useState(false);
   const [refreshingManually, setRefreshingManually] = useState(false);
-  const [sortMode, setSortMode] = useState('a_desc');
 
   // Check online status on focus + subscribe to changes
   useFocusEffect(useCallback(() => {
@@ -153,9 +127,6 @@ const SaleOrderListScreen = ({ navigation }) => {
         }
       }));
       setData(records || []);
-      // Load the persisted A-name map so list rows that don't carry the
-      // A-name on item.name (legacy synced rows) can still resolve.
-      try { setInvMap(await _readAMap()); } catch (_) {}
       // Fire-and-forget auto-invoice on every fetch — covers focus refetch,
       // header refresh, and any other path that reaches fetchData. Internal
       // 30s debounce + isOnline guard handle the no-op cases.
@@ -223,29 +194,22 @@ const SaleOrderListScreen = ({ navigation }) => {
   // is the default and matches the Odoo "newest-first" feel. A↑ flips
   // it; Date↓ falls back to the actual `date_order` field for cases
   // where A-numbers don't match chronology.
-  const _aNumOf = (item) => {
-    const m = String(item?.name || '').match(/^A(\d+)$/);
-    return m ? parseInt(m[1], 10) : -1;
-  };
   const filteredData = [...data].filter(filterPredicate(activeFilter));
+  // Offline rows (still pending sync) always float to the top — newest user
+  // activity first. Within each group (offline / synced) we sort by `name`
+  // descending. Without this hoist, `OFF00007` would sit BELOW every `S00…`
+  // row because "O" < "S" lexically, and the user wouldn't see it.
   const sortedData = [...filteredData].sort((a, b) => {
-    if (sortMode === 'ref_desc') {
-      // Sort by Odoo's `ref` (e.g. SO0061) descending. Treat empty / '/'
-      // (Odoo's placeholder for unsequenced draft orders) as missing —
-      // those rows fall back to Odoo id descending so Ref↓ always
-      // produces a visibly different ordering even when most rows are
-      // still in draft state.
-      const aRef = String(a?.ref || '');
-      const bRef = String(b?.ref || '');
-      const aValid = aRef && aRef !== '/';
-      const bValid = bRef && bRef !== '/';
-      if (aValid && bValid) return bRef.localeCompare(aRef);
-      if (aValid) return -1;
-      if (bValid) return 1;
-      return (b.id || 0) - (a.id || 0);
-    }
-    // a_desc (default)
-    return _aNumOf(b) - _aNumOf(a);
+    const aOffline = String(a?.id || '').startsWith('offline_');
+    const bOffline = String(b?.id || '').startsWith('offline_');
+    if (aOffline && !bOffline) return -1;
+    if (!aOffline && bOffline) return 1;
+    const an = String(a?.name || '');
+    const bn = String(b?.name || '');
+    if (an && bn) return bn.localeCompare(an);
+    if (an) return -1;
+    if (bn) return 1;
+    return (b.id || 0) - (a.id || 0);
   });
 
   // Counts recompute only when the underlying data changes. Each filter
@@ -355,25 +319,19 @@ const SaleOrderListScreen = ({ navigation }) => {
         onPress={() => navigation.navigate('SaleOrderDetailScreen', { orderId: item.id })}
       >
         <View style={styles.row}>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, marginRight: 8 }}>
+            {/* Bold = Odoo's name (e.g. S00028) once synced; while still
+                offline it's the OFF label. After sync, OFF moves to the
+                Ref sub-line below. Same flow as Easy Sales / Easy Purchase
+                / Register Payment. */}
             <Text style={styles.head} numberOfLines={1}>
-              {/* Always render an A-prefixed label. Priority: persisted A-map
-                  (true sequence) > item.name if it already starts with A >
-                  synthesised A from id padding. The Odoo "S/SO" name never
-                  reaches the head text. */}
-              {(typeof invMap[item.id] === 'string' && invMap[item.id].startsWith('A') ? invMap[item.id] : '')
-                || (String(item.name || '').startsWith('A') ? item.name : '')
-                || (String(item.id || '').startsWith('offline_')
-                    ? 'A?????'
-                    : `A${String(item.id).padStart(5, '0')}`)}
+              {item.name || `SO-${item.id}`}
             </Text>
-            <Text style={{ fontSize: 11, color: '#999', fontFamily: FONT_FAMILY.urbanistMedium }}>
-              {item.ref
-                ? `Ref: ${item.ref}`
-                : (String(item.id || '').startsWith('offline_')
-                    ? 'Ref: -'
-                    : (String(item.name || '').startsWith('A') ? 'Ref: -' : `Ref: ${item.name || '-'}`))}
-            </Text>
+            {item.offline_label && item.offline_label !== item.name ? (
+              <Text style={{ fontSize: 11, color: '#999', fontFamily: FONT_FAMILY.urbanistMedium }}>
+                Ref: {item.offline_label}
+              </Text>
+            ) : null}
           </View>
           <View style={{ flexDirection: 'row', gap: 6, alignSelf: 'flex-start' }}>
             {!hasInvoice && invoiceStatus === 'to_invoice' && (
@@ -459,32 +417,6 @@ const SaleOrderListScreen = ({ navigation }) => {
         )}
       </View>
       {/* Sort row — controls how the rows are ordered. A↓ default. */}
-      <View style={styles.sortRow}>
-        {SORT_MODES.map((s) => {
-          const isActive = sortMode === s.key;
-          return (
-            <TouchableOpacity
-              key={s.key}
-              style={[styles.sortChip, isActive && styles.sortChipActive]}
-              onPress={() => {
-                setSortMode(s.key);
-                // Diagnostic — when user taps a chip, log the first 3 visible
-                // rows' name + ref so we can confirm the sort is firing and
-                // see whether refs are populated or just '/'.
-                try {
-                  const sample = filteredData.slice(0, 3).map((o) => ({
-                    name: o?.name, ref: o?.ref, id: o?.id,
-                  }));
-                  console.log('[SaleOrderList] Sort →', s.key, 'sample:', JSON.stringify(sample));
-                } catch (_) {}
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.sortChipText, isActive && styles.sortChipTextActive]}>{s.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
       <RoundedContainer>
         {sortedData.length === 0 && !loading ? (
           <EmptyState

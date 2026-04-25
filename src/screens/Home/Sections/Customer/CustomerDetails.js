@@ -200,6 +200,7 @@ const CustomerDetails = ({ navigation, route }) => {
       }));
       let warehouseId = currentUser?.warehouse?.warehouse_id || currentUser?.warehouse?.id || null;
       const createResult = await createSaleOrderOdoo({ partnerId: customerId, orderLines: orderItems, warehouseId: warehouseId || undefined });
+      console.log('[PlaceOrder] createSaleOrderOdoo returned:', JSON.stringify(createResult));
       if (!createResult) {
         Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to create sale order in Odoo', position: 'bottom' });
         return;
@@ -207,6 +208,7 @@ const CustomerDetails = ({ navigation, route }) => {
       // Unwrap offline result vs. plain online id
       const isOfflineResult = typeof createResult === 'object' && createResult?.offline;
       const odooOrderId = isOfflineResult ? createResult.id : createResult;
+      console.log('[PlaceOrder] isOfflineResult=', isOfflineResult, 'odooOrderId=', odooOrderId);
       // Log below-cost approval to Odoo if this was an approved below-cost sale (skip when offline)
       if (approvalInfo && !isOfflineResult) {
         try {

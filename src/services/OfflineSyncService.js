@@ -802,8 +802,9 @@ const syncItemDirectly = async (item) => {
         } catch (_) {}
 
         // Swap offline placeholder in cached list/detail with the real Odoo
-        // id, populating `ref` with Odoo's name. `name` stays as the A label
-        // we assigned at create time.
+        // id. `name` flips from the OFF placeholder to Odoo's real sequence
+        // name; `offline_label` (the OFF) is preserved via spread so the
+        // list renderer can show it as a Ref sub-line under the bold name.
         try {
             const raw = await AsyncStorage.getItem('@cache:saleOrders');
             if (raw) {
@@ -812,7 +813,7 @@ const syncItemDirectly = async (item) => {
                 const next = list.map((o) => {
                     if (String(o.id) === offlineId) {
                         changed = true;
-                        return { ...o, id: recordId, ref: realName || o.ref || '', offline: false };
+                        return { ...o, id: recordId, name: realName || o.name, offline: false };
                     }
                     return o;
                 });
@@ -823,7 +824,7 @@ const syncItemDirectly = async (item) => {
             const rawD = await AsyncStorage.getItem(`@cache:saleOrderDetail:${offlineId}`);
             if (rawD) {
                 const prev = JSON.parse(rawD);
-                await AsyncStorage.setItem(`@cache:saleOrderDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, ref: realName || prev.ref || '', offline: false }));
+                await AsyncStorage.setItem(`@cache:saleOrderDetail:${recordId}`, JSON.stringify({ ...prev, id: recordId, name: realName || prev.name, offline: false }));
                 await AsyncStorage.removeItem(`@cache:saleOrderDetail:${offlineId}`);
             }
         } catch (_) {}
