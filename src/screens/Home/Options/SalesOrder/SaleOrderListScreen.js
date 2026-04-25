@@ -80,6 +80,11 @@ const FILTERS = [
   { key: 'cancel', label: 'Cancelled' },
 ];
 
+const SORT_MODES = [
+  { key: 'a_desc', label: 'A↓' },
+  { key: 'ref_desc', label: 'Ref↓' },
+];
+
 const SaleOrderListScreen = ({ navigation }) => {
   const currencySymbol = useCurrencyStore((state) => state.currency) || 'OMR';
   const [data, setData] = useState([]);
@@ -89,6 +94,7 @@ const SaleOrderListScreen = ({ navigation }) => {
   const [generatingInvoices, setGeneratingInvoices] = useState(false);
   const [isDeviceOnline, setIsDeviceOnline] = useState(false);
   const [refreshingManually, setRefreshingManually] = useState(false);
+  const [sortMode, setSortMode] = useState('a_desc');
 
   // Check online status on focus + subscribe to changes
   useFocusEffect(useCallback(() => {
@@ -213,7 +219,34 @@ const SaleOrderListScreen = ({ navigation }) => {
     return s === filter; // 'cancel' etc. — match state directly
   };
 
-  const filteredData = data.filter(filterPredicate(activeFilter));
+  // Display sort — driven by the chip row below the state filters. A↓
+  // is the default and matches the Odoo "newest-first" feel. A↑ flips
+  // it; Date↓ falls back to the actual `date_order` field for cases
+  // where A-numbers don't match chronology.
+  const _aNumOf = (item) => {
+    const m = String(item?.name || '').match(/^A(\d+)$/);
+    return m ? parseInt(m[1], 10) : -1;
+  };
+  const filteredData = [...data].filter(filterPredicate(activeFilter));
+  const sortedData = [...filteredData].sort((a, b) => {
+    if (sortMode === 'ref_desc') {
+      // Sort by Odoo's `ref` (e.g. SO0061) descending. Treat empty / '/'
+      // (Odoo's placeholder for unsequenced draft orders) as missing —
+      // those rows fall back to Odoo id descending so Ref↓ always
+      // produces a visibly different ordering even when most rows are
+      // still in draft state.
+      const aRef = String(a?.ref || '');
+      const bRef = String(b?.ref || '');
+      const aValid = aRef && aRef !== '/';
+      const bValid = bRef && bRef !== '/';
+      if (aValid && bValid) return bRef.localeCompare(aRef);
+      if (aValid) return -1;
+      if (bValid) return 1;
+      return (b.id || 0) - (a.id || 0);
+    }
+    // a_desc (default)
+    return _aNumOf(b) - _aNumOf(a);
+  });
 
   // Counts recompute only when the underlying data changes. Each filter
   // tab's label shows its count — e.g. `All (20)`, `Invoiced (2)`.
@@ -425,15 +458,42 @@ const SaleOrderListScreen = ({ navigation }) => {
           </TouchableOpacity>
         )}
       </View>
+      {/* Sort row — controls how the rows are ordered. A↓ default. */}
+      <View style={styles.sortRow}>
+        {SORT_MODES.map((s) => {
+          const isActive = sortMode === s.key;
+          return (
+            <TouchableOpacity
+              key={s.key}
+              style={[styles.sortChip, isActive && styles.sortChipActive]}
+              onPress={() => {
+                setSortMode(s.key);
+                // Diagnostic — when user taps a chip, log the first 3 visible
+                // rows' name + ref so we can confirm the sort is firing and
+                // see whether refs are populated or just '/'.
+                try {
+                  const sample = filteredData.slice(0, 3).map((o) => ({
+                    name: o?.name, ref: o?.ref, id: o?.id,
+                  }));
+                  console.log('[SaleOrderList] Sort →', s.key, 'sample:', JSON.stringify(sample));
+                } catch (_) {}
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.sortChipText, isActive && styles.sortChipTextActive]}>{s.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
       <RoundedContainer>
-        {filteredData.length === 0 && !loading ? (
+        {sortedData.length === 0 && !loading ? (
           <EmptyState
             imageSource={require('@assets/images/EmptyData/empty.png')}
             message="No Sales Orders Found"
           />
         ) : (
           <FlashList
-            data={formatData(filteredData, 1)}
+            data={formatData(sortedData, 1)}
             numColumns={1}
             renderItem={renderItem}
             keyExtractor={(item, index) => item.id?.toString() || index.toString()}
@@ -454,6 +514,36 @@ const SaleOrderListScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   filterRow: { backgroundColor: '#fff', maxHeight: 48, borderBottomWidth: 1, borderBottomColor: '#eee' },
   filterRowContent: { paddingHorizontal: 12, alignItems: 'center' },
+  sortRow: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    gap: 6,
+  },
+  sortChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fafafa',
+  },
+  sortChipActive: {
+    backgroundColor: COLORS.primaryThemeColor,
+    borderColor: COLORS.primaryThemeColor,
+  },
+  sortChipText: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    color: '#555',
+  },
+  sortChipTextActive: {
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
   bulkInvoiceBtn: {
     flexDirection: 'row',
     alignItems: 'center',
