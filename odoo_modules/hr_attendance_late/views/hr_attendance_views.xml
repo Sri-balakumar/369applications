@@ -28,6 +28,16 @@
         <field name="model">hr.attendance</field>
         <field name="inherit_id" ref="hr_attendance.hr_attendance_view_form"/>
         <field name="arch" type="xml">
+            <xpath expr="//sheet" position="before">
+                <header>
+                    <button name="action_open_checkout_confirm_wizard"
+                            type="object"
+                            string="Check Out Now"
+                            class="btn-warning"
+                            icon="fa-sign-out"
+                            invisible="not id or not check_in or check_out"/>
+                </header>
+            </xpath>
             <xpath expr="//sheet" position="inside">
                 <group string="Late Tracking">
                     <group>

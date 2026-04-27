@@ -1,4 +1,5 @@
-from odoo import models, fields, api
+from odoo import models, fields, api, _
+from odoo.exceptions import UserError
 import math
 
 
@@ -60,8 +61,11 @@ class AttendanceLateConfig(models.Model):
     grace_late_times = fields.Integer(
         string='Grace Late Times Per Month',
         default=5,
-        help='Number of late TIMES per month allowed before deductions apply. '
-             'Each late check-in counts as 1 time (split shift can have 2 per day).',
+        help='Number of late TIMES per month, PER SESSION, before deductions apply. '
+             'Session 1 and Session 2 each maintain their own independent grace counter — '
+             'e.g. with grace=1, the first Session 1 late AND the first Session 2 late '
+             'of the month are both free; deductions kick in from the 2nd occurrence '
+             'in either session.',
     )
 
     # --- Deduction Mode ---
@@ -404,7 +408,21 @@ class AttendanceLateConfig(models.Model):
     def action_recompute_deductions(self):
         """User-triggered recompute. Bound to a button on the config form so
         HR can refresh stored deduction values without changing any setting
-        (useful after updating an employee's wage)."""
+        (useful after updating an employee's wage).
+
+        Refuses to run on a draft/unsaved configuration — the recompute reads
+        config values from the database, so unsaved edits would silently use
+        stale values and confuse the user.
+        """
+        for cfg in self:
+            if not cfg.id or isinstance(cfg.id, models.NewId):
+                raise UserError(_(
+                    "Please save the configuration before clicking "
+                    "'Recompute Late Records'.\n\n"
+                    "The recompute reads the saved settings from the "
+                    "database, so any unsaved edits won't be reflected "
+                    "until you click Save first."
+                ))
         self._recompute_affected_attendances()
         return {
             'type': 'ir.actions.client',

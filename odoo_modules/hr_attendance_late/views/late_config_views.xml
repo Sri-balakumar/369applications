@@ -110,9 +110,11 @@
                         <ul>
                             <li><b>Single Shift:</b> One work period per day. Late is checked on first check-in.</li>
                             <li><b>Split Shift:</b> Two work periods (e.g., 8AM-12PM + 2PM-6PM).
-                            Late is checked on first check-in of EACH session. Each late counts as 1 time.</li>
-                            <li><b>Grace Times:</b> Number of late times per month before deductions apply.
-                            With split shift, being late twice in one day = 2 times used.</li>
+                            Late is checked on first check-in of EACH session.</li>
+                            <li><b>Grace Times:</b> Number of late times per month <b>per session</b> before deductions apply.
+                            With split shift, Session 1 and Session 2 each have their <b>OWN</b> grace count —
+                            e.g. Grace = 1 means the first Session 1 late <i>and</i> the first Session 2 late of the month
+                            are free; from the 2nd occurrence in <b>EITHER</b> session, deductions apply.</li>
                             <li><b>Fixed Deduction:</b> Uses the Deduction Slabs amounts.</li>
                             <li><b>Hourly Deduction:</b> Auto-calculates from employee wage.
                             Formula: hourly_rate = wage / working_days_in_month / daily_hours.

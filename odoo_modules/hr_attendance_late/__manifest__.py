@@ -24,6 +24,7 @@
         'security/ir.model.access.csv',
         'data/late_config_data.xml',
         'wizard/late_reason_wizard_views.xml',
+        'wizard/checkout_confirm_wizard_views.xml',
         'views/late_deduction_slab_views.xml',
         'views/hr_attendance_views.xml',
         'views/late_config_views.xml',

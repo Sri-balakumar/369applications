@@ -425,7 +425,87 @@ class HrAttendance(models.Model):
                     '2' if rec.checkin_session == '2' else '1',
                 ))
 
+    # --- Single-session-per-day enforcement ---
+
+    @api.constrains('check_in', 'employee_id', 'checkin_session')
+    def _check_no_reentry_same_session(self):
+        """Block creating/editing a new check-in if the employee has already
+        checked OUT of the same session on the same day. Once a session is
+        closed for the day, it stays closed.
+
+        Catches all entry points: backend manual create, Kiosk Mode, mobile
+        app RPC, imports — anything that goes through the ORM.
+        """
+        for rec in self:
+            if not rec.check_in or not rec.employee_id or not rec.checkin_session:
+                continue
+
+            tz = pytz.timezone(rec.employee_id.tz or 'UTC')
+            local_dt = pytz.utc.localize(rec.check_in).astimezone(tz)
+            day_start = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            utc_start = day_start.astimezone(pytz.utc).replace(tzinfo=None)
+            utc_end = day_end.astimezone(pytz.utc).replace(tzinfo=None)
+
+            existing_closed = self.search([
+                ('employee_id', '=', rec.employee_id.id),
+                ('check_in', '>=', utc_start),
+                ('check_in', '<', utc_end),
+                ('checkin_session', '=', rec.checkin_session),
+                ('check_out', '!=', False),
+                ('id', '!=', rec.id),
+            ], limit=1)
+
+            if existing_closed:
+                raise ValidationError(_(
+                    "You have already checked out of Session %s today.\n\n"
+                    "Once you check out of a session, you cannot check in "
+                    "again to the same session on the same day. You can "
+                    "still check in to the other session, or wait until "
+                    "tomorrow."
+                ) % rec.checkin_session)
+
+    @api.onchange('check_out')
+    def _onchange_check_out_warn(self):
+        """Show a warning popup the moment the user fills `check_out` on
+        the form, so they know this closes the session for the day.
+
+        This is a single-OK heads-up — the hard rule is enforced by the
+        `_check_no_reentry_same_session` constraint above, which fires on
+        any future re-check-in attempt regardless of UI surface.
+        """
+        if not self.check_out:
+            return
+        session_label = '2' if self.checkin_session == '2' else '1'
+        return {
+            'warning': {
+                'title': _('Confirm Check Out'),
+                'message': _(
+                    "You are about to check out of Session %s.\n\n"
+                    "Once checked out, you CANNOT check in again to "
+                    "Session %s today. To re-enter, you would need to "
+                    "wait until tomorrow."
+                ) % (session_label, session_label),
+            }
+        }
+
     # --- Wizard launchers ---
+
+    def action_open_checkout_confirm_wizard(self):
+        """Open the check-out confirmation wizard with Cancel + Sure-Check-Out
+        buttons. Provides the Cancel/Confirm UX that `@api.onchange` cannot
+        (onchange.warning is single-button only)."""
+        self.ensure_one()
+        return {
+            'name': _('Confirm Check Out'),
+            'type': 'ir.actions.act_window',
+            'res_model': 'hr.attendance.checkout.confirm.wizard',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {
+                'default_attendance_id': self.id,
+            },
+        }
 
     def action_open_late_reason_wizard(self):
         """Open the late-reason wizard popup pre-filled with this attendance.
