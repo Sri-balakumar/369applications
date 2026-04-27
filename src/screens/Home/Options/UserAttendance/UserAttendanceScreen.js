@@ -578,9 +578,9 @@ const UserAttendanceScreen = ({ navigation }) => {
     }
 
     showAlert({
-      message: `Are you sure you want to check out at ${formatTimeOnly(new Date())}?`,
-      confirmText: 'YES',
-      cancelText: 'NO',
+      message: `Are you sure you want to check out at ${formatTimeOnly(new Date())}?\n\nOnce checked out, you cannot check in again to this session today.`,
+      confirmText: 'YES, CHECK OUT',
+      cancelText: 'CANCEL',
       destructive: true,
       onConfirm: async () => {
         hideAlert();

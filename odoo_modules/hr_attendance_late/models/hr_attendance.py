@@ -406,24 +406,15 @@ class HrAttendance(models.Model):
 
     # --- Constraints ---
 
-    @api.constrains('is_late', 'late_reason', 'is_waived')
-    def _check_late_reason_required(self):
-        """Force the user to provide a late reason whenever the attendance is
-        flagged as late and has not been waived. The Odoo client renders the
-        ValidationError as a modal popup that blocks save until the field is
-        filled — this is the safety net for users that try to save without
-        clicking the 'Enter Late Reason' button.
-        """
-        for rec in self:
-            if rec.is_late and not rec.is_waived and not (rec.late_reason and rec.late_reason.strip()):
-                raise ValidationError(_(
-                    "You are %s late for Session %s.\n\n"
-                    "Please click the 'Enter Late Reason' button on the form to "
-                    "provide a reason before saving."
-                ) % (
-                    rec.late_minutes_display or ('%d minutes' % rec.late_minutes),
-                    '2' if rec.checkin_session == '2' else '1',
-                ))
+    # NOTE: The previous `_check_late_reason_required` ValidationError
+    # constraint was removed because it broke the mobile-app flow: the app
+    # saves the attendance first, then opens the "You're Late" popup for the
+    # user to type a reason, then writes the reason via `submitLateReason`.
+    # The constraint blocked step 1 — the create RPC failed because
+    # `late_reason` was empty, and the user only saw a generic OK-only error
+    # alert instead of the proper popup. The Odoo backend still has the
+    # yellow "Enter Late Reason" button on the attendance form for HR
+    # managers to fill reasons via the wizard; that UI is sufficient.
 
     # --- Single-session-per-day enforcement ---
 

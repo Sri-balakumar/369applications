@@ -849,6 +849,12 @@ export const checkInToOdoo = async (userId) => {
       console.log('[Attendance] Auto-closed previous attendance');
     }
 
+    // Include a placeholder `late_reason` in the initial create. Some Odoo
+    // deployments add a server-side ValidationError constraint that blocks
+    // creating a late attendance with an empty `late_reason`. Sending a
+    // single dot as a placeholder lets the create succeed; the real reason
+    // is overwritten via `submitLateReason` once the user fills the
+    // "You're Late" popup that fires right after this.
     const response = await axios.post(
       `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
@@ -860,6 +866,7 @@ export const checkInToOdoo = async (userId) => {
           args: [{
             employee_id: employee.id,
             check_in: checkInTime,
+            late_reason: '.',
           }],
           kwargs: {},
         },
@@ -1009,6 +1016,9 @@ export const checkInByEmployeeId = async (employeeId, employeeName) => {
     }
 
     // Now create the new check-in
+    // (placeholder `late_reason` to bypass any ValidationError constraint
+    // on the Odoo side; user types the real reason in the "You're Late"
+    // popup right after.)
     const response = await axios.post(
       `${ODOO_BASE_URL()}/web/dataset/call_kw`,
       {
@@ -1020,6 +1030,7 @@ export const checkInByEmployeeId = async (employeeId, employeeName) => {
           args: [{
             employee_id: employeeId,
             check_in: checkInTime,
+            late_reason: '.',
           }],
           kwargs: {},
         },

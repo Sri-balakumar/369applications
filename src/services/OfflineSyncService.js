@@ -277,7 +277,10 @@ const syncItemDirectly = async (item) => {
     const values = item.values || {};
 
     if (item.model === 'hr.attendance' && item.operation === 'create') {
-        // Standard attendance create with check_in (and optionally check_out)
+        // Standard attendance create with check_in (and optionally check_out).
+        // Placeholder `late_reason` ('.') so any server-side ValidationError
+        // requiring a non-empty reason on late records is satisfied at sync
+        // time — the user can still update it later from the app.
         const response = await axios.post(
             `${baseUrl}/web/dataset/call_kw`,
             {
@@ -289,6 +292,7 @@ const syncItemDirectly = async (item) => {
                     args: [{
                         employee_id: values.employee_id,
                         check_in: values.check_in,
+                        late_reason: '.',
                         ...(values.check_out ? { check_out: values.check_out } : {}),
                     }],
                     kwargs: {},

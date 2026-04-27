@@ -1,0 +1,61 @@
+      </Modal>
+
+      {/* Late Reason Modal */}
+      <Modal
+        visible={showLateReasonModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {}}
+      >
+        <View style={styles.lateModalOverlay}>
+          <View style={styles.lateModalContainer}>
+            <View style={styles.lateModalHeader}>
+              <MaterialIcons name="schedule" size={scale(28)} color="#E74C3C" />
+              <Text style={styles.lateModalTitle}>You're Late</Text>
+            </View>
+            <Text style={styles.lateModalSubtitle}>
+              You are {formatLateDuration(lateInfo?.lateMinutes, lateInfo?.lateMinutesDisplay)} late today
+              {lateInfo?.lateSequence ? ` (Late #${lateInfo.lateSequence} this month)` : ''}
+            </Text>
+            {lateInfo?.deductionAmount > 0 && (
+              <Text style={styles.lateDeductionText}>
+                Salary deduction: {lateInfo.deductionAmount}
+              </Text>
+            )}
+            <Text style={styles.lateReasonLabel}>Please provide a reason:</Text>
+            <TextInput
+              style={styles.lateReasonInput}
+              placeholder="Enter your reason for being late..."
+              placeholderTextColor="#999"
+              multiline
+              numberOfLines={3}
+              value={lateReasonText}
+              onChangeText={setLateReasonText}
+              textAlignVertical="top"
+            />
+            <TouchableOpacity
+              style={[styles.lateSubmitButton, !lateReasonText.trim() && styles.lateSubmitButtonDisabled]}
+              disabled={!lateReasonText.trim()}
+              onPress={async () => {
+                if (!lateReasonText.trim() || !pendingLateAttendanceId) return;
+                setLoading(true);
+                try {
+                  await submitLateReason(pendingLateAttendanceId, lateReasonText.trim());
+                  showToastMessage('Late reason submitted');
+                } catch (err) {
+                  console.log('[Attendance] Late reason submit error:', err?.message);
+                }
+                setShowLateReasonModal(false);
+                setLateReasonText('');
+                setPendingLateAttendanceId(null);
+                setLoading(false);
+              }}
+            >
+              <Text style={styles.lateSubmitButtonText}>Submit Reason</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Styled alert modal — matches the logout popup design */}
+      <StyledAlertModal
