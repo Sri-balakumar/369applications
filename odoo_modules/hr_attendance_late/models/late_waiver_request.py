@@ -106,28 +106,19 @@ class LateWaiverRequest(models.Model):
             date_str = str(rec.late_date) if rec.late_date else ''
             rec.display_name = f"Waiver - {emp_name} - {date_str}"
 
-    @api.depends('attendance_id', 'attendance_id.late_minutes', 'attendance_id.date')
+    @api.depends('attendance_id', 'attendance_id.deduction_amount')
     def _compute_original_deduction(self):
-        Config = self.env['hr.attendance.late.config']
-        Slab = self.env['hr.late.deduction.slab']
+        """Show the actual deduction currently applied to the attendance —
+        respects grace (late_sequence vs grace_late_times) and waiver state.
+        Previously this recomputed slab/hourly from late_minutes alone, which
+        showed a non-zero amount even for records inside the grace window
+        (where the real deduction is 0). Now it just mirrors
+        hr.attendance.deduction_amount, the single source of truth."""
         for rec in self:
-            rec.original_deduction = 0.0
-            if not rec.attendance_id or not rec.attendance_id.is_late:
-                continue
-            att = rec.attendance_id
-            emp = att.employee_id
-            config_data = Config.get_config_for_employee(emp.id)
-            config_rec = Config.get_config_record_for_employee(emp.id)
-            mode = config_data.get('deduction_mode', 'fixed')
-            if mode == 'hourly':
-                if config_rec:
-                    rec.original_deduction = config_rec.get_hourly_deduction(
-                        emp.id, att.late_minutes, late_date=att.date
-                    )
+            if rec.attendance_id and rec.attendance_id.is_late:
+                rec.original_deduction = rec.attendance_id.deduction_amount
             else:
-                rec.original_deduction = Slab.get_deduction_for_minutes(
-                    att.late_minutes, company_id=emp.company_id.id
-                )
+                rec.original_deduction = 0.0
 
     def _compute_check_in_time(self):
         for rec in self:

@@ -1859,7 +1859,13 @@ export const getEligibleLateAttendances = async (employeeId) => {
           args: [[
             ['employee_id', '=', employeeId],
             ['is_late', '=', true],
-            ['is_first_checkin_of_day', '=', true],
+            // Use late_sequence > 0 as the canonical "first late of session
+            // per day" indicator. The legacy is_first_checkin_of_day flag
+            // captured Session 1 only; switching here keeps the mobile
+            // waiver dropdown in sync with every other consumer (Odoo
+            // backend dropdown, late records action, summary, mobile
+            // late records API).
+            ['late_sequence', '>', 0],
             ['date', '>=', fromStr],
             ['date', '<=', toStr],
           ]],
