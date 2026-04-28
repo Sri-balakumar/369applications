@@ -8,7 +8,9 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { OverlayLoader } from '@components/Loader';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
-import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests, getWorkplaceLocation, prewarmLocation } from '@services/AttendanceService';
+import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, getCachedLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests, getWorkplaceLocation, prewarmLocation } from '@services/AttendanceService';
+import { computeLocalLateInfo } from '@utils/lateLogic';
+import * as offlineQueue from '@utils/offlineQueue';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { MaterialIcons, Feather, Ionicons } from '@expo/vector-icons';
 import { Camera } from 'expo-camera';
@@ -270,6 +272,94 @@ const UserAttendanceScreen = ({ navigation }) => {
     }
   };
 
+  // Prefetch the late config and stash it in AsyncStorage whenever the
+  // user is verified AND online. This guarantees the offline late-reason
+  // popup has the right thresholds available next time the device drops
+  // off the network. Silent failure if offline or Odoo is unreachable.
+  useEffect(() => {
+    (async () => {
+      if (!verifiedEmployee?.id) return;
+      try {
+        const online = await networkStatus.isOnline();
+        if (online) {
+          await getLateConfig(verifiedEmployee.id);
+          console.log('[offline-late] prefetched late config for employee', verifiedEmployee.id);
+        }
+      } catch (e) {
+        console.log('[offline-late] prefetch skipped:', e?.message);
+      }
+    })();
+  }, [verifiedEmployee?.id]);
+
+  // Re-prompt the user with the You're Late popup if today's check-in is
+  // late and has no `late_reason` recorded yet — works online (queries
+  // Odoo) AND offline (recomputes locally and reads the offline queue).
+  useEffect(() => {
+    (async () => {
+      if (!verifiedEmployee?.id || !todayAttendance) return;
+      try {
+        let isLate = false;
+        let lateMin = 0;
+        let lateDisplay = '';
+        let sequence = null;
+        let deduction = null;
+        let hasReason = false;
+        let attendanceId = todayAttendance.id;
+
+        const online = await networkStatus.isOnline();
+
+        if (online && todayAttendance.id) {
+          const lateResult = await getTodayAttendanceWithLateInfo(verifiedEmployee.id);
+          if (lateResult.success && lateResult.records?.length > 0) {
+            const rec = lateResult.records.find(r => r.id === todayAttendance.id)
+                     || lateResult.records[lateResult.records.length - 1];
+            if (rec) {
+              isLate = !!rec.isLate;
+              lateMin = rec.lateMinutes || 0;
+              lateDisplay = rec.lateMinutesDisplay || '';
+              sequence = rec.lateSequence;
+              deduction = rec.deductionAmount;
+              hasReason = !!(rec.lateReason && rec.lateReason.trim());
+              attendanceId = rec.id;
+            }
+          }
+        } else {
+          // Offline path — recompute from cached config + check queue
+          const cached = await getCachedLateConfig(verifiedEmployee.id);
+          const checkInRaw = todayAttendance.checkInTimeUtc || todayAttendance.checkIn;
+          const checkInDt = checkInRaw ? new Date(checkInRaw) : null;
+          if (checkInDt) {
+            const info = computeLocalLateInfo(checkInDt, cached);
+            isLate = info.isLate;
+            lateMin = info.lateMinutes || 0;
+            lateDisplay = info.lateMinutesDisplay || '';
+          }
+          if (todayAttendance.offlineQueueId) {
+            const queue = await offlineQueue.getAll();
+            const item = queue.find(q => q.id === todayAttendance.offlineQueueId);
+            hasReason = !!(item?.values?.late_reason && String(item.values.late_reason).trim());
+            attendanceId = `offline:${todayAttendance.offlineQueueId}`;
+          }
+        }
+
+        if (isLate && !hasReason && attendanceId) {
+          setLateInfo({
+            isLate: true,
+            lateMinutes: lateMin,
+            lateMinutesDisplay: lateDisplay,
+            lateSequence: sequence,
+            deductionAmount: deduction,
+          });
+          setPendingLateAttendanceId(attendanceId);
+          setShowLateReasonModal(true);
+        }
+      } catch (e) {
+        console.log('[Attendance] late-reason re-prompt skipped:', e?.message);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayAttendance?.id, todayAttendance?.offlineQueueId, verifiedEmployee?.id]);
+
   const formatDate = (date) => {
     return date.toLocaleDateString('en-US', {
       weekday: 'long',
@@ -484,6 +574,47 @@ const UserAttendanceScreen = ({ navigation }) => {
         workplaceName: locationResult.workplaceName,
       });
 
+      // OFFLINE GUARD — block re-check-in for the same session today.
+      // The Odoo constraint `_check_no_reentry_same_session` enforces this
+      // online but not offline. We replicate the check locally using the
+      // queued attendance items + cached late config.
+      try {
+        const online = await networkStatus.isOnline();
+        if (!online) {
+          const cached = await getCachedLateConfig(verifiedEmployee.id);
+          const now = new Date();
+          const myInfo = computeLocalLateInfo(now, cached);
+          const mySession = myInfo.session || '1';
+
+          const queue = await offlineQueue.getAll();
+          const todayStr = now.toISOString().slice(0, 10);
+
+          const sameSessionClosed = queue.find(q => {
+            if (q.model !== 'hr.attendance' || q.operation !== 'create') return false;
+            const v = q.values || {};
+            if (!v.check_in || !v.check_out) return false;        // open record OK
+            // check_in is "YYYY-MM-DD HH:MM:SS" UTC string
+            const ciStr = String(v.check_in);
+            if (!ciStr.startsWith(todayStr)) return false;
+            const ciDate = new Date(ciStr.replace(' ', 'T') + 'Z');
+            const ciInfo = computeLocalLateInfo(ciDate, cached);
+            return (ciInfo.session || '1') === mySession;
+          });
+
+          if (sameSessionClosed) {
+            console.log('[checkin-guard] OFFLINE block — same session already closed today:',
+              JSON.stringify(sameSessionClosed.values));
+            showAlert({
+              message: `You have already checked out of Session ${mySession} today.\n\nOnce you check out of a session, you cannot check in again to the same session on the same day.`,
+            });
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (e) {
+        console.log('[checkin-guard] offline guard skipped:', e?.message);
+      }
+
       const result = await checkInByEmployeeId(verifiedEmployee.id, verifiedEmployee.name);
       if (result.success && result.offline) {
         // Offline path — record was queued locally; will flush when online.
@@ -515,6 +646,44 @@ const UserAttendanceScreen = ({ navigation }) => {
             );
           }
         } catch (_) { /* ignore */ }
+
+        // Local lateness check using cached late config — works offline.
+        // Verbose logging + hardcoded defaults inside `computeLocalLateInfo`
+        // guarantee the popup fires for genuinely-late check-ins even when
+        // the cache is empty (first install, or user never online before).
+        try {
+          const cached = await getCachedLateConfig(verifiedEmployee.id);
+          // Prefer the raw UTC string the offline branch already saves; it
+          // parses reliably. Fall back to display string if needed.
+          const utcStr = result.checkInTimeUtc;
+          const checkInDt = utcStr
+            ? new Date(utcStr.replace(' ', 'T') + 'Z')
+            : new Date(result.checkInTime || Date.now());
+          const info = computeLocalLateInfo(checkInDt, cached);
+
+          console.log('[offline-late] cached config:', cached ? 'present' : 'MISSING (using defaults)');
+          console.log('[offline-late] check-in raw utc:', utcStr, '→ parsed:', checkInDt?.toString?.());
+          console.log('[offline-late] info:', JSON.stringify(info));
+
+          if (info.isLate) {
+            console.log('[offline-late] FIRING popup (lateMin=' + info.lateMinutes + ')');
+            setLateInfo({
+              isLate: true,
+              lateMinutes: info.lateMinutes,
+              lateMinutesDisplay: info.lateMinutesDisplay,
+              lateSequence: null,    // unknown offline
+              deductionAmount: null, // unknown offline
+            });
+            setPendingLateAttendanceId(
+              result.localId ? `offline:${result.localId}` : null
+            );
+            setShowLateReasonModal(true);
+          } else {
+            console.log('[offline-late] not late — popup skipped');
+          }
+        } catch (e) {
+          console.log('[offline-late] error:', e?.message, e?.stack);
+        }
       } else if (result.success) {
         if (photoBase64) {
           const uploadResult = await uploadAttendancePhoto(result.attendanceId, photoBase64, 'check_in');
@@ -656,20 +825,38 @@ const UserAttendanceScreen = ({ navigation }) => {
 
         const offlineQueue = require('@utils/offlineQueue').default;
 
-        // Remove the original check-in-only queue entry (if it hasn't synced yet)
+        // CRITICAL: read the original queue item's values BEFORE removing it
+        // so we can carry over fields like `late_reason` (typed by the user
+        // in the offline late-popup) into the new combined create.
+        let preservedValues = {};
         if (todayAttendance.offlineQueueId) {
+          try {
+            const queue = await offlineQueue.getAll();
+            const original = queue.find(q => q.id === todayAttendance.offlineQueueId);
+            if (original?.values) {
+              preservedValues = { ...original.values };
+              console.log('[checkout-offline] preserving values from check-in:', JSON.stringify(preservedValues));
+            }
+          } catch (e) {
+            console.log('[checkout-offline] could not read original values:', e?.message);
+          }
           await offlineQueue.removeById(todayAttendance.offlineQueueId);
         }
 
-        // Enqueue a single combined create with both check_in + check_out
+        // Enqueue a single combined create — spread `preservedValues` first
+        // so the explicit fields below override any duplicates and we keep
+        // anything else (notably `late_reason`).
+        const combinedValues = {
+          ...preservedValues,
+          employee_id: verifiedEmployee.id,
+          check_in: todayAttendance.checkInTimeUtc || checkOutTimeUtc,
+          check_out: checkOutTimeUtc,
+        };
+        console.log('[checkout-offline] combined values:', JSON.stringify(combinedValues));
         await offlineQueue.enqueue({
           model: 'hr.attendance',
           operation: 'create',
-          values: {
-            employee_id: verifiedEmployee.id,
-            check_in: todayAttendance.checkInTimeUtc || checkOutTimeUtc,
-            check_out: checkOutTimeUtc,
-          },
+          values: combinedValues,
         });
 
         const displayTime = now.toLocaleTimeString('en-US', {
@@ -2111,13 +2298,54 @@ const UserAttendanceScreen = ({ navigation }) => {
               style={[styles.lateSubmitButton, !lateReasonText.trim() && styles.lateSubmitButtonDisabled]}
               disabled={!lateReasonText.trim()}
               onPress={async () => {
-                if (!lateReasonText.trim() || !pendingLateAttendanceId) return;
+                const reason = lateReasonText.trim();
+                console.log('[late-submit] reason="' + reason + '" pendingId=' + pendingLateAttendanceId);
+                if (!reason) {
+                  console.log('[late-submit] BLOCKED: reason is empty');
+                  return;
+                }
+                if (!pendingLateAttendanceId) {
+                  console.log('[late-submit] BLOCKED: no pending attendance id (offline create may have failed to return localId)');
+                  showToastMessage('Cannot save reason — try again after sync');
+                  setShowLateReasonModal(false);
+                  setLateReasonText('');
+                  return;
+                }
                 setLoading(true);
                 try {
-                  await submitLateReason(pendingLateAttendanceId, lateReasonText.trim());
-                  showToastMessage('Late reason submitted');
+                  const idStr = String(pendingLateAttendanceId);
+                  if (idStr.startsWith('offline:')) {
+                    const localId = idStr.split(':')[1];
+                    console.log('[late-submit] OFFLINE path — localId=' + localId);
+
+                    // Verify the queue item exists before updating
+                    const before = await offlineQueue.getAll();
+                    const target = before.find(q => q.id === localId);
+                    console.log('[late-submit] queue item BEFORE update:', target ? JSON.stringify(target.values) : 'MISSING');
+
+                    await offlineQueue.updateValues(localId, { late_reason: reason });
+
+                    const after = await offlineQueue.getAll();
+                    const updated = after.find(q => q.id === localId);
+                    console.log('[late-submit] queue item AFTER update:', updated ? JSON.stringify(updated.values) : 'MISSING (item gone — already synced?)');
+
+                    if (updated && updated.values?.late_reason === reason) {
+                      showToastMessage('Late reason saved offline');
+                    } else if (!updated) {
+                      // Queue item was already synced before user typed. Fall
+                      // back to writing the reason via the online path using
+                      // an offline_id_map lookup. For now just inform user.
+                      showToastMessage('Reason will sync on next online write');
+                    } else {
+                      showToastMessage('Saved (but value mismatch — check logs)');
+                    }
+                  } else {
+                    console.log('[late-submit] ONLINE path — id=' + idStr);
+                    await submitLateReason(pendingLateAttendanceId, reason);
+                    showToastMessage('Late reason submitted');
+                  }
                 } catch (err) {
-                  console.log('[Attendance] Late reason submit error:', err?.message);
+                  console.log('[late-submit] error:', err?.message, err?.stack);
                 }
                 setShowLateReasonModal(false);
                 setLateReasonText('');

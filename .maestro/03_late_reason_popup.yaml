@@ -1,0 +1,47 @@
+# Flow 3 — Late Reason popup design + submission.
+# Assumes the previous check-in was late (e.g. via emulator clock manipulation
+# or by checking in past your office's threshold). If not late, the popup
+# won't appear and this flow will fail at `assertVisible: "You're Late"`.
+#
+# This flow tests:
+#   - Popup design matches the agreed layout
+#   - Reason input accepts text
+#   - Submit Reason button writes the reason to Odoo
+#   - Toast confirmation shows
+
+appId: com.danat.alphalize
+---
+- launchApp:
+    stopApp: false
+
+# Open User Attendance screen
+- tapOn: "User Attendance"
+
+# Trigger a check-in
+- tapOn: "Check In"
+
+# Wait for the late popup (only appears if you're late)
+- extendedWaitUntil:
+    visible: "You're Late"
+    timeout: 15000
+
+# Verify the design elements
+- assertVisible: "Salary deduction"
+- assertVisible: "Please provide a reason"
+- assertVisible: "Submit Reason"
+
+# Type a reason
+- tapOn:
+    text: "Enter your reason for being late..."
+- inputText: "Maestro automated test — traffic delay"
+- hideKeyboard
+
+# Submit
+- tapOn:
+    text: "Submit Reason"
+    enabled: true
+
+# Toast confirmation
+- extendedWaitUntil:
+    visible: "Late reason submitted"
+    timeout: 8000

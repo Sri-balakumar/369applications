@@ -1,0 +1,86 @@
+# =============================================================================
+# Flow 1 — Auto-Login (selectors verified via maestro hierarchy)
+# =============================================================================
+# Element selectors confirmed from the actual Android view hierarchy:
+#   Server URL placeholder  = "https://your-server.com"
+#   Database placeholder    = "Select a database"
+#   Database option         = "tool_managament"
+#   Username placeholder    = "Enter Username or Email"   ← key discovery
+#   Password placeholder    = "Enter password"
+#   Privacy text            = "I agree to the Privacy Policy"
+#   Login button            = "Login" (also accessibilityText)
+# =============================================================================
+
+appId: com.danat.alphalize
+---
+
+- launchApp:
+    clearState: true
+    stopApp: true
+    permissions:
+      all: allow
+
+- extendedWaitUntil:
+    visible: "Login"
+    timeout: 15000
+- waitForAnimationToEnd:
+    timeout: 2500
+
+- takeScreenshot: 01_login_initial
+
+# Field 1: Server URL
+- tapOn: "https://your-server.com"
+- inputText: "http://10.51.243.175:8069"
+- hideKeyboard
+- waitForAnimationToEnd:
+    timeout: 1500
+
+# Field 2: Database (picker)
+- tapOn: "Select a database"
+- extendedWaitUntil:
+    visible: "tool_managament"
+    timeout: 10000
+- tapOn: "tool_managament"
+- waitForAnimationToEnd:
+    timeout: 2500
+
+# Field 3: Username — tap by exact placeholder from hierarchy
+- tapOn: "Enter Username or Email"
+- inputText: "admin"
+- hideKeyboard
+- waitForAnimationToEnd:
+    timeout: 1500
+
+# Field 4: Password
+- tapOn: "Enter password"
+- inputText: "admin"
+- hideKeyboard
+- waitForAnimationToEnd:
+    timeout: 1500
+
+# Privacy checkbox — exact coordinates from the Android view hierarchy.
+# CheckBox bounds = [70,1206][124,1260] on 1200x1920 screen → 8%, 64%.
+- tapOn:
+    point: 8%, 64%
+- extendedWaitUntil:
+    visible: "ACCEPT"
+    timeout: 10000
+
+- takeScreenshot: 02_privacy_page
+
+- tapOn: "ACCEPT"
+- waitForAnimationToEnd:
+    timeout: 2000
+
+# Login button — TWO "Login" elements exist (title at top + button at bottom).
+# tapOn text would match the title; using button coordinates from hierarchy:
+# bounds [567,1295][636,1331] on 1200x1920 → center 50%, 68%
+- tapOn:
+    point: 50%, 68%
+
+- extendedWaitUntil:
+    visible:
+      text: ".*Home.*|.*Office Attendance.*|.*Dashboard.*|.*Welcome.*|.*Today.*|.*LIVE TIME.*|.*Good [Mm]orning.*|.*Good [Ee]vening.*"
+    timeout: 25000
+
+- takeScreenshot: 03_login_success

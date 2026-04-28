@@ -1,0 +1,34 @@
+# Flow 2 — Check-in flow.
+# Verifies: User Attendance screen opens, Check In button present, fingerprint
+# step is reached. Stops short of actual fingerprint scan because that needs
+# real hardware; the flow asserts the prompt text instead.
+#
+# Pre-req: User must already be logged in (run 01_login.yaml first OR run all
+# flows in alphabetical order with `maestro test .maestro/`).
+
+appId: com.danat.alphalize
+---
+- launchApp:
+    stopApp: false          # don't kill the app — keep login session
+
+# Open User Attendance screen
+- tapOn: "User Attendance"
+
+# Verify the screen rendered
+- extendedWaitUntil:
+    visible: "Check In"
+    timeout: 8000
+
+# Verify the live time clock is showing (proves the screen is fully rendered)
+- assertVisible: "LIVE TIME"
+
+# Tap Check In
+- tapOn:
+    text: "Check In"
+    enabled: true
+
+# Verify the fingerprint prompt appears (or PIN fallback)
+- extendedWaitUntil:
+    visible:
+      text: ".*[Ss]can fingerprint.*|.*[Pp]lace [Ff]inger.*|.*PIN.*"
+    timeout: 10000

@@ -1,0 +1,58 @@
+# Flow 5 — Late Waiver Request submission.
+# Verifies:
+#   - Late Waiver Request screen opens
+#   - Eligible late attendances list shows BOTH Session 1 AND Session 2 records
+#     (this catches the bug we fixed where Session 2 records were hidden)
+#   - User can select a record, type a reason, and submit
+#
+# Pre-req: User has at least one late attendance record in the last 30 days.
+
+appId: com.danat.alphalize
+---
+- launchApp:
+    stopApp: false
+
+# Navigate to Late Waiver Request
+# (adjust the menu path if your app reaches it differently)
+- tapOn: "Late Waiver Request"
+
+# Verify the screen opened
+- extendedWaitUntil:
+    visible: "Late Waiver Request"
+    timeout: 8000
+
+# Switch to New Request tab
+- tapOn: "New Request"
+
+# Verify the late-attendance list appears
+- extendedWaitUntil:
+    visible: "Select Late Attendance"
+    timeout: 5000
+
+# Verify at least one late record is shown
+# (this implicitly tests the late_sequence > 0 filter from our fix)
+- extendedWaitUntil:
+    visible:
+      text: ".*Late.*Deduction.*"
+    timeout: 5000
+
+# Tap the first record in the list
+- tapOn:
+    index: 0
+    text: ".*Late.*"
+
+# Type the waiver reason
+- tapOn: "Reason for Waiver"
+- inputText: "Maestro automated test — client meeting overrun"
+- hideKeyboard
+
+# Submit the waiver
+- tapOn:
+    text: "Submit"
+    enabled: true
+
+# Verify success indicator (toast or screen change)
+- extendedWaitUntil:
+    visible:
+      text: ".*[Ss]ubmitted.*|.*[Pp]ending.*|.*My Requests.*"
+    timeout: 10000

@@ -1,0 +1,4 @@
+# Maestro shared config — read by every flow in this folder.
+# `appId` tells Maestro which app to launch and target. For Android it's the
+# package name from app.json (`expo.android.package`), for iOS it's the bundle id.
+appId: com.danat.alphalize

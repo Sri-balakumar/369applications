@@ -1,0 +1,41 @@
+# Flow 4 — Check-out confirmation popup.
+# Verifies the new "Once checked out, you cannot check in again to this session"
+# warning + the YES, CHECK OUT / CANCEL button labels.
+#
+# Pre-req: Currently checked in (run 02_checkin.yaml first, OR ensure an open
+# attendance exists for the test user).
+
+appId: com.danat.alphalize
+---
+- launchApp:
+    stopApp: false
+
+# Open User Attendance screen
+- tapOn: "User Attendance"
+
+# Verify Check Out button is visible (proves user is checked-in)
+- extendedWaitUntil:
+    visible: "Check Out"
+    timeout: 8000
+
+# Tap Check Out
+- tapOn: "Check Out"
+
+# Verify the confirmation popup appeared with the no-rejoin warning
+- extendedWaitUntil:
+    visible:
+      text: ".*[Aa]re you sure.*check out.*"
+    timeout: 5000
+- assertVisible:
+    text: ".*Once checked out, you cannot check in again.*"
+
+# Verify the new button labels (not the old YES/NO)
+- assertVisible: "YES, CHECK OUT"
+- assertVisible: "CANCEL"
+
+# Tap CANCEL — we don't want to actually check out during this assertion run
+- tapOn: "CANCEL"
+
+# Verify popup closed and we're back on the attendance screen
+- assertNotVisible: "YES, CHECK OUT"
+- assertVisible: "Check Out"

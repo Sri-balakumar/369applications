@@ -1572,6 +1572,13 @@ export const getLateConfig = async (employeeId) => {
     const result = response.data?.result;
     if (result) {
       console.log('[Attendance] Late config:', JSON.stringify(result));
+      // Cache the raw config so the offline late-reason flow can read it.
+      try {
+        await AsyncStorage.setItem(
+          `@cache:lateConfig:${employeeId}`,
+          JSON.stringify(result),
+        );
+      } catch (_) { /* ignore cache failure */ }
       return {
         success: true,
         officeStartHour: result.office_start_hour || 8.0,
@@ -1583,6 +1590,18 @@ export const getLateConfig = async (employeeId) => {
   } catch (error) {
     console.error('[Attendance] Get late config error:', error?.message);
     return { success: false, error: error?.message };
+  }
+};
+
+// Read the cached late config for an employee. Returns the raw Odoo
+// response shape (office_start_hour, late_threshold_minutes, shift_type,
+// office_start_hour_2, etc.) or null if no cache exists yet.
+export const getCachedLateConfig = async (employeeId) => {
+  try {
+    const raw = await AsyncStorage.getItem(`@cache:lateConfig:${employeeId}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
   }
 };
 
@@ -1679,24 +1698,101 @@ export const getTodayAttendanceWithLateInfo = async (employeeId) => {
 // LEAVE REQUEST FUNCTIONS
 // =============================================
 
-// Submit a leave request
+// Helper: cache key for an employee's leave requests
+const _leaveCacheKey = (userId, employeeId) =>
+  `@cache:myLeaveRequests:${employeeId || userId}`;
+
+// Helper: check if requested leave dates overlap any existing cached leave
+const _hasOverlappingLeave = (cached, fromDate, toDate, isHalfDay) => {
+  if (!Array.isArray(cached) || cached.length === 0) return null;
+  const start = fromDate;
+  const end = isHalfDay ? fromDate : (toDate || fromDate);
+  for (const r of cached) {
+    if (r.state === 'rejected' || r.state === 'cancelled') continue;
+    const rStart = r.fromDate;
+    const rEnd = r.toDate || r.fromDate;
+    if (!rStart) continue;
+    // Date strings are ISO YYYY-MM-DD so lexicographic compare works
+    if (start <= rEnd && end >= rStart) return r;
+  }
+  return null;
+};
+
+// Submit a leave request — works online AND offline.
+// Offline path:
+//   1. Check cached `getMyLeaveRequests` for any overlapping dates
+//   2. If duplicate → return error
+//   3. Otherwise enqueue create to offline queue + add to local cache so
+//      "My Requests" shows the pending row immediately
 export const submitLeaveRequest = async (userId, leaveType, fromDate, toDate, reason, employeeId, isHalfDay = false) => {
   console.log('[Leave] Submitting leave request for user:', userId, 'employee:', employeeId, 'halfDay:', isHalfDay);
+
+  // Build create values once — used by both paths
+  const createVals = {
+    leave_type: leaveType,
+    from_date: fromDate,
+    to_date: isHalfDay ? false : (toDate || false),
+    is_half_day: isHalfDay,
+    reason: reason,
+  };
+  if (employeeId) {
+    createVals.hr_employee_id = employeeId;
+  }
+
+  // Offline branch — queue the create + update local cache
+  const networkStatus = require('@utils/networkStatus').default;
+  const online = await networkStatus.isOnline();
+  if (!online) {
+    console.log('[Leave] Offline — checking cache for overlapping leave');
+    try {
+      const cacheKey = _leaveCacheKey(userId, employeeId);
+      const raw = await AsyncStorage.getItem(cacheKey);
+      const cached = raw ? JSON.parse(raw) : [];
+
+      const overlap = _hasOverlappingLeave(cached, fromDate, toDate, isHalfDay);
+      if (overlap) {
+        console.log('[Leave] Offline duplicate detected:', overlap);
+        return {
+          success: false,
+          error: `A ${overlap.state || 'pending'} ${overlap.leaveType || 'leave'} request already exists overlapping ${overlap.fromDate}${overlap.toDate ? ' → ' + overlap.toDate : ''}.`,
+        };
+      }
+
+      const offlineQueue = require('@utils/offlineQueue').default;
+      const localId = await offlineQueue.enqueue({
+        model: 'hr.leave.request',
+        operation: 'create',
+        values: createVals,
+      });
+
+      // Add a pending row to local cache so My Requests shows it immediately
+      const pendingRow = {
+        id: `offline_${localId}`,
+        leaveType,
+        fromDate,
+        toDate: isHalfDay ? '' : (toDate || ''),
+        numberOfDays: isHalfDay ? 0.5 : null,
+        reason,
+        state: 'pending',
+        approvedBy: '',
+        approvalDate: '',
+        rejectionReason: '',
+        offline: true,
+        offlineQueueId: localId,
+      };
+      const next = [pendingRow, ...cached];
+      await AsyncStorage.setItem(cacheKey, JSON.stringify(next));
+
+      console.log('[Leave] Queued offline leave request:', localId);
+      return { success: true, requestId: pendingRow.id, offline: true };
+    } catch (e) {
+      console.error('[Leave] Offline queue error:', e?.message);
+      return { success: false, error: 'Failed to save offline: ' + (e?.message || 'unknown') };
+    }
+  }
+
   try {
     const headers = await getOdooAuthHeaders();
-
-    // Build create values
-    const createVals = {
-      leave_type: leaveType,
-      from_date: fromDate,
-      to_date: isHalfDay ? false : (toDate || false),
-      is_half_day: isHalfDay,
-      reason: reason,
-    };
-    // Set employee - hr_employee_id is the primary field now
-    if (employeeId) {
-      createVals.hr_employee_id = employeeId;
-    }
 
     // Create leave request
     const createResponse = await axios.post(
@@ -1749,8 +1845,46 @@ export const submitLeaveRequest = async (userId, leaveType, fromDate, toDate, re
 };
 
 // Get my leave requests (by hr_employee_id for device-based lookup)
+// Online: fetches from Odoo, refreshes the local cache, merges any pending
+// offline-queued rows on top.
+// Offline: returns whatever's in the cache (already includes pending rows
+// added by submitLeaveRequest's offline branch).
 export const getMyLeaveRequests = async (userId, employeeId) => {
   console.log('[Leave] Getting leave requests for employee:', employeeId, 'user:', userId);
+  const cacheKey = _leaveCacheKey(userId, employeeId);
+
+  // Read pending offline rows; drop those whose queue item has already
+  // synced so we don't get duplicates after Odoo returns the real record.
+  let pendingOffline = [];
+  let aliveQueueIds = new Set();
+  try {
+    const offlineQueue = require('@utils/offlineQueue').default;
+    const queue = await offlineQueue.getAll();
+    aliveQueueIds = new Set(queue.map(q => q.id));
+  } catch (_) { /* ignore */ }
+  try {
+    const raw = await AsyncStorage.getItem(cacheKey);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter(r => {
+          if (r.offline === true) {
+            const stillQueued = aliveQueueIds.has(r.offlineQueueId);
+            if (!stillQueued) {
+              console.log('[Leave] dropping synced offline row from cache:', r.id, r.offlineQueueId);
+            }
+            return stillQueued;
+          }
+          return true;
+        });
+        pendingOffline = cleaned.filter(r => r.offline === true);
+        if (cleaned.length !== parsed.length) {
+          try { await AsyncStorage.setItem(cacheKey, JSON.stringify(cleaned)); } catch (_) {}
+        }
+      }
+    }
+  } catch (_) { /* ignore */ }
+
   try {
     const headers = await getOdooAuthHeaders();
 
@@ -1783,7 +1917,7 @@ export const getMyLeaveRequests = async (userId, employeeId) => {
     );
 
     const records = response.data?.result || [];
-    return records.map(r => ({
+    const mapped = records.map(r => ({
       id: r.id,
       leaveType: r.leave_type,
       fromDate: r.from_date || '',
@@ -1795,15 +1929,102 @@ export const getMyLeaveRequests = async (userId, employeeId) => {
       approvalDate: r.approval_date || '',
       rejectionReason: r.rejection_reason || '',
     }));
+
+    // Merge pending offline rows on top + cache for future offline reads
+    const merged = [...pendingOffline, ...mapped];
+    try { await AsyncStorage.setItem(cacheKey, JSON.stringify(merged)); } catch (_) {}
+    return merged;
   } catch (error) {
-    console.error('[Leave] Get requests error:', error?.message);
-    return [];
+    console.error('[Leave] Get requests error — falling back to cache:', error?.message);
+    // Network error: fall back to whatever is cached so the user still sees
+    // their previous and pending requests.
+    try {
+      const raw = await AsyncStorage.getItem(cacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (_) {}
+    return pendingOffline; // worst case — at least the pending offline rows
   }
 };
 
-// Cancel a leave request
+// Helper: scan every cached leave-list and remove or update a row by id.
+// Used by cancelLeaveRequest so callers don't need to pass userId/employeeId.
+const _stripLeaveFromAllCaches = async (predicate, mapFn) => {
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    for (const k of allKeys) {
+      if (!k.startsWith('@cache:myLeaveRequests:')) continue;
+      try {
+        const raw = await AsyncStorage.getItem(k);
+        if (!raw) continue;
+        const list = JSON.parse(raw);
+        if (!Array.isArray(list)) continue;
+        const next = mapFn ? list.map(r => predicate(r) ? mapFn(r) : r)
+                           : list.filter(r => !predicate(r));
+        await AsyncStorage.setItem(k, JSON.stringify(next));
+      } catch (_) { /* skip key on parse failure */ }
+    }
+  } catch (_) { /* ignore */ }
+};
+
+// Cancel a leave request — works online AND offline.
+// Two paths:
+//   A) Pending offline-queued leave (id starts with "offline_") — drop the
+//      queue item + remove the row from every leave cache. No network call.
+//   B) Synced numeric id while offline — queue an `action_cancel` operation
+//      and flip the cached row's state to "cancelled" so the UI updates
+//      immediately. Sync handler hits Odoo when network returns.
+//   C) Synced id while online — original direct call to Odoo.
 export const cancelLeaveRequest = async (requestId) => {
   console.log('[Leave] Cancelling leave request:', requestId);
+
+  // Case A: offline-queued leave that never reached Odoo
+  const idStr = String(requestId);
+  if (idStr.startsWith('offline_')) {
+    try {
+      const localId = idStr.replace(/^offline_/, '');
+      const offlineQueue = require('@utils/offlineQueue').default;
+      await offlineQueue.removeById(localId);
+      // Drop the row from any cached leave lists
+      await _stripLeaveFromAllCaches(
+        (r) => r.id === idStr || r.offlineQueueId === localId,
+        null,
+      );
+      console.log('[Leave] Removed pending offline leave:', localId);
+      return { success: true, offline: true };
+    } catch (e) {
+      console.error('[Leave] Offline cancel error:', e?.message);
+      return { success: false, error: e?.message };
+    }
+  }
+
+  // Case B: synced numeric id while offline → queue + cache update
+  const networkStatus = require('@utils/networkStatus').default;
+  const online = await networkStatus.isOnline();
+  if (!online) {
+    try {
+      const offlineQueue = require('@utils/offlineQueue').default;
+      await offlineQueue.enqueue({
+        model: 'hr.leave.request',
+        operation: 'cancel',
+        values: { id: requestId },
+      });
+      // Flip the cached row's state so UI updates instantly
+      await _stripLeaveFromAllCaches(
+        (r) => r.id === requestId,
+        (r) => ({ ...r, state: 'cancelled', _pendingCancel: true }),
+      );
+      console.log('[Leave] Queued cancel for synced id:', requestId);
+      return { success: true, offline: true };
+    } catch (e) {
+      console.error('[Leave] Offline queued cancel error:', e?.message);
+      return { success: false, error: e?.message };
+    }
+  }
+
+  // Case C: online — original direct path
   try {
     const headers = await getOdooAuthHeaders();
 
@@ -1837,8 +2058,13 @@ export const cancelLeaveRequest = async (requestId) => {
 // =============================================
 
 // Get all late attendance records (last 30 days) eligible for waiver
+// Cache key for the eligible-late-attendance dropdown options
+const _eligibleLateCacheKey = (employeeId) => `@cache:eligibleLate:${employeeId}`;
+
 export const getEligibleLateAttendances = async (employeeId) => {
   console.log('[Waiver] Getting eligible late attendances for employee:', employeeId);
+  const cacheKey = _eligibleLateCacheKey(employeeId);
+
   try {
     const headers = await getOdooAuthHeaders();
     // Last 30 days
@@ -1859,12 +2085,6 @@ export const getEligibleLateAttendances = async (employeeId) => {
           args: [[
             ['employee_id', '=', employeeId],
             ['is_late', '=', true],
-            // Use late_sequence > 0 as the canonical "first late of session
-            // per day" indicator. The legacy is_first_checkin_of_day flag
-            // captured Session 1 only; switching here keeps the mobile
-            // waiver dropdown in sync with every other consumer (Odoo
-            // backend dropdown, late records action, summary, mobile
-            // late records API).
             ['late_sequence', '>', 0],
             ['date', '>=', fromStr],
             ['date', '<=', toStr],
@@ -1883,7 +2103,7 @@ export const getEligibleLateAttendances = async (employeeId) => {
     );
 
     const records = response.data?.result || [];
-    return records.map(r => ({
+    const mapped = records.map(r => ({
       id: r.id,
       date: r.date || '',
       checkInTime: r.check_in ? odooUtcToLocalDisplay(r.check_in) : '',
@@ -1893,15 +2113,123 @@ export const getEligibleLateAttendances = async (employeeId) => {
       lateReason: r.late_reason || '',
       isWaived: !!r.is_waived,
     }));
+
+    // Cache for offline reads
+    try { await AsyncStorage.setItem(cacheKey, JSON.stringify(mapped)); } catch (_) {}
+    console.log('[Waiver] Cached', mapped.length, 'eligible late records');
+    return mapped;
   } catch (error) {
-    console.error('[Waiver] Get eligible late error:', error?.message);
+    console.error('[Waiver] Get eligible late error — falling back to cache:', error?.message);
+    try {
+      const raw = await AsyncStorage.getItem(cacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          console.log('[Waiver] Returning', parsed.length, 'cached eligible late records');
+          return parsed;
+        }
+      }
+    } catch (_) { /* ignore */ }
     return [];
   }
 };
 
-// Submit a new waiver request (creates draft + auto-submits)
+// Helper: cache key for an employee's waiver requests
+const _waiverCacheKey = (employeeId) => `@cache:myWaiverRequests:${employeeId}`;
+
+// Submit a new waiver request (creates draft + auto-submits).
+// Offline: checks cache for existing waiver on the same attendance_id;
+// returns error if duplicate, otherwise queues + adds pending row to cache.
 export const submitWaiverRequest = async (employeeId, attendanceId, reason) => {
   console.log('[Waiver] Submitting waiver request for attendance:', attendanceId);
+
+  // Offline branch
+  const networkStatus = require('@utils/networkStatus').default;
+  const online = await networkStatus.isOnline();
+  if (!online) {
+    console.log('[Waiver] Offline — checking cache for duplicate');
+    try {
+      const cacheKey = _waiverCacheKey(employeeId);
+      const raw = await AsyncStorage.getItem(cacheKey);
+      const cached = raw ? JSON.parse(raw) : [];
+
+      // Check for an existing waiver on the same attendance_id (excluding rejected)
+      const dup = cached.find(w =>
+        w.attendanceId === attendanceId &&
+        w.state !== 'rejected' &&
+        w.state !== 'cancelled',
+      );
+      if (dup) {
+        console.log('[Waiver] Offline duplicate detected:', dup);
+        return {
+          success: false,
+          error: `A ${dup.state || 'pending'} waiver request already exists for this attendance record.`,
+        };
+      }
+
+      const offlineQueue = require('@utils/offlineQueue').default;
+      const localId = await offlineQueue.enqueue({
+        model: 'hr.late.waiver.request',
+        operation: 'create',
+        values: {
+          employee_id: employeeId,
+          attendance_id: attendanceId,
+          reason: reason,
+        },
+      });
+
+      // Look up the attendance details from the eligible-late cache so the
+      // pending row shows date / late minutes / deduction in My Requests.
+      let attDate = '';
+      let attLateMin = 0;
+      let attLateDisplay = '';
+      let attDeduction = 0;
+      let attLateReason = '';
+      try {
+        const elRaw = await AsyncStorage.getItem(_eligibleLateCacheKey(employeeId));
+        if (elRaw) {
+          const elList = JSON.parse(elRaw);
+          if (Array.isArray(elList)) {
+            const match = elList.find(r => r.id === attendanceId);
+            if (match) {
+              attDate = match.date || '';
+              attLateMin = match.lateMinutes || 0;
+              attLateDisplay = match.lateMinutesDisplay || '';
+              attDeduction = match.deductionAmount || 0;
+              attLateReason = match.lateReason || '';
+              console.log('[Waiver] offline — populated from eligible-late cache:', JSON.stringify(match));
+            }
+          }
+        }
+      } catch (_) { /* ignore cache read failure */ }
+
+      const pendingRow = {
+        id: `offline_${localId}`,
+        attendanceId,
+        lateDate: attDate,
+        lateMinutes: attLateMin,
+        lateMinutesDisplay: attLateDisplay,
+        originalDeduction: attDeduction,
+        originalLateReason: attLateReason,
+        reason,
+        state: 'pending',
+        approvedBy: '',
+        approvalDate: '',
+        rejectionReason: '',
+        offline: true,
+        offlineQueueId: localId,
+      };
+      const next = [pendingRow, ...cached];
+      await AsyncStorage.setItem(cacheKey, JSON.stringify(next));
+
+      console.log('[Waiver] Queued offline waiver request:', localId);
+      return { success: true, requestId: pendingRow.id, offline: true };
+    } catch (e) {
+      console.error('[Waiver] Offline queue error:', e?.message);
+      return { success: false, error: 'Failed to save offline: ' + (e?.message || 'unknown') };
+    }
+  }
+
   try {
     const headers = await getOdooAuthHeaders();
 
@@ -1966,6 +2294,47 @@ export const submitWaiverRequest = async (employeeId, attendanceId, reason) => {
 // Get my waiver requests
 export const getMyWaiverRequests = async (employeeId) => {
   console.log('[Waiver] Getting waiver requests for employee:', employeeId);
+  const cacheKey = _waiverCacheKey(employeeId);
+
+  // Read pending offline rows. Drop any whose queue item has already synced
+  // (the offline_id no longer exists in the queue), since the matching
+  // server record will come back from Odoo and we don't want a duplicate.
+  let pendingOffline = [];
+  let fullCache = [];
+  let aliveQueueIds = new Set();
+  try {
+    const offlineQueue = require('@utils/offlineQueue').default;
+    const queue = await offlineQueue.getAll();
+    aliveQueueIds = new Set(queue.map(q => q.id));
+  } catch (_) { /* ignore */ }
+
+  try {
+    const raw = await AsyncStorage.getItem(cacheKey);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Keep only offline rows whose queue item is still alive
+        const cleaned = parsed.filter(r => {
+          if (r.offline === true) {
+            const stillQueued = aliveQueueIds.has(r.offlineQueueId);
+            if (!stillQueued) {
+              console.log('[Waiver] dropping synced offline row from cache:', r.id, r.offlineQueueId);
+            }
+            return stillQueued;
+          }
+          return true;
+        });
+        fullCache = cleaned;
+        pendingOffline = cleaned.filter(r => r.offline === true);
+        // Persist the cleanup so next read is consistent
+        if (cleaned.length !== parsed.length) {
+          try { await AsyncStorage.setItem(cacheKey, JSON.stringify(cleaned)); } catch (_) {}
+        }
+      }
+    }
+    console.log('[Waiver] Cache state — total:', fullCache.length, 'pending offline:', pendingOffline.length);
+  } catch (_) { /* ignore */ }
+
   try {
     const headers = await getOdooAuthHeaders();
 
@@ -1990,11 +2359,15 @@ export const getMyWaiverRequests = async (employeeId) => {
           },
         },
       },
-      { headers }
+      { headers, timeout: 10000 }
     );
 
+    if (response.data?.error) {
+      throw new Error(response.data.error?.data?.message || 'Odoo error');
+    }
+
     const records = response.data?.result || [];
-    return records.map(r => ({
+    const mapped = records.map(r => ({
       id: r.id,
       lateDate: r.late_date || '',
       lateMinutes: r.late_minutes || 0,
@@ -2008,9 +2381,20 @@ export const getMyWaiverRequests = async (employeeId) => {
       rejectionReason: r.rejection_reason || '',
       attendanceId: r.attendance_id ? r.attendance_id[0] : null,
     }));
+
+    // Merge pending offline + cache for offline reads later
+    const merged = [...pendingOffline, ...mapped];
+    try { await AsyncStorage.setItem(cacheKey, JSON.stringify(merged)); } catch (_) {}
+    console.log('[Waiver] Online fetch ok — server records:', mapped.length, 'merged total:', merged.length);
+    return merged;
   } catch (error) {
-    console.error('[Waiver] Get requests error:', error?.message);
-    return [];
+    console.error('[Waiver] Get requests error — falling back to cache:', error?.message);
+    // Network error → return whatever we have cached. Never wipe.
+    if (fullCache.length > 0) {
+      console.log('[Waiver] Returning', fullCache.length, 'cached waiver records');
+      return fullCache;
+    }
+    return pendingOffline;
   }
 };
 
@@ -2033,6 +2417,7 @@ export default {
   wfhCheckOut,
   getMyWfhRequests,
   getLateConfig,
+  getCachedLateConfig,
   submitLateReason,
   getTodayAttendanceWithLateInfo,
   submitLeaveRequest,

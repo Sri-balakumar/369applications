@@ -281,6 +281,11 @@ const syncItemDirectly = async (item) => {
         // Placeholder `late_reason` ('.') so any server-side ValidationError
         // requiring a non-empty reason on late records is satisfied at sync
         // time — the user can still update it later from the app.
+        console.log('[sync-create-att] queue item values:', JSON.stringify(values));
+        console.log('[sync-create-att] late_reason resolved to:',
+            (values.late_reason && String(values.late_reason).trim())
+                ? String(values.late_reason).trim()
+                : "'.' (placeholder — no user reason)");
         const response = await axios.post(
             `${baseUrl}/web/dataset/call_kw`,
             {
@@ -292,7 +297,13 @@ const syncItemDirectly = async (item) => {
                     args: [{
                         employee_id: values.employee_id,
                         check_in: values.check_in,
-                        late_reason: '.',
+                        // Use the user-entered reason if they typed one in the
+                        // offline late popup; otherwise fall back to the '.'
+                        // placeholder so the server-side ValidationError on
+                        // empty late_reason doesn't block sync.
+                        late_reason: (values.late_reason && String(values.late_reason).trim())
+                            ? String(values.late_reason).trim()
+                            : '.',
                         ...(values.check_out ? { check_out: values.check_out } : {}),
                     }],
                     kwargs: {},
@@ -309,6 +320,122 @@ const syncItemDirectly = async (item) => {
         const recordId = response.data?.result;
         console.log('[OfflineSyncService] Created hr.attendance id:', recordId);
         logSyncHistory(baseUrl, headers, { model: 'hr.attendance', operation: 'create', values, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // hr.leave.request cancel — calls action_cancel on a real Odoo record.
+    if (item.model === 'hr.leave.request' && item.operation === 'cancel') {
+        const targetId = values.id;
+        if (!targetId) throw new Error('Missing leave request id for cancel');
+        const cancelResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'hr.leave.request',
+                    method: 'action_cancel',
+                    args: [[targetId]],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 15000 }
+        );
+        if (cancelResp.data?.error) {
+            const msg = cancelResp.data.error?.data?.message || cancelResp.data.error?.message || 'Odoo error';
+            throw new Error(msg);
+        }
+        console.log('[OfflineSyncService] Cancelled hr.leave.request id:', targetId);
+        logSyncHistory(baseUrl, headers, { model: 'hr.leave.request', operation: 'cancel', values, syncedRecordId: targetId }).catch(() => {});
+        return targetId;
+    }
+
+    // hr.leave.request create — create + auto-submit (mirrors online flow)
+    if (item.model === 'hr.leave.request' && item.operation === 'create') {
+        const createResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'hr.leave.request',
+                    method: 'create',
+                    args: [values],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 15000 }
+        );
+        if (createResp.data?.error) {
+            const msg = createResp.data.error?.data?.message || createResp.data.error?.message || 'Odoo error';
+            throw new Error(msg);
+        }
+        const recordId = createResp.data?.result;
+        // Auto-submit (draft → pending) — same as online path
+        try {
+            await axios.post(
+                `${baseUrl}/web/dataset/call_kw`,
+                {
+                    jsonrpc: '2.0',
+                    method: 'call',
+                    params: {
+                        model: 'hr.leave.request',
+                        method: 'action_submit',
+                        args: [[recordId]],
+                        kwargs: {},
+                    },
+                },
+                { headers, timeout: 15000 }
+            );
+        } catch (e) {
+            console.log('[OfflineSyncService] leave action_submit failed (non-fatal):', e?.message);
+        }
+        console.log('[OfflineSyncService] Created hr.leave.request id:', recordId);
+        logSyncHistory(baseUrl, headers, { model: 'hr.leave.request', operation: 'create', values, syncedRecordId: recordId }).catch(() => {});
+        return recordId;
+    }
+
+    // hr.late.waiver.request create — create + auto-submit
+    if (item.model === 'hr.late.waiver.request' && item.operation === 'create') {
+        const createResp = await axios.post(
+            `${baseUrl}/web/dataset/call_kw`,
+            {
+                jsonrpc: '2.0',
+                method: 'call',
+                params: {
+                    model: 'hr.late.waiver.request',
+                    method: 'create',
+                    args: [values],
+                    kwargs: {},
+                },
+            },
+            { headers, timeout: 15000 }
+        );
+        if (createResp.data?.error) {
+            const msg = createResp.data.error?.data?.message || createResp.data.error?.message || 'Odoo error';
+            throw new Error(msg);
+        }
+        const recordId = createResp.data?.result;
+        try {
+            await axios.post(
+                `${baseUrl}/web/dataset/call_kw`,
+                {
+                    jsonrpc: '2.0',
+                    method: 'call',
+                    params: {
+                        model: 'hr.late.waiver.request',
+                        method: 'action_submit',
+                        args: [[recordId]],
+                        kwargs: {},
+                    },
+                },
+                { headers, timeout: 15000 }
+            );
+        } catch (e) {
+            console.log('[OfflineSyncService] waiver action_submit failed (non-fatal):', e?.message);
+        }
+        console.log('[OfflineSyncService] Created hr.late.waiver.request id:', recordId);
+        logSyncHistory(baseUrl, headers, { model: 'hr.late.waiver.request', operation: 'create', values, syncedRecordId: recordId }).catch(() => {});
         return recordId;
     }
 
