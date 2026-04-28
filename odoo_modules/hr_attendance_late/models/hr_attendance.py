@@ -1,7 +1,11 @@
-from odoo import models, fields, api
+from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError
 from datetime import timedelta
+import logging
 import pytz
 from .time_utils import minutes_to_hm
+
+_logger = logging.getLogger(__name__)
 
 
 class HrAttendance(models.Model):
@@ -84,8 +88,70 @@ class HrAttendance(models.Model):
         for rec in self:
             rec.late_minutes_display = minutes_to_hm(rec.late_minutes)
 
+    # --- Self-healing recompute on create / write ---
+    #
+    # Stored compute fields can lag when a sibling record's `is_late` is
+    # updated by `_compute_late_info` but the in-memory cache hasn't been
+    # flushed to the DB before `_compute_late_sequence` runs its search.
+    # That race manifests as `late_sequence = 0` for all late records, which
+    # historically caused `_compute_deduction_amount` to bail out and leave
+    # the deduction stuck at 0. Force a flush + re-run of sequence and
+    # deduction here so HR doesn't have to click the Recompute button after
+    # every save.
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        recs = super().create(vals_list)
+        try:
+            # Run the FULL late-tracking compute chain after create so a brand
+            # new attendance gets is_first_checkin_of_day / is_second_checkin_of_day
+            # / is_late / late_minutes / late_sequence / deduction_amount all
+            # populated immediately. Flush between each step so downstream
+            # searches see committed values from the previous step.
+            recs.flush_recordset()
+            recs._compute_is_first_checkin_of_day()
+            recs.flush_recordset()
+            recs._compute_late_info()
+            recs.flush_recordset()
+            recs._compute_late_minutes_display()
+            recs._compute_late_sequence()
+            recs.flush_recordset()
+            recs._compute_deduction_amount()
+            recs.flush_recordset()
+        except Exception:
+            _logger.exception("[late-deduction] post-create recompute failed")
+        return recs
+
+    def write(self, vals):
+        res = super().write(vals)
+        if any(k in vals for k in ('check_in', 'check_out', 'employee_id', 'is_waived')):
+            try:
+                self.flush_recordset()
+                self._compute_is_first_checkin_of_day()
+                self.flush_recordset()
+                self._compute_late_info()
+                self.flush_recordset()
+                self._compute_late_minutes_display()
+                self._compute_late_sequence()
+                self.flush_recordset()
+                self._compute_deduction_amount()
+                self.flush_recordset()
+            except Exception:
+                _logger.exception("[late-deduction] post-write recompute failed")
+        return res
+
     @api.depends('check_in', 'employee_id')
     def _compute_is_first_checkin_of_day(self):
+        """Decide the session by CLOCK TIME first, then derive whether this
+        is the first check-in of that session from earlier check-ins of the
+        same employee on the same day.
+
+        This fixes the bug where a user who skips Session 1 entirely (e.g.
+        arrives at 4 PM with Session 1 = 10–13 and Session 2 = 15–19) was
+        being labelled as the "first check-in of Session 1" and reported as
+        6 hours late, instead of being labelled as Session 2 and reported
+        as 1 hour late from 3 PM.
+        """
         Config = self.env['hr.attendance.late.config']
         for rec in self:
             rec.is_first_checkin_of_day = False
@@ -102,8 +168,19 @@ class HrAttendance(models.Model):
 
             config_data = Config.get_config_for_employee(rec.employee_id.id)
             shift_type = config_data.get('shift_type', 'single')
+            session2_start = config_data.get('office_start_hour_2', 14.0)
+            local_hour = local_dt.hour + local_dt.minute / 60.0
 
-            # Find all check-ins for this employee on this day (before current)
+            # 1) Classify session purely by clock time. Anything at or after
+            #    the Session-2 start hour is treated as Session 2 (split
+            #    shift only). This is the key fix — Session 2 is no longer
+            #    gated on the existence of an earlier Session-1 check-in.
+            is_session_2 = (shift_type == 'split' and local_hour >= session2_start)
+            rec.checkin_session = '2' if is_session_2 else '1'
+
+            # 2) Find earlier check-ins on the same day for the same
+            #    employee within the SAME session. That determines whether
+            #    THIS is the first check-in of its session.
             earlier = self.search([
                 ('employee_id', '=', rec.employee_id.id),
                 ('check_in', '>=', utc_start),
@@ -111,35 +188,20 @@ class HrAttendance(models.Model):
                 ('id', '!=', rec.id),
             ], order='check_in asc')
 
-            if not earlier:
-                # This is the first check-in of the day
-                rec.is_first_checkin_of_day = True
-                rec.checkin_session = '1'
-            elif shift_type == 'split' and len(earlier) >= 1:
-                # For split shift: check if this is the first check-in of session 2.
-                # Boundary = min(session 1 end, session 2 start). Using min lets
-                # us handle configs where session 2 starts before session 1 ends
-                # (overlapping or reversed configs) without silently dropping
-                # every session-2 check-in.
-                session1_end = config_data.get('office_end_hour', 14.0)
-                session2_start = config_data.get('office_start_hour_2', 14.0)
-                boundary = min(session1_end, session2_start)
-                local_hour = local_dt.hour + local_dt.minute / 60.0
+            has_earlier_in_same_session = False
+            for e in earlier:
+                e_local = pytz.utc.localize(e.check_in).astimezone(tz)
+                e_hour = e_local.hour + e_local.minute / 60.0
+                e_is_session_2 = (shift_type == 'split' and e_hour >= session2_start)
+                if e_is_session_2 == is_session_2:
+                    has_earlier_in_same_session = True
+                    break
 
-                # If check-in is at or after the boundary, it belongs to session 2
-                if local_hour >= boundary:
-                    # Check if no earlier check-in was already in session 2 territory
-                    has_session2 = False
-                    for e in earlier:
-                        e_local = pytz.utc.localize(e.check_in).astimezone(tz)
-                        e_hour = e_local.hour + e_local.minute / 60.0
-                        if e_hour >= boundary:
-                            has_session2 = True
-                            break
-
-                    if not has_session2:
-                        rec.is_second_checkin_of_day = True
-                        rec.checkin_session = '2'
+            if not has_earlier_in_same_session:
+                if is_session_2:
+                    rec.is_second_checkin_of_day = True
+                else:
+                    rec.is_first_checkin_of_day = True
 
     @api.depends('check_in', 'employee_id', 'is_first_checkin_of_day', 'is_second_checkin_of_day', 'checkin_session')
     def _compute_late_info(self):
@@ -153,10 +215,6 @@ class HrAttendance(models.Model):
             if not rec.check_in or not rec.employee_id:
                 continue
 
-            # Only check first check-in of session 1 or first check-in of session 2
-            if not rec.is_first_checkin_of_day and not rec.is_second_checkin_of_day:
-                continue
-
             config_data = Config.get_config_for_employee(rec.employee_id.id)
             threshold = config_data.get('late_threshold_minutes', 15)
 
@@ -164,8 +222,17 @@ class HrAttendance(models.Model):
             local_dt = pytz.utc.localize(rec.check_in).astimezone(tz)
             check_date = local_dt.date()
 
-            # Determine which session start time to use
-            if rec.is_second_checkin_of_day and rec.checkin_session == '2':
+            # Pick the session start time purely from `checkin_session`. This
+            # makes late detection symmetric across Session 1 and Session 2 —
+            # any record in Session 2 is timed against `office_start_hour_2`,
+            # any record in Session 1 against `office_start_hour`. Earlier we
+            # gated this on `is_second_checkin_of_day`, but that flag stays
+            # False if the same employee already has a Session 2 sibling
+            # earlier today (or if the compute lagged), so genuine late
+            # check-ins were silently un-flagged. The first-of-session gating
+            # now happens only in `_compute_late_sequence` (which is what
+            # actually controls deduction counting).
+            if rec.checkin_session == '2':
                 office_start = config_data.get('office_start_hour_2', 14.0)
             else:
                 office_start = config_data.get('office_start_hour', 8.0)
@@ -174,7 +241,7 @@ class HrAttendance(models.Model):
             is_half_day_fri = Config.is_half_day_friday(check_date, rec.employee_id.id)
             rec.is_half_day = is_half_day_fri
 
-            if is_half_day_fri and rec.is_first_checkin_of_day:
+            if is_half_day_fri and rec.checkin_session == '1':
                 office_start = config_data.get('half_day_start_hour', 17.0)
 
             rec.expected_start_time = office_start
@@ -192,29 +259,51 @@ class HrAttendance(models.Model):
                 rec.late_minutes = int(diff.total_seconds() / 60)
                 rec.is_late = True
 
-    @api.depends('is_late', 'late_minutes', 'employee_id', 'date', 'check_in')
+    @api.depends('is_late', 'late_minutes', 'employee_id', 'date', 'check_in', 'checkin_session')
     def _compute_late_sequence(self):
-        """Count late TIMES (not days) in the month for this employee."""
+        """Count late TIMES per SESSION in the month for this employee.
+
+        Session 1 and Session 2 maintain INDEPENDENT sequences — each with
+        its own grace count. So the first late Session 2 check-in of the
+        month is sequence #1 (grace) regardless of how many Session 1 late
+        check-ins came before it. The first late Session 1 check-in is also
+        sequence #1.
+
+        Only the FIRST late check-in of each (date, session) bucket counts —
+        subsequent same-session check-ins on the same day are duplicates and
+        get sequence = 0 (no deduction).
+
+        This intentionally bypasses the stored
+        `is_first_checkin_of_day` / `is_second_checkin_of_day` flags because
+        they can lag or get stuck depending on create order; bucketing
+        on the fly here is always self-consistent.
+        """
         for rec in self:
             rec.late_sequence = 0
             if not rec.is_late or not rec.date:
                 continue
 
+            session = rec.checkin_session or '1'
             month_start = rec.date.replace(day=1)
-            # Find all late records for this employee in the month
             late_records = self.search([
                 ('employee_id', '=', rec.employee_id.id),
                 ('is_late', '=', True),
                 ('date', '>=', month_start),
                 ('date', '<=', rec.date),
-                '|',
-                ('is_first_checkin_of_day', '=', True),
-                ('is_second_checkin_of_day', '=', True),
+                ('checkin_session', '=', session),
             ], order='check_in asc')
 
-            # Each late record = 1 time (not grouped by day)
-            seq = 0
+            # Keep only the earliest record per date within this session.
+            seen_dates = set()
+            firsts = []
             for att in late_records:
+                if att.date in seen_dates:
+                    continue
+                seen_dates.add(att.date)
+                firsts.append(att)
+
+            seq = 0
+            for att in firsts:
                 seq += 1
                 if att.id == rec.id:
                     rec.late_sequence = seq
@@ -226,35 +315,75 @@ class HrAttendance(models.Model):
         Config = self.env['hr.attendance.late.config']
         for rec in self:
             rec.deduction_amount = 0.0
-            if not rec.is_late or rec.late_sequence == 0:
+            if not rec.is_late:
+                _logger.info(
+                    "[late-deduction] rec=%s skip — is_late=False",
+                    rec.id,
+                )
                 continue
 
             if rec.is_waived:
+                _logger.info("[late-deduction] rec=%s skip — waived", rec.id)
                 continue
 
             config_data = Config.get_config_for_employee(rec.employee_id.id)
             grace_times = config_data.get('grace_late_times',
                                           config_data.get('grace_late_days', 5))
 
+            # `_compute_late_sequence` assigns a positive sequence ONLY to the
+            # first late check-in of each (date, session) bucket per employee
+            # per month. Sequence == 0 means this is a duplicate same-session
+            # check-in or sequence couldn't be computed — either way, no
+            # deduction.
+            if rec.late_sequence == 0:
+                _logger.info(
+                    "[late-deduction] rec=%s skip — sequence=0 (duplicate or unavailable)",
+                    rec.id,
+                )
+                continue
+
             if rec.late_sequence <= grace_times:
+                _logger.info(
+                    "[late-deduction] rec=%s skip — within grace (seq=%s grace=%s)",
+                    rec.id, rec.late_sequence, grace_times,
+                )
                 continue
 
             deduction_mode = config_data.get('deduction_mode', 'fixed')
+            company_id = rec.employee_id.company_id.id
+            slab_amount = Slab.get_deduction_for_minutes(rec.late_minutes, company_id=company_id)
 
+            amount = 0.0
             if deduction_mode == 'hourly':
                 # Hourly wage-based deduction
                 config_id = config_data.get('id')
                 if config_id:
                     config_rec = Config.browse(config_id)
-                    rec.deduction_amount = config_rec.get_hourly_deduction(
+                    amount = config_rec.get_hourly_deduction(
                         rec.employee_id.id, rec.late_minutes, late_date=rec.date
+                    ) or 0.0
+                _logger.info(
+                    "[late-deduction] rec=%s hourly emp=%s late_min=%s -> %s",
+                    rec.id, rec.employee_id.id, rec.late_minutes, amount,
+                )
+                # Fallback: hourly returned 0 (no wage / no working_days /
+                # daily_work_hours == 0). Use fixed slab so HR still gets a
+                # deduction value instead of a silent 0.
+                if amount <= 0 and slab_amount > 0:
+                    _logger.warning(
+                        "[late-deduction] rec=%s hourly=0, falling back to slab=%s",
+                        rec.id, slab_amount,
                     )
+                    amount = slab_amount
             else:
                 # Fixed slab-based deduction
-                rec.deduction_amount = Slab.get_deduction_for_minutes(
-                    rec.late_minutes,
-                    company_id=rec.employee_id.company_id.id,
+                amount = slab_amount
+                _logger.info(
+                    "[late-deduction] rec=%s slab late_min=%s -> %s",
+                    rec.id, rec.late_minutes, amount,
                 )
+
+            rec.deduction_amount = amount
 
     @api.depends('employee_id', 'date')
     def _compute_daily_total_hours(self):
@@ -275,14 +404,53 @@ class HrAttendance(models.Model):
             )
             rec.daily_total_hours = round(total, 2)
 
+    # --- Constraints ---
+
+    @api.constrains('is_late', 'late_reason', 'is_waived')
+    def _check_late_reason_required(self):
+        """Force the user to provide a late reason whenever the attendance is
+        flagged as late and has not been waived. The Odoo client renders the
+        ValidationError as a modal popup that blocks save until the field is
+        filled — this is the safety net for users that try to save without
+        clicking the 'Enter Late Reason' button.
+        """
+        for rec in self:
+            if rec.is_late and not rec.is_waived and not (rec.late_reason and rec.late_reason.strip()):
+                raise ValidationError(_(
+                    "You are %s late for Session %s.\n\n"
+                    "Please click the 'Enter Late Reason' button on the form to "
+                    "provide a reason before saving."
+                ) % (
+                    rec.late_minutes_display or ('%d minutes' % rec.late_minutes),
+                    '2' if rec.checkin_session == '2' else '1',
+                ))
+
+    # --- Wizard launchers ---
+
+    def action_open_late_reason_wizard(self):
+        """Open the late-reason wizard popup pre-filled with this attendance.
+        Mirrors the mobile app's late-reason modal — the user types the reason
+        in the wizard and clicks Save, which writes back to `late_reason` on
+        this record (same field the mobile submitLateReason endpoint writes).
+        """
+        self.ensure_one()
+        return {
+            'name': _('Enter Late Reason'),
+            'type': 'ir.actions.act_window',
+            'res_model': 'hr.attendance.late.reason.wizard',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {
+                'default_attendance_id': self.id,
+            },
+        }
+
     # --- API methods ---
 
     @api.model
     def get_late_attendance_report(self, employee_id=None, department_id=None,
                                    date_from=None, date_to=None):
-        domain = [('is_late', '=', True),
-                  '|', ('is_first_checkin_of_day', '=', True),
-                  ('is_second_checkin_of_day', '=', True)]
+        domain = [('is_late', '=', True), ('late_sequence', '>', 0)]
         if employee_id:
             domain.append(('employee_id', '=', employee_id))
         if department_id:

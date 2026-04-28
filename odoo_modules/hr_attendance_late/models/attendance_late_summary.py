@@ -39,9 +39,7 @@ class AttendanceLateSummaryWizard(models.TransientModel):
             ('late_minutes', '>', 0),
             ('date', '>=', date_from),
             ('date', '<', date_to),
-            '|',
-            ('is_first_checkin_of_day', '=', True),
-            ('is_second_checkin_of_day', '=', True),
+            ('late_sequence', '>', 0),
         ]
         if self.employee_ids:
             domain.append(('employee_id', 'in', self.employee_ids.ids))

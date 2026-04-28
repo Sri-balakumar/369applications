@@ -276,15 +276,20 @@ class EmployeeReport(models.Model):
             total_present_days = len(present_dates)
 
             # ── LATE DATA (count TIMES not days) ────────────
+            # Use late_sequence > 0 as the canonical "first late check-in of
+            # session per day" filter — the same indicator hr_attendance_late
+            # uses elsewhere now. Trust the per-record deduction_amount: it's
+            # already computed by `_compute_deduction_amount` with proper
+            # per-session grace counting (Session 1 and Session 2 each have
+            # their own grace). Don't re-apply grace here, which used to mix
+            # both sessions into a single counter and under-count.
             late_records = self.env['hr.attendance'].search([
                 ('employee_id', '=', emp.id),
                 ('is_late', '=', True),
                 ('late_minutes', '>', 0),
+                ('late_sequence', '>', 0),
                 ('date', '>=', d_from),
                 ('date', '<=', d_to),
-                '|',
-                ('is_first_checkin_of_day', '=', True),
-                ('is_second_checkin_of_day', '=', True),
             ], order='check_in asc')
 
             all_late_times = 0
@@ -300,16 +305,13 @@ class EmployeeReport(models.Model):
                     late_date_info[att.date] = []
                 late_date_info[att.date].append(att)
                 late_dates_seen.add(att.date)
-
-                within_grace = all_late_times <= grace_days
-                if not within_grace:
+                total_late_minutes += att.late_minutes
+                # Per-record deduction is already grace-aware. Records inside
+                # grace have deduction_amount = 0; records past grace carry
+                # the slab/hourly amount; waived records also = 0.
+                if att.deduction_amount > 0:
                     late_times_after_grace += 1
-                    total_late_minutes += att.late_minutes
-                    if att.is_waived:
-                        live_ded = 0.0
-                    else:
-                        live_ded = calc_deduction_live(att.late_minutes, att.date)
-                    total_late_deduction += live_ded
+                    total_late_deduction += att.deduction_amount
 
             # ── LEAVE DATA ───────────────────────────────────
             leave_records = self.env['hr.leave.request'].search([
@@ -904,7 +906,7 @@ class EmployeeReportSummaryLine(models.Model):
             'domain': [
                 ('employee_id', '=', self.employee_id.id),
                 ('is_late', '=', True),
-                ('is_first_checkin_of_day', '=', True),
+                ('late_sequence', '>', 0),
                 ('date', '>=', str(report.date_from)),
                 ('date', '<=', str(report.date_to)),
             ],

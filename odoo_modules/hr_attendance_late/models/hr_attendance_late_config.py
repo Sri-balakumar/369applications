@@ -230,11 +230,21 @@ class AttendanceLateConfig(models.Model):
         if not employee.exists():
             return 0.0
 
+        # Wage lookup priority:
+        #   1. running contract's wage (employee.contract_wage)
+        #   2. direct employee.wage field set on the employee form
+        # Falling back to employee.wage means HR doesn't have to maintain a
+        # Running contract just to drive late-deduction maths — typing the
+        # wage on the employee's Payroll tab is enough.
         wage = 0.0
-        try:
-            wage = employee.contract_wage or 0.0
-        except Exception:
-            wage = 0.0
+        for fname in ('contract_wage', 'wage'):
+            try:
+                v = getattr(employee, fname, 0.0) or 0.0
+                if v > 0:
+                    wage = v
+                    break
+            except Exception:
+                continue
 
         if wage <= 0 or self.daily_work_hours <= 0:
             return 0.0
@@ -330,3 +340,79 @@ class AttendanceLateConfig(models.Model):
             ], limit=1)
 
         return config or self.browse()
+
+    # --- Recompute hooks ---
+
+    def _recompute_affected_attendances(self):
+        """Force-recompute stored late-tracking fields on attendance records
+        whose configuration may have been affected by changes to this config.
+        Walks the rolling 3-month window so stale stored values (e.g. wrong
+        deduction because wage was missing at compute time) get refreshed.
+        """
+        from datetime import date as dt_date
+        from dateutil.relativedelta import relativedelta
+        Att = self.env['hr.attendance']
+        today = dt_date.today()
+        date_from = today - relativedelta(months=3)
+        for cfg in self:
+            domain = [('date', '>=', date_from), ('date', '<=', today)]
+            if cfg.company_id:
+                domain.append(('employee_id.company_id', '=', cfg.company_id.id))
+            if cfg.department_id:
+                domain.append(('employee_id.department_id', '=', cfg.department_id.id))
+            recs = Att.search(domain)
+            if not recs:
+                continue
+            # Trigger every stored compute that depends on lateness, flushing
+            # between steps so that downstream searches (notably
+            # `_compute_late_sequence`, which counts sibling late records via
+            # `self.search([('is_late','=',True), ...])`) see the values
+            # written by the previous compute. Without these flushes the
+            # search runs against pre-compute DB state, returns 0 siblings,
+            # and the deduction stays 0 forever.
+            recs._compute_is_first_checkin_of_day()
+            recs.flush_recordset()
+            recs._compute_late_info()
+            recs.flush_recordset()
+            recs._compute_late_minutes_display()
+            recs._compute_late_sequence()
+            recs.flush_recordset()
+            recs._compute_deduction_amount()
+            recs.flush_recordset()
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        recs = super().create(vals_list)
+        recs._recompute_affected_attendances()
+        return recs
+
+    def write(self, vals):
+        res = super().write(vals)
+        # Only recompute when a rule-affecting field changed.
+        recompute_fields = {
+            'office_start_hour', 'office_end_hour', 'office_start_hour_2',
+            'office_end_hour_2', 'shift_type', 'late_threshold_minutes',
+            'grace_late_times', 'deduction_mode', 'daily_work_hours',
+            'half_day_friday_enabled', 'half_day_friday_positions',
+            'half_day_start_hour', 'half_day_end_hour', 'company_id',
+            'department_id', 'active',
+        }
+        if recompute_fields & set(vals.keys()):
+            self._recompute_affected_attendances()
+        return res
+
+    def action_recompute_deductions(self):
+        """User-triggered recompute. Bound to a button on the config form so
+        HR can refresh stored deduction values without changing any setting
+        (useful after updating an employee's wage)."""
+        self._recompute_affected_attendances()
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _('Recompute Triggered'),
+                'message': _('Late-tracking fields refreshed for the last 3 months.'),
+                'type': 'success',
+                'sticky': False,
+            },
+        }

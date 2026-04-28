@@ -25,7 +25,7 @@ class LateWaiverRequest(models.Model):
         readonly=True,
         states={'draft': [('readonly', False)]},
         domain="[('employee_id', '=', employee_id), ('is_late', '=', True), "
-               "('is_first_checkin_of_day', '=', True)]",
+               "('late_sequence', '>', 0)]",
         help='Select the late attendance record to request waiver for.',
     )
     late_date = fields.Date(

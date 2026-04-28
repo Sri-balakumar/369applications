@@ -10,3 +10,4 @@ access_public_holiday_manager,hr.public.holiday.manager,model_hr_public_holiday,
 access_public_holiday_user,hr.public.holiday.user,model_hr_public_holiday,base.group_user,1,0,0,0
 access_late_waiver_manager,hr.late.waiver.request.manager,model_hr_late_waiver_request,hr.group_hr_manager,1,1,1,1
 access_late_waiver_user,hr.late.waiver.request.user,model_hr_late_waiver_request,base.group_user,1,1,1,0
+access_late_reason_wizard_user,hr.attendance.late.reason.wizard.user,model_hr_attendance_late_reason_wizard,base.group_user,1,1,1,1

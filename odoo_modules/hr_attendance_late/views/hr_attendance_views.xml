@@ -41,7 +41,15 @@
                         <field name="is_half_day" readonly="1"/>
                     </group>
                     <group>
-                        <field name="late_reason"/>
+                        <button name="action_open_late_reason_wizard"
+                                type="object"
+                                string="Enter Late Reason"
+                                class="btn-warning"
+                                icon="fa-clock-o"
+                                colspan="2"
+                                invisible="(not is_late and late_minutes &lt;= 0) or late_reason or is_waived"/>
+                        <field name="late_reason"
+                               placeholder="Click 'Enter Late Reason' button above to fill via popup, or type here..."/>
                         <field name="late_sequence" string="Late # in Month" readonly="1"/>
                         <field name="deduction_amount" readonly="1"/>
                         <field name="is_waived" readonly="1"/>
@@ -70,7 +78,7 @@
                 <separator/>
                 <filter name="filter_half_day" string="Half Day" domain="[('is_half_day', '=', True)]"/>
                 <filter name="filter_late_deduction" string="With Deduction" domain="[('deduction_amount', '&gt;', 0)]"/>
-                <filter name="filter_first_checkin" string="First Check-in Only" domain="[('is_first_checkin_of_day', '=', True)]"/>
+                <filter name="filter_first_checkin" string="First Check-in Only" domain="[('late_sequence', '>', 0)]"/>
                 <separator/>
                 <filter name="filter_has_reason" string="Has Late Reason" domain="[('late_reason', '!=', False)]"/>
                 <filter name="filter_no_reason" string="No Late Reason" domain="[('late_reason', '=', False), ('is_late', '=', True)]"/>
@@ -119,7 +127,7 @@
         <field name="name">Late Attendance Records</field>
         <field name="res_model">hr.attendance</field>
         <field name="view_mode">list,form</field>
-        <field name="domain">[('is_late', '=', True), ('is_first_checkin_of_day', '=', True)]</field>
+        <field name="domain">[('is_late', '=', True), ('late_sequence', '>', 0)]</field>
         <field name="search_view_id" ref="late_attendance_search_view"/>
         <field name="context">{'search_default_late_only': 1}</field>
     </record>
