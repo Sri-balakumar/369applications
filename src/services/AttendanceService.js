@@ -131,64 +131,73 @@ const _warmGpsCache = () => {
     .catch(() => { /* ignore */ });
 };
 
-// Get current device location — fast path first, bounded wait, never hang.
+// Get current device location — fast path: cached fix first (returns in ms),
+// then quick Balanced live fetch, then High-accuracy if needed. Designed to
+// return in <1s in the typical case while still working indoors.
 const getCurrentLocation = async () => {
   const granted = await _ensureLocationPermission();
   if (!granted) {
     return { success: false, error: 'Location permission denied' };
   }
 
-  // 1) Fast path: recent OS-cached fix (returns in milliseconds).
+  // 1) FAST PATH: any reasonably recent cached fix (≤60s). Returns in milliseconds.
   try {
-    const last = await Location.getLastKnownPositionAsync({
-      maxAge: 60_000,
-      requiredAccuracy: 200,
-    });
+    const last = await Location.getLastKnownPositionAsync({ maxAge: 60_000 });
     if (last?.coords) {
-      _warmGpsCache();
+      console.log('[Location] CACHED fix accuracy:', last.coords.accuracy, 'm');
+      // Kick off a background refresh so the next call has a fresher cache.
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+        .catch(() => { /* ignore */ });
       return {
         success: true,
         latitude: last.coords.latitude,
         longitude: last.coords.longitude,
+        accuracy: last.coords.accuracy ?? 9999,
         fromCache: true,
       };
     }
   } catch (_) { /* fall through */ }
 
-  // 2) Bounded live fetch: 3s timeout, Balanced accuracy (enough for 100m geofence).
+  // 2) Quick Balanced live fetch — cell + Wi-Fi, ~1-3s indoors.
   try {
     const live = await Promise.race([
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('gps-timeout')), 3000)
-      ),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('gps-timeout')), 4000)),
     ]);
     if (live?.coords) {
+      console.log('[Location] LIVE-BALANCED fix accuracy:', live.coords.accuracy, 'm');
       return {
         success: true,
         latitude: live.coords.latitude,
         longitude: live.coords.longitude,
+        accuracy: live.coords.accuracy ?? 9999,
+        fromCache: false,
       };
     }
   } catch (err) {
-    // 3) Last-resort: any known fix, regardless of age.
-    try {
-      const anyLast = await Location.getLastKnownPositionAsync({});
-      if (anyLast?.coords) {
-        return {
-          success: true,
-          latitude: anyLast.coords.latitude,
-          longitude: anyLast.coords.longitude,
-          fromCache: true,
-          stale: true,
-        };
-      }
-    } catch (_) { /* ignore */ }
-    console.error('[Attendance] Error getting location:', err?.message);
-    return { success: false, error: 'Location timed out. Please try again.' };
+    console.log('[Location] live BALANCED fetch failed:', err?.message);
   }
 
-  return { success: false, error: 'Failed to get current location' };
+  // 3) Any-age cache, last resort.
+  try {
+    const anyLast = await Location.getLastKnownPositionAsync({});
+    if (anyLast?.coords) {
+      console.log('[Location] STALE cache fix accuracy:', anyLast.coords.accuracy, 'm');
+      return {
+        success: true,
+        latitude: anyLast.coords.latitude,
+        longitude: anyLast.coords.longitude,
+        accuracy: anyLast.coords.accuracy ?? 9999,
+        fromCache: true,
+        stale: true,
+      };
+    }
+  } catch (_) { /* ignore */ }
+
+  return {
+    success: false,
+    error: 'Could not get GPS fix. Enable Location and ensure you have signal.',
+  };
 };
 
 // Exposed so the screen can pre-warm caches on mount / verification.
@@ -399,15 +408,28 @@ export const verifyAttendanceLocation = async (userId) => {
       workplaceLocation.longitude
     );
 
-    const withinRange = distance <= ATTENDANCE_LOCATION_THRESHOLD;
+    // GPS accuracy is the radius of uncertainty. A reading 110m from the office
+    // with ±30m accuracy could really be 80m away → inside the 100m geofence.
+    // Subtract uncertainty for a forgiving check; otherwise indoor GPS (high
+    // accuracy values) gives constant false-negatives even at the office.
+    const accuracy = currentLocation.accuracy ?? 0;
+    const effectiveDistance = Math.max(0, distance - accuracy);
+    const withinRange = effectiveDistance <= ATTENDANCE_LOCATION_THRESHOLD;
 
-    console.log('[Attendance] Distance from workplace:', Math.round(distance), 'meters');
-    console.log('[Attendance] Within range:', withinRange);
+    console.log('[Attendance] Workplace:', workplaceLocation.latitude, workplaceLocation.longitude,
+                'name:', workplaceLocation.locationName);
+    console.log('[Attendance] User:', currentLocation.latitude, currentLocation.longitude,
+                'accuracy:', accuracy, 'm');
+    console.log('[Attendance] Raw distance:', Math.round(distance),
+                'm, effective:', Math.round(effectiveDistance),
+                'm, threshold:', ATTENDANCE_LOCATION_THRESHOLD, 'm, withinRange:', withinRange);
 
     return {
       success: true,
       withinRange,
-      distance: Math.round(distance),
+      distance: Math.round(effectiveDistance),
+      rawDistance: Math.round(distance),
+      accuracy: Math.round(accuracy),
       threshold: ATTENDANCE_LOCATION_THRESHOLD,
       workplaceName: workplaceLocation.locationName,
       currentLocation: {

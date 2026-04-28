@@ -557,7 +557,13 @@ const UserAttendanceScreen = ({ navigation }) => {
       }
 
       if (!locationResult.withinRange) {
-        showAlert({ message: `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}. Must be within ${locationResult.threshold}m.` });
+        showAlert({
+          message:
+            `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}.\n` +
+            `(GPS: ±${locationResult.accuracy ?? '?'}m, raw distance ${locationResult.rawDistance ?? locationResult.distance}m)\n` +
+            `Must be within ${locationResult.threshold}m. ` +
+            `If you're at the office, move outdoors briefly for a better GPS lock.`,
+        });
         setLocationStatus({
           verified: false,
           distance: locationResult.distance,
@@ -796,7 +802,13 @@ const UserAttendanceScreen = ({ navigation }) => {
         }
 
         if (!locationResult.withinRange) {
-          showAlert({ message: `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}. Must be within ${locationResult.threshold}m.` });
+          showAlert({
+            message:
+              `You are ${locationResult.distance}m away from ${locationResult.workplaceName || 'workplace'}.\n` +
+              `(GPS: ±${locationResult.accuracy ?? '?'}m, raw distance ${locationResult.rawDistance ?? locationResult.distance}m)\n` +
+              `Must be within ${locationResult.threshold}m. ` +
+              `If you're at the office, move outdoors briefly for a better GPS lock.`,
+          });
           setLocationStatus({
             verified: false,
             distance: locationResult.distance,
