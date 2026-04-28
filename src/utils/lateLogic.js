@@ -20,6 +20,14 @@
  *   expectedStart?: number,
  * }}
  */
+// Convert a float hour (e.g. 13.25) to "HH:MM" matching Odoo's display.
+export const floatToHM = (h) => {
+  const total = Math.round((h ?? 0) * 60);
+  const hh = Math.floor(total / 60);
+  const mm = total % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+};
+
 export const computeLocalLateInfo = (checkInDate, lateConfig) => {
   if (!checkInDate || isNaN(checkInDate?.getTime?.())) return { isLate: false };
 
@@ -35,9 +43,9 @@ export const computeLocalLateInfo = (checkInDate, lateConfig) => {
   };
 
   const localHour = checkInDate.getHours() + checkInDate.getMinutes() / 60;
-  const session2Start = config.office_start_hour_2 ?? 14.0;
-  const session1Start = config.office_start_hour ?? 8.0;
-  const threshold = config.late_threshold_minutes ?? 15;
+  const session2Start = typeof config.office_start_hour_2 === 'number' ? config.office_start_hour_2 : 14.0;
+  const session1Start = typeof config.office_start_hour === 'number' ? config.office_start_hour : 8.0;
+  const threshold = typeof config.late_threshold_minutes === 'number' ? config.late_threshold_minutes : 15;
   const shiftType = config.shift_type ?? 'split';
 
   const isSession2 = shiftType === 'split' && localHour >= session2Start;
@@ -52,8 +60,18 @@ export const computeLocalLateInfo = (checkInDate, lateConfig) => {
   );
   const allowedDt = new Date(officeStartDt.getTime() + threshold * 60 * 1000);
 
+  console.log('[late-calc] config session1:', session1Start, 'session2:', session2Start,
+              'threshold:', threshold, 'shift:', shiftType,
+              '→ chose session', isSession2 ? '2' : '1', 'expectedStart:', officeStart,
+              'checkInLocalHour:', localHour.toFixed(3));
+
   if (checkInDate <= allowedDt) {
-    return { isLate: false, session: isSession2 ? '2' : '1', expectedStart: officeStart };
+    return {
+      isLate: false,
+      session: isSession2 ? '2' : '1',
+      expectedStart: officeStart,
+      expectedStartDisplay: floatToHM(officeStart),
+    };
   }
 
   const lateMinutes = Math.floor((checkInDate - officeStartDt) / 60000);
@@ -66,5 +84,6 @@ export const computeLocalLateInfo = (checkInDate, lateConfig) => {
     lateMinutesDisplay: `${h}:${String(m).padStart(2, '0')}`,
     session: isSession2 ? '2' : '1',
     expectedStart: officeStart,
+    expectedStartDisplay: floatToHM(officeStart),
   };
 };

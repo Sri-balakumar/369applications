@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import ODOO_BASE_URL from '@api/config/odooConfig';
 import offlineQueue from '@utils/offlineQueue';
 import { isOnline } from '@utils/networkStatus';
+import { computeLocalLateInfo } from '@utils/lateLogic';
 
 // =============================================================================
 // Tiny attendance cache (for offline-tolerant reads).
@@ -1218,7 +1219,6 @@ export const getTodayAttendanceByEmployeeId = async (employeeId, employeeName) =
           kwargs: {
             fields: ['id', 'employee_id', 'check_in', 'check_out'],
             order: 'check_in desc',
-            limit: 1,
           },
         },
       },
@@ -1226,6 +1226,19 @@ export const getTodayAttendanceByEmployeeId = async (employeeId, employeeName) =
     );
 
     const records = response.data?.result || [];
+    // Cache the FULL list of today's records (closed + open) so the offline
+    // same-session guard can detect "checked out earlier today, online" cases.
+    try {
+      await AsyncStorage.setItem(
+        `@cache:todayAttRecords:${employeeId}`,
+        JSON.stringify(records.map(r => ({
+          id: r.id,
+          check_in: r.check_in,
+          check_out: r.check_out,
+        }))),
+      );
+    } catch (_) { /* ignore */ }
+
     if (records.length > 0) {
       // Find the last OPEN attendance (no check_out) — supports multiple check-in/out per day
       const openRecord = records.find(r => !r.check_out);
@@ -1601,6 +1614,9 @@ export const getLateConfig = async (employeeId) => {
           JSON.stringify(result),
         );
       } catch (_) { /* ignore cache failure */ }
+      // Fire-and-forget: refresh the slab cache so offline waiver-eligible
+      // computations can produce non-zero deduction amounts.
+      fetchAndCacheLateSlabs().catch(() => { /* ignore */ });
       return {
         success: true,
         officeStartHour: result.office_start_hour || 8.0,
@@ -1624,6 +1640,111 @@ export const getCachedLateConfig = async (employeeId) => {
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
+  }
+};
+
+// Fetch and cache the late-deduction slabs for offline computation. Stores
+// raw Odoo records: { from_minutes, to_minutes, deduction_amount }.
+export const fetchAndCacheLateSlabs = async () => {
+  try {
+    const headers = await getOdooAuthHeaders();
+    const response = await axios.post(
+      `${ODOO_BASE_URL()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.late.deduction.slab',
+          method: 'search_read',
+          args: [[['active', '=', true]]],
+          kwargs: {
+            fields: ['from_minutes', 'to_minutes', 'deduction_amount'],
+            order: 'from_minutes asc',
+          },
+        },
+      },
+      { headers, timeout: 8000 }
+    );
+    const slabs = response.data?.result || [];
+    await AsyncStorage.setItem('@cache:lateSlabs', JSON.stringify(slabs));
+    console.log('[Attendance] Cached', slabs.length, 'late deduction slabs');
+    return slabs;
+  } catch (e) {
+    console.log('[Attendance] fetchAndCacheLateSlabs failed:', e?.message);
+    return null;
+  }
+};
+
+const _getCachedLateSlabs = async () => {
+  try {
+    const raw = await AsyncStorage.getItem('@cache:lateSlabs');
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+// Mirror of Odoo's hr.late.deduction.slab.get_deduction_for_minutes.
+const _slabAmountForMinutes = (slabs, lateMinutes) => {
+  for (const s of (slabs || [])) {
+    if (lateMinutes >= s.from_minutes) {
+      if (s.to_minutes === 0 || lateMinutes <= s.to_minutes) {
+        return s.deduction_amount || 0;
+      }
+    }
+  }
+  return 0;
+};
+
+// Compute the deduction amount for a single late record locally — same
+// algorithm as `_applyOfflineDeduction` but for one in-progress check-in.
+// Used by the offline late-reason popup so the user sees the correct amount
+// the moment they're flagged as late, matching what Odoo will compute on sync.
+export const computeLocalDeductionAmount = async (employeeId, lateMinutes, checkInDate) => {
+  try {
+    const cachedConfigRaw = await AsyncStorage.getItem(`@cache:lateConfig:${employeeId}`);
+    const cachedConfig = cachedConfigRaw ? JSON.parse(cachedConfigRaw) : {};
+    const grace = typeof cachedConfig?.grace_late_times === 'number'
+      ? cachedConfig.grace_late_times
+      : (typeof cachedConfig?.grace_late_days === 'number' ? cachedConfig.grace_late_days : 5);
+    const slabs = await _getCachedLateSlabs();
+
+    // Count prior month late records (server cache + offline queue) so we
+    // know what sequence the just-created record will land at.
+    const month = String((checkInDate || new Date()).toISOString()).slice(0, 7);
+    let priorCount = 0;
+
+    try {
+      const elRaw = await AsyncStorage.getItem(`@cache:eligibleLate:${employeeId}`);
+      const elList = elRaw ? JSON.parse(elRaw) : [];
+      if (Array.isArray(elList)) {
+        priorCount += elList.filter(r => String(r.date || '').startsWith(month)).length;
+      }
+    } catch (_) { /* ignore */ }
+
+    try {
+      const queue = await offlineQueue.getAll();
+      for (const item of (queue || [])) {
+        if (item.model !== 'hr.attendance' || item.operation !== 'create') continue;
+        const v = item.values || {};
+        if (Number(v.employee_id) !== Number(employeeId)) continue;
+        if (!v.check_in) continue;
+        if (!String(v.check_in).startsWith(month)) continue;
+        priorCount += 1;
+      }
+    } catch (_) { /* ignore */ }
+
+    // Sequence = priorCount + 1 (this record is the next one to land).
+    const seq = priorCount + 1;
+    let amount = 0;
+    if (seq > grace) {
+      amount = _slabAmountForMinutes(slabs, lateMinutes);
+    }
+    console.log('[local-ded] empId=' + employeeId + ' month=' + month +
+                ' priorCount=' + priorCount + ' seq=' + seq + ' grace=' + grace +
+                ' lateMin=' + lateMinutes + ' slabs=' + (slabs?.length || 0) + ' → ' + amount);
+    return amount;
+  } catch (e) {
+    console.log('[local-ded] error:', e?.message);
+    return 0;
   }
 };
 
@@ -1683,7 +1804,7 @@ export const getTodayAttendanceWithLateInfo = async (employeeId) => {
               'id', 'check_in', 'check_out',
               'is_late', 'late_minutes', 'late_minutes_display', 'expected_start_time',
               'late_reason', 'deduction_amount', 'late_sequence',
-              'daily_total_hours', 'is_first_checkin_of_day',
+              'daily_total_hours', 'is_first_checkin_of_day', 'checkin_session',
             ],
             order: 'check_in asc',
           },
@@ -1708,6 +1829,7 @@ export const getTodayAttendanceWithLateInfo = async (employeeId) => {
         lateSequence: r.late_sequence,
         dailyTotalHours: r.daily_total_hours,
         isFirstCheckinOfDay: r.is_first_checkin_of_day,
+        checkinSession: r.checkin_session,
       })),
     };
   } catch (error) {
@@ -2083,9 +2205,129 @@ export const cancelLeaveRequest = async (requestId) => {
 // Cache key for the eligible-late-attendance dropdown options
 const _eligibleLateCacheKey = (employeeId) => `@cache:eligibleLate:${employeeId}`;
 
+// Build synthetic eligible-late records from the offline queue. Any closed
+// `hr.attendance create` with check_in + check_out that is locally late
+// becomes a record with id = `offline:<queueId>` so the waiver page can
+// list it and submit a waiver against it. Deduction is calculated locally:
+//   sequence = position in the merged month-list (server cache + offline)
+//              after sorting by check_in asc
+//   if sequence <= grace_late_times → 0
+//   else if mode === 'fixed' → slab[lateMinutes]
+//   (hourly mode falls back to slab in offline since wage may be unknown)
+const _buildOfflineEligibleLate = async (employeeId) => {
+  try {
+    const queue = await offlineQueue.getAll();
+    const cachedConfigRaw = await AsyncStorage.getItem(`@cache:lateConfig:${employeeId}`);
+    const cachedConfig = cachedConfigRaw ? JSON.parse(cachedConfigRaw) : null;
+
+    const out = [];
+    for (const item of (queue || [])) {
+      if (item.model !== 'hr.attendance' || item.operation !== 'create') continue;
+      const v = item.values || {};
+      if (Number(v.employee_id) !== Number(employeeId)) continue;
+      if (!v.check_in || !v.check_out) continue;
+
+      const ciDate = new Date(String(v.check_in).replace(' ', 'T') + 'Z');
+      if (isNaN(ciDate.getTime())) continue;
+
+      const info = computeLocalLateInfo(ciDate, cachedConfig);
+      if (!info.isLate) continue;
+
+      out.push({
+        id: `offline:${item.id}`,
+        date: String(v.check_in).slice(0, 10),
+        checkInTime: odooUtcToLocalDisplay(v.check_in),
+        lateMinutes: info.lateMinutes,
+        lateMinutesDisplay: info.lateMinutesDisplay || '',
+        deductionAmount: 0,    // populated by _applyOfflineDeduction
+        lateReason: v.late_reason || '',
+        isWaived: false,
+        offline: true,
+        _checkInUtc: String(v.check_in),  // helper for sequence sort, stripped later
+      });
+    }
+    return out;
+  } catch (e) {
+    console.log('[Waiver] _buildOfflineEligibleLate error:', e?.message);
+    return [];
+  }
+};
+
+// Stamp a locally-computed deduction onto each offline record by combining
+// it with the cached server records to determine month-sequence + grace.
+const _applyOfflineDeduction = async (employeeId, offlineRecords, serverRecords) => {
+  try {
+    if (!offlineRecords || offlineRecords.length === 0) return offlineRecords || [];
+
+    const cachedConfigRaw = await AsyncStorage.getItem(`@cache:lateConfig:${employeeId}`);
+    const cachedConfig = cachedConfigRaw ? JSON.parse(cachedConfigRaw) : {};
+    const grace = typeof cachedConfig?.grace_late_times === 'number'
+      ? cachedConfig.grace_late_times
+      : (typeof cachedConfig?.grace_late_days === 'number' ? cachedConfig.grace_late_days : 5);
+    const slabs = await _getCachedLateSlabs();
+    console.log('[Waiver-offline-ded] config grace_late_times=' + cachedConfig?.grace_late_times +
+                ' grace_late_days=' + cachedConfig?.grace_late_days + ' → using grace=' + grace);
+    console.log('[Waiver-offline-ded] slabs cached: ' + (slabs?.length || 0) + ' →', JSON.stringify(slabs));
+    if (!slabs || slabs.length === 0) {
+      console.log('[Waiver-offline-ded] WARN: no slabs cached — deductions will be 0. Open the app while online to populate the slab cache.');
+    }
+
+    // Build a chronologically-sorted month-list of "first-of-session" records:
+    //   - all cached server records (the server already filtered by late_sequence > 0)
+    //   - all offline records (one per closed offline check-in by definition)
+    // Each row carries an ISO check-in stamp + its deduction-eligibility flag.
+    const all = [];
+    for (const r of (serverRecords || [])) {
+      all.push({
+        kind: 'server',
+        id: r.id,
+        utc: r.date || '1970-01-01',
+        lateMinutes: r.lateMinutes || 0,
+      });
+    }
+    for (const r of offlineRecords) {
+      all.push({
+        kind: 'offline',
+        id: r.id,
+        utc: r._checkInUtc || `${r.date} 00:00:00`,
+        lateMinutes: r.lateMinutes || 0,
+      });
+    }
+    all.sort((a, b) => String(a.utc).localeCompare(String(b.utc)));
+
+    // Number records by month so grace resets on the 1st.
+    const seqByKey = new Map();
+    const monthCounter = {};
+    for (const row of all) {
+      const month = String(row.utc).slice(0, 7); // YYYY-MM
+      monthCounter[month] = (monthCounter[month] || 0) + 1;
+      seqByKey.set(`${row.kind}:${row.id}`, monthCounter[month]);
+    }
+
+    return offlineRecords.map(r => {
+      const seq = seqByKey.get(`offline:${r.id}`) || 1;
+      let amount = 0;
+      if (seq > grace) {
+        amount = _slabAmountForMinutes(slabs, r.lateMinutes);
+      }
+      const { _checkInUtc, ...clean } = r;
+      console.log('[Waiver-offline-ded] id=' + r.id + ' seq=' + seq + ' grace=' + grace + ' lateMin=' + r.lateMinutes + ' → ' + amount);
+      return { ...clean, deductionAmount: amount };
+    });
+  } catch (e) {
+    console.log('[Waiver] _applyOfflineDeduction error:', e?.message);
+    return offlineRecords;
+  }
+};
+
 export const getEligibleLateAttendances = async (employeeId) => {
   console.log('[Waiver] Getting eligible late attendances for employee:', employeeId);
   const cacheKey = _eligibleLateCacheKey(employeeId);
+
+  // Always derive offline-queue records first so they appear regardless of
+  // online/offline state — same idea as how leaves and waivers merge their
+  // pending offline rows into the on-screen list.
+  const offlineExtrasRaw = await _buildOfflineEligibleLate(employeeId);
 
   try {
     const headers = await getOdooAuthHeaders();
@@ -2136,23 +2378,36 @@ export const getEligibleLateAttendances = async (employeeId) => {
       isWaived: !!r.is_waived,
     }));
 
-    // Cache for offline reads
+    // Cache for offline reads (server records only — offline extras are
+    // re-derived from the queue every call).
     try { await AsyncStorage.setItem(cacheKey, JSON.stringify(mapped)); } catch (_) {}
-    console.log('[Waiver] Cached', mapped.length, 'eligible late records');
-    return mapped;
+    const offlineExtras = await _applyOfflineDeduction(employeeId, offlineExtrasRaw, mapped);
+    console.log('[Waiver] Cached', mapped.length, 'server records, +', offlineExtras.length, 'offline');
+    for (const m of mapped) {
+      console.log('[Waiver-server-rec] id=' + m.id + ' date=' + m.date +
+                  ' lateMin=' + m.lateMinutes + ' deduction=' + m.deductionAmount +
+                  ' waived=' + m.isWaived);
+    }
+
+    const merged = [...offlineExtras, ...mapped];
+    merged.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    return merged;
   } catch (error) {
     console.error('[Waiver] Get eligible late error — falling back to cache:', error?.message);
+    let cached = [];
     try {
       const raw = await AsyncStorage.getItem(cacheKey);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          console.log('[Waiver] Returning', parsed.length, 'cached eligible late records');
-          return parsed;
-        }
+        if (Array.isArray(parsed)) cached = parsed;
       }
     } catch (_) { /* ignore */ }
-    return [];
+
+    const offlineExtras = await _applyOfflineDeduction(employeeId, offlineExtrasRaw, cached);
+    const merged = [...offlineExtras, ...cached];
+    merged.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    console.log('[Waiver] Returning', cached.length, 'cached +', offlineExtras.length, 'offline records');
+    return merged;
   }
 };
 
@@ -2189,15 +2444,27 @@ export const submitWaiverRequest = async (employeeId, attendanceId, reason) => {
         };
       }
 
+      // If the attendance is itself an offline-queued record (id like
+      // "offline:<localId>"), tag the waiver with `_attendanceLocalId` so the
+      // sync layer can resolve it to the real Odoo id once the attendance
+      // create has been synced. Otherwise it's a numeric Odoo id we can pass
+      // through directly.
       const offlineQueue = require('@utils/offlineQueue').default;
+      const isOfflineAtt = typeof attendanceId === 'string' && attendanceId.startsWith('offline:');
+      const attLocalId = isOfflineAtt ? String(attendanceId).split(':')[1] : null;
+      const queueValues = {
+        employee_id: employeeId,
+        reason: reason,
+      };
+      if (isOfflineAtt) {
+        queueValues._attendanceLocalId = attLocalId;
+      } else {
+        queueValues.attendance_id = attendanceId;
+      }
       const localId = await offlineQueue.enqueue({
         model: 'hr.late.waiver.request',
         operation: 'create',
-        values: {
-          employee_id: employeeId,
-          attendance_id: attendanceId,
-          reason: reason,
-        },
+        values: queueValues,
       });
 
       // Look up the attendance details from the eligible-late cache so the

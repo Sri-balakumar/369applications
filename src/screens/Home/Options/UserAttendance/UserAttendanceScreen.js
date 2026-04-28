@@ -8,8 +8,8 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { OverlayLoader } from '@components/Loader';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
-import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, getCachedLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests, getWorkplaceLocation, prewarmLocation } from '@services/AttendanceService';
-import { computeLocalLateInfo } from '@utils/lateLogic';
+import { checkInByEmployeeId, checkOutToOdoo, getTodayAttendanceByEmployeeId, getEmployeeByDeviceId, verifyEmployeePin, verifyAttendanceLocation, uploadAttendancePhoto, submitWfhRequest, getTodayApprovedWfh, wfhCheckIn, wfhCheckOut, getMyWfhRequests, getLateConfig, getCachedLateConfig, submitLateReason, getTodayAttendanceWithLateInfo, submitLeaveRequest, getMyLeaveRequests, cancelLeaveRequest, getEligibleLateAttendances, submitWaiverRequest, getMyWaiverRequests, getWorkplaceLocation, prewarmLocation, fetchAndCacheLateSlabs, computeLocalDeductionAmount } from '@services/AttendanceService';
+import { computeLocalLateInfo, floatToHM } from '@utils/lateLogic';
 import * as offlineQueue from '@utils/offlineQueue';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { MaterialIcons, Feather, Ionicons } from '@expo/vector-icons';
@@ -272,24 +272,24 @@ const UserAttendanceScreen = ({ navigation }) => {
     }
   };
 
-  // Prefetch the late config and stash it in AsyncStorage whenever the
-  // user is verified AND online. This guarantees the offline late-reason
-  // popup has the right thresholds available next time the device drops
-  // off the network. Silent failure if offline or Odoo is unreachable.
+  // Prefetch the late config + slabs and stash in AsyncStorage whenever the
+  // user is verified AND online. Re-runs on every online flip so the caches
+  // stay fresh — guarantees the offline late-reason popup uses the same
+  // session-start values as Odoo, AND the offline waiver page can compute
+  // non-zero deduction amounts from the slab table.
   useEffect(() => {
     (async () => {
       if (!verifiedEmployee?.id) return;
+      if (offline) return;
       try {
-        const online = await networkStatus.isOnline();
-        if (online) {
-          await getLateConfig(verifiedEmployee.id);
-          console.log('[offline-late] prefetched late config for employee', verifiedEmployee.id);
-        }
+        await getLateConfig(verifiedEmployee.id);
+        await fetchAndCacheLateSlabs();
+        console.log('[offline-late] prefetched late config + slabs for employee', verifiedEmployee.id);
       } catch (e) {
         console.log('[offline-late] prefetch skipped:', e?.message);
       }
     })();
-  }, [verifiedEmployee?.id]);
+  }, [verifiedEmployee?.id, offline]);
 
   // Re-prompt the user with the You're Late popup if today's check-in is
   // late and has no `late_reason` recorded yet — works online (queries
@@ -305,6 +305,8 @@ const UserAttendanceScreen = ({ navigation }) => {
         let deduction = null;
         let hasReason = false;
         let attendanceId = todayAttendance.id;
+        let sessionLabel;
+        let expectedStartDisplay;
 
         const online = await networkStatus.isOnline();
 
@@ -321,18 +323,34 @@ const UserAttendanceScreen = ({ navigation }) => {
               deduction = rec.deductionAmount;
               hasReason = !!(rec.lateReason && rec.lateReason.trim());
               attendanceId = rec.id;
+              sessionLabel = rec.checkinSession;
+              expectedStartDisplay = rec.expectedStartTime != null
+                ? floatToHM(rec.expectedStartTime)
+                : undefined;
             }
           }
         } else {
-          // Offline path — recompute from cached config + check queue
+          // Offline path — recompute from cached config + check queue.
+          // checkInTimeUtc is "YYYY-MM-DD HH:MM:SS" UTC; must append 'Z' so
+          // JS parses it as UTC, not local. Without the Z, IST shifts by 5:30
+          // → math gives "2h 30m" instead of the real "8h" past Session 2 start.
           const cached = await getCachedLateConfig(verifiedEmployee.id);
-          const checkInRaw = todayAttendance.checkInTimeUtc || todayAttendance.checkIn;
-          const checkInDt = checkInRaw ? new Date(checkInRaw) : null;
-          if (checkInDt) {
+          const utcStr = todayAttendance.checkInTimeUtc;
+          const checkInDt = utcStr
+            ? new Date(utcStr.replace(' ', 'T') + 'Z')
+            : null;
+          if (checkInDt && !isNaN(checkInDt.getTime())) {
             const info = computeLocalLateInfo(checkInDt, cached);
             isLate = info.isLate;
             lateMin = info.lateMinutes || 0;
             lateDisplay = info.lateMinutesDisplay || '';
+            sessionLabel = info.session;
+            expectedStartDisplay = info.expectedStartDisplay;
+            if (isLate) {
+              deduction = await computeLocalDeductionAmount(
+                verifiedEmployee.id, lateMin, checkInDt
+              );
+            }
           }
           if (todayAttendance.offlineQueueId) {
             const queue = await offlineQueue.getAll();
@@ -349,6 +367,8 @@ const UserAttendanceScreen = ({ navigation }) => {
             lateMinutesDisplay: lateDisplay,
             lateSequence: sequence,
             deductionAmount: deduction,
+            session: sessionLabel,
+            expectedStartDisplay: expectedStartDisplay,
           });
           setPendingLateAttendanceId(attendanceId);
           setShowLateReasonModal(true);
@@ -582,8 +602,9 @@ const UserAttendanceScreen = ({ navigation }) => {
 
       // OFFLINE GUARD — block re-check-in for the same session today.
       // The Odoo constraint `_check_no_reentry_same_session` enforces this
-      // online but not offline. We replicate the check locally using the
-      // queued attendance items + cached late config.
+      // online but not offline. We replicate the check locally using:
+      //   (a) cached online attendance records (today's closed sessions)
+      //   (b) the offline queue (offline check-in/out done earlier)
       try {
         const online = await networkStatus.isOnline();
         if (!online) {
@@ -591,15 +612,29 @@ const UserAttendanceScreen = ({ navigation }) => {
           const now = new Date();
           const myInfo = computeLocalLateInfo(now, cached);
           const mySession = myInfo.session || '1';
-
-          const queue = await offlineQueue.getAll();
           const todayStr = now.toISOString().slice(0, 10);
 
-          const sameSessionClosed = queue.find(q => {
+          // (a) Closed records done ONLINE earlier today (cached from last fetch).
+          let closedOnlineSameSession = null;
+          try {
+            const raw = await AsyncStorage.getItem(`@cache:todayAttRecords:${verifiedEmployee.id}`);
+            const list = raw ? JSON.parse(raw) : [];
+            closedOnlineSameSession = (list || []).find(r => {
+              if (!r.check_in || !r.check_out) return false;
+              const ciStr = String(r.check_in);
+              if (!ciStr.startsWith(todayStr)) return false;
+              const ciDate = new Date(ciStr.replace(' ', 'T') + 'Z');
+              const ciInfo = computeLocalLateInfo(ciDate, cached);
+              return (ciInfo.session || '1') === mySession;
+            });
+          } catch (_) { /* ignore */ }
+
+          // (b) Closed records done OFFLINE earlier (still in the queue).
+          const queue = await offlineQueue.getAll();
+          const closedOfflineSameSession = queue.find(q => {
             if (q.model !== 'hr.attendance' || q.operation !== 'create') return false;
             const v = q.values || {};
-            if (!v.check_in || !v.check_out) return false;        // open record OK
-            // check_in is "YYYY-MM-DD HH:MM:SS" UTC string
+            if (!v.check_in || !v.check_out) return false;
             const ciStr = String(v.check_in);
             if (!ciStr.startsWith(todayStr)) return false;
             const ciDate = new Date(ciStr.replace(' ', 'T') + 'Z');
@@ -607,9 +642,9 @@ const UserAttendanceScreen = ({ navigation }) => {
             return (ciInfo.session || '1') === mySession;
           });
 
-          if (sameSessionClosed) {
-            console.log('[checkin-guard] OFFLINE block — same session already closed today:',
-              JSON.stringify(sameSessionClosed.values));
+          if (closedOnlineSameSession || closedOfflineSameSession) {
+            console.log('[checkin-guard] OFFLINE block — same session already closed today',
+              { online: closedOnlineSameSession, offline: closedOfflineSameSession?.values });
             showAlert({
               message: `You have already checked out of Session ${mySession} today.\n\nOnce you check out of a session, you cannot check in again to the same session on the same day.`,
             });
@@ -673,12 +708,18 @@ const UserAttendanceScreen = ({ navigation }) => {
 
           if (info.isLate) {
             console.log('[offline-late] FIRING popup (lateMin=' + info.lateMinutes + ')');
+            // Compute deduction locally using cached slabs + grace + month seq.
+            const localDed = await computeLocalDeductionAmount(
+              verifiedEmployee.id, info.lateMinutes, checkInDt
+            );
             setLateInfo({
               isLate: true,
               lateMinutes: info.lateMinutes,
               lateMinutesDisplay: info.lateMinutesDisplay,
-              lateSequence: null,    // unknown offline
-              deductionAmount: null, // unknown offline
+              lateSequence: null,    // unknown offline (server-only field)
+              deductionAmount: localDed,
+              session: info.session,
+              expectedStartDisplay: info.expectedStartDisplay,
             });
             setPendingLateAttendanceId(
               result.localId ? `offline:${result.localId}` : null
@@ -721,6 +762,10 @@ const UserAttendanceScreen = ({ navigation }) => {
                 lateMinutesDisplay: justCreated.lateMinutesDisplay,
                 lateSequence: justCreated.lateSequence,
                 deductionAmount: justCreated.deductionAmount,
+                session: justCreated.checkinSession,
+                expectedStartDisplay: justCreated.expectedStartTime != null
+                  ? floatToHM(justCreated.expectedStartTime)
+                  : undefined,
               });
               setPendingLateAttendanceId(justCreated.id);
               setShowLateReasonModal(true);
@@ -1789,11 +1834,43 @@ const UserAttendanceScreen = ({ navigation }) => {
     });
   };
 
-  // Auto-fetch eligible records & waiver list when entering waiver mode
+  // Auto-fetch eligible records & waiver list when entering waiver mode.
+  // Also opportunistically refresh the slab cache so offline-deduction math
+  // has the latest values; silent if offline. Then poll every 4s while in
+  // waiver mode so the dropdown + My Requests reflect background sync events
+  // (offline check-in/out → queue → eligible record; sync → real Odoo data)
+  // without requiring the user to manually re-open the tab.
   useEffect(() => {
     if (attendanceMode === 'waiver' && isVerified && verifiedEmployee?.id) {
-      fetchEligibleLateAttendances();
-      fetchWaiverRequests();
+      let cancelled = false;
+      let pollId = null;
+
+      (async () => {
+        try {
+          const isOn = await networkStatus.isOnline();
+          if (isOn) {
+            await getLateConfig(verifiedEmployee.id);
+            await fetchAndCacheLateSlabs();
+            console.log('[Waiver] mount — refreshed late config + slabs');
+          }
+        } catch (e) {
+          console.log('[Waiver] mount-prefetch skipped:', e?.message);
+        }
+        if (!cancelled) {
+          fetchEligibleLateAttendances();
+          fetchWaiverRequests();
+        }
+        pollId = setInterval(() => {
+          if (cancelled) return;
+          fetchEligibleLateAttendances();
+          fetchWaiverRequests();
+        }, 4000);
+      })();
+
+      return () => {
+        cancelled = true;
+        if (pollId) clearInterval(pollId);
+      };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attendanceMode, isVerified, verifiedEmployee]);
@@ -2287,9 +2364,15 @@ const UserAttendanceScreen = ({ navigation }) => {
               <Text style={styles.lateModalTitle}>You're Late</Text>
             </View>
             <Text style={styles.lateModalSubtitle}>
-              You are {formatLateDuration(lateInfo?.lateMinutes, lateInfo?.lateMinutesDisplay)} late today
+              You are {formatLateDuration(lateInfo?.lateMinutes, lateInfo?.lateMinutesDisplay)} late
+              {lateInfo?.session ? ` for Session ${lateInfo.session}` : ' today'}
               {lateInfo?.lateSequence ? ` (Late #${lateInfo.lateSequence} this month)` : ''}
             </Text>
+            {lateInfo?.expectedStartDisplay && (
+              <Text style={styles.lateModalDetail}>
+                Expected start: {lateInfo.expectedStartDisplay}
+              </Text>
+            )}
             {lateInfo?.deductionAmount > 0 && (
               <Text style={styles.lateDeductionText}>
                 Salary deduction: {lateInfo.deductionAmount}
@@ -2546,6 +2629,7 @@ const styles = StyleSheet.create({
   lateModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: scale(8) },
   lateModalTitle: { fontSize: scale(20), fontWeight: 'bold', color: '#E74C3C', fontFamily: FONT_FAMILY.urbanistBold, marginLeft: scale(8) },
   lateModalSubtitle: { fontSize: scale(14), color: COLORS.gray, fontFamily: FONT_FAMILY.urbanistMedium, textAlign: 'center', marginBottom: scale(6) },
+  lateModalDetail: { fontSize: scale(12), color: COLORS.gray, fontFamily: FONT_FAMILY.urbanistMedium, textAlign: 'center', marginBottom: scale(8) },
   lateDeductionText: { fontSize: scale(13), color: '#E74C3C', fontFamily: FONT_FAMILY.urbanistBold, textAlign: 'center', marginBottom: scale(10), backgroundColor: '#FDE8E8', paddingVertical: scale(6), paddingHorizontal: scale(12), borderRadius: scale(8) },
   lateReasonLabel: { fontSize: scale(13), fontWeight: '600', color: COLORS.black, fontFamily: FONT_FAMILY.urbanistBold, marginBottom: scale(6), marginTop: scale(4) },
   lateReasonInput: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: scale(10), padding: scale(12), fontSize: scale(14), fontFamily: FONT_FAMILY.urbanistMedium, color: COLORS.black, backgroundColor: '#FAFAFA', minHeight: scale(80), marginBottom: scale(14) },

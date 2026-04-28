@@ -319,6 +319,14 @@ const syncItemDirectly = async (item) => {
 
         const recordId = response.data?.result;
         console.log('[OfflineSyncService] Created hr.attendance id:', recordId);
+        // Remember the local→server mapping so a queued waiver request that
+        // referenced the local attendance id can resolve it on its own sync.
+        try {
+            const mapRaw = await AsyncStorage.getItem('@sync:localToServer');
+            const map = mapRaw ? JSON.parse(mapRaw) : {};
+            map[String(item.id)] = recordId;
+            await AsyncStorage.setItem('@sync:localToServer', JSON.stringify(map));
+        } catch (_) { /* ignore */ }
         logSyncHistory(baseUrl, headers, { model: 'hr.attendance', operation: 'create', values, syncedRecordId: recordId }).catch(() => {});
         return recordId;
     }
@@ -397,6 +405,23 @@ const syncItemDirectly = async (item) => {
 
     // hr.late.waiver.request create — create + auto-submit
     if (item.model === 'hr.late.waiver.request' && item.operation === 'create') {
+        // If this waiver was queued against an offline-only attendance, resolve
+        // the local→server id mapping written when the attendance create synced.
+        let resolvedValues = { ...values };
+        if (resolvedValues._attendanceLocalId) {
+            try {
+                const mapRaw = await AsyncStorage.getItem('@sync:localToServer');
+                const map = mapRaw ? JSON.parse(mapRaw) : {};
+                const serverId = map[String(resolvedValues._attendanceLocalId)];
+                if (!serverId) {
+                    throw new Error('Cannot sync waiver: linked offline attendance has not synced yet');
+                }
+                resolvedValues.attendance_id = serverId;
+                delete resolvedValues._attendanceLocalId;
+            } catch (e) {
+                throw new Error('Waiver resolve failed: ' + (e?.message || 'unknown'));
+            }
+        }
         const createResp = await axios.post(
             `${baseUrl}/web/dataset/call_kw`,
             {
@@ -405,7 +430,7 @@ const syncItemDirectly = async (item) => {
                 params: {
                     model: 'hr.late.waiver.request',
                     method: 'create',
-                    args: [values],
+                    args: [resolvedValues],
                     kwargs: {},
                 },
             },
